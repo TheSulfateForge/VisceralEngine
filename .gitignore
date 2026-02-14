@@ -22,3 +22,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# ============================================================================
+# LOGO VAULT: These PNGs are auto-restored from scripts/logo-vault.json
+# during every build. Ignoring them here stops Google AI Studio from
+# syncing (and corrupting) the binary files.
+# ============================================================================
+public/logo192.png
+public/logo512.png
