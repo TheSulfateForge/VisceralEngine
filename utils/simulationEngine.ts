@@ -1,4 +1,3 @@
-
 import { ModelResponseSchema, GameWorld, DebugLogEntry, LoreItem, Character, BioMonitor, MemoryItem } from '../types';
 import { ReproductionSystem } from './reproductionSystem';
 import { generateLoreId, generateMemoryId } from '../idUtils';
@@ -28,6 +27,15 @@ const TICK_RATES = {
     
     LIBIDO_PER_HOUR: 0.5,
     SEMINAL_PER_HOUR: 2.0
+};
+
+// --- FIX 1: Time Clamp Caps ---
+// Gemini sometimes dumps "retrospective time" (entire off-screen days) into
+// a single turn. These caps prevent any single tick from nuking biology.
+const TIME_CAPS = {
+    AWAKE_MAX: 120,   // 2 hours — longest reasonable non-sleep scene beat
+    SLEEP_MAX: 540,   // 9 hours — generous full night's rest
+    COMBAT_MAX: 30,   // 30 minutes — combat rounds are short
 };
 
 // --- Time System ---
@@ -70,6 +78,12 @@ const processBiology = (char: Character, minutes: number, inputs?: any): { updat
 
     const hours = minutes / 60;
 
+    // --- FIX 2: Sleep Decay Reduction ---
+    // Body at rest burns resources at 40% rate. Prevents waking up dehydrated
+    // after a healthy 8-hour sleep (was draining 12 hydration per night).
+    const isSleeping = inputs?.sleep_hours && inputs.sleep_hours > 0;
+    const sleepFactor = isSleeping ? 0.4 : 1.0;
+
     // 1. Inputs (Replenishment)
     if (inputs) {
         if (inputs.ingested_calories) {
@@ -99,17 +113,21 @@ const processBiology = (char: Character, minutes: number, inputs?: any): { updat
         }
     }
 
-    // 2. Decay (Entropy) with Dynamic Modifiers
+    // 2. Decay (Entropy) with Dynamic Modifiers + Sleep Factor
     const calRate = TICK_RATES.CALORIES_PER_HOUR * (bio.modifiers.calories ?? 1.0);
     const hydRate = TICK_RATES.WATER_PER_HOUR * (bio.modifiers.hydration ?? 1.0);
     const staRate = TICK_RATES.STAMINA_PER_HOUR * (bio.modifiers.stamina ?? 1.0);
     const lacRate = TICK_RATES.LACTATION_PER_HOUR * (bio.modifiers.lactation ?? 1.0);
 
-    bio.metabolism.calories = Math.max(0, bio.metabolism.calories - (hours * calRate));
-    bio.metabolism.hydration = Math.max(0, bio.metabolism.hydration - (hours * hydRate));
-    bio.metabolism.stamina = Math.max(0, bio.metabolism.stamina - (hours * staRate));
+    bio.metabolism.calories = Math.max(0, bio.metabolism.calories - (hours * calRate * sleepFactor));
+    bio.metabolism.hydration = Math.max(0, bio.metabolism.hydration - (hours * hydRate * sleepFactor));
     
-    // 3. Accumulation (Pressure)
+    // Stamina: skip decay entirely during sleep (it's being restored above)
+    if (!isSleeping) {
+        bio.metabolism.stamina = Math.max(0, bio.metabolism.stamina - (hours * staRate));
+    }
+    
+    // 3. Accumulation (Pressure) — lactation still builds during sleep (biology doesn't stop)
     if (char.gender.toLowerCase().includes('female') || char.conditions.includes('Lactating')) {
         bio.pressures.lactation = Math.min(120, bio.pressures.lactation + (hours * lacRate));
     }
@@ -183,8 +201,29 @@ export const SimulationEngine = {
         const debugLogs: DebugLogEntry[] = [];
         let currentPregnancies = currentWorld.pregnancies || [];
         
-        // 1. Time Progression
-        const timeDelta = response.time_passed_minutes !== undefined ? response.time_passed_minutes : 0;
+        // 1. Time Progression — WITH CLAMP (FIX 1)
+        const hasSleep = response.biological_inputs?.sleep_hours && response.biological_inputs.sleep_hours > 0;
+        const isCombat = response.scene_mode === 'COMBAT';
+
+        let maxAllowed: number;
+        if (hasSleep) {
+            maxAllowed = TIME_CAPS.SLEEP_MAX;
+        } else if (isCombat) {
+            maxAllowed = TIME_CAPS.COMBAT_MAX;
+        } else {
+            maxAllowed = TIME_CAPS.AWAKE_MAX;
+        }
+
+        const rawDelta = response.time_passed_minutes !== undefined ? response.time_passed_minutes : 0;
+        const timeDelta = Math.min(Math.max(0, rawDelta), maxAllowed);
+
+        if (rawDelta > maxAllowed) {
+            debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[TIME-CLAMP] AI requested +${rawDelta}m, clamped to +${timeDelta}m (cap: ${maxAllowed}, sleep: ${!!hasSleep}, combat: ${isCombat})`,
+                type: 'warning' as any
+            });
+        }
         
         const newTime = updateTime(currentWorld.time.totalMinutes, timeDelta);
         

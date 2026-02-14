@@ -25,7 +25,7 @@ const RESPONSE_SCHEMA: Schema = {
     },
     time_passed_minutes: {
         type: Type.INTEGER,
-        description: "Exact minutes passed. Combat=1, Talk=10, Routine=30, Travel=60+. ONLY add Sleep(480) if player ACTUALLY sleeps this turn. Do NOT double-count time."
+        description: "Minutes elapsed in THIS scene beat ONLY. Do NOT 'catch up' or account for off-screen time from prior turns. Combat round=1-5, Dialogue=5-15, Routine task=15-45, District travel=30-60. Sleep=420-480 ONLY if sleep_hours is also set. If unsure, default LOW (15). Max non-sleep value: 90."
     },
     biological_inputs: {
         type: Type.OBJECT,
