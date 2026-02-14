@@ -1,0 +1,26 @@
+
+{
+  "short_name": "Visceral",
+  "name": "Visceral Realism Engine",
+  "id": "/VisceralEngine/",
+  "icons": [
+    {
+      "src": "/VisceralEngine/logo192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/VisceralEngine/logo512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/VisceralEngine/",
+  "scope": "/VisceralEngine/",
+  "display": "standalone",
+  "theme_color": "#050505",
+  "background_color": "#050505",
+  "orientation": "any"
+}
