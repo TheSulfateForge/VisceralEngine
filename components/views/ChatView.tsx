@@ -1,3 +1,4 @@
+
 import React, { useLayoutEffect, useState, useRef, useCallback, useEffect } from 'react';
 import { useGameStore } from '../../store';
 import { useGeminiClient } from '../../hooks/useGeminiClient';
@@ -16,13 +17,14 @@ export const ChatView: React.FC = () => {
         triggerScreenEffect 
     } = useGameStore();
 
-    const { handleSend, handleVisualize } = useGeminiClient();
+    const { handleSend, handleVisualize, handleUndo } = useGeminiClient();
     const { playSound, triggerHaptic } = useSensoryFX();
     const scrollRef = useRef<HTMLDivElement>(null);
     const rollSystem = useRollSystem();
 
     const { history, isThinking } = gameHistory;
     const { isGeneratingVisual } = gameWorld;
+    const hasUndoSnapshot = useGameStore(state => state.preTurnSnapshot !== null);
 
     const [isAtBottom, setIsAtBottom] = useState(true);
     const [visibleCount, setVisibleCount] = useState<number>(UI_CONFIG.MAX_ROLL_LOG_ENTRIES);
@@ -142,6 +144,18 @@ export const ChatView: React.FC = () => {
                     </div>
                 )}
             </div>
+            
+            {hasUndoSnapshot && !isThinking && (
+                <div className="flex justify-center pb-2 relative z-10 -mt-10">
+                    <button
+                        onClick={handleUndo}
+                        className="text-[8px] font-mono uppercase tracking-[0.3em] text-gray-600 hover:text-yellow-500 border border-gray-800 hover:border-yellow-900/40 px-3 py-1.5 transition-all bg-[#0a0a0a]"
+                    >
+                        Undo Last Turn (Ctrl+Z)
+                    </button>
+                </div>
+            )}
+
             <InputArea 
                 onSend={onSendMessage} 
                 handleVisualize={handleVisualize} 

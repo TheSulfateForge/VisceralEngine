@@ -20,6 +20,7 @@ export const usePersistence = () => {
   
   // Track if initial load is done to avoid overwriting autosave with empty state
   const isInitialized = useRef(false);
+  const lastCleanupTurn = useRef(0);
 
   useEffect(() => {
     // We consider the game initialized if there are turns recorded or a character name exists
@@ -28,14 +29,28 @@ export const usePersistence = () => {
     }
   }, [gameHistory.turnCount, character.name]);
 
+  // Image cleanup: run every 20 turns to remove orphaned blobs
+  useEffect(() => {
+    const currentState = useGameStore.getState();
+    const turnCount = currentState.gameHistory.turnCount;
+    if (turnCount > 0 && turnCount % 20 === 0 && turnCount !== lastCleanupTurn.current) {
+        lastCleanupTurn.current = turnCount;
+        const activeIds = currentState.gameWorld.generatedImages || [];
+        db.cleanupOrphanedImages(activeIds).then(count => {
+            if (count > 0) console.log(`[Cleanup] Removed ${count} orphaned images from IndexedDB`);
+        }).catch(console.error);
+    }
+  }, [gameHistory.turnCount]);
+
   const handleExport = useCallback(() => {
+    const currentState = useGameStore.getState();
     const save: GameSave = {
       id: generateSaveId(),
-      name: `${character.name || 'Unknown'}_${new Date().toISOString().split('T')[0]}`,
+      name: `${currentState.character.name || 'Unknown'}_${new Date().toISOString().split('T')[0]}`,
       timestamp: new Date().toISOString(),
-      gameState: { history: gameHistory, world: gameWorld },
-      character,
-      thumbnail: gameWorld.visualUrl
+      gameState: { history: currentState.gameHistory, world: currentState.gameWorld },
+      character: currentState.character,
+      thumbnail: currentState.gameWorld.visualUrl
     };
     // Sanitize filename
     const safeName = save.name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
@@ -43,7 +58,7 @@ export const usePersistence = () => {
     
     downloadFile(JSON.stringify(save, null, 2), filename, 'application/json');
     showToast("Reality state exported.", "success");
-  }, [gameHistory, gameWorld, character, showToast]);
+  }, [showToast]);
 
   const handleImport = useCallback(async (file: File) => {
     try {
@@ -68,12 +83,13 @@ export const usePersistence = () => {
 
   const saveToDb = useCallback(async (name: string, isAutosave = false) => {
     try {
+      const currentState = useGameStore.getState();
       await db.saveGame({
         id: isAutosave ? 'autosave_slot' as any : generateMessageId() as any, 
         name,
         timestamp: new Date().toISOString(),
-        gameState: { history: gameHistory, world: gameWorld },
-        character
+        gameState: { history: currentState.gameHistory, world: currentState.gameWorld },
+        character: currentState.character
       });
       if (!isAutosave) {
         showToast("Checkpoint saved to Core.", "success");
@@ -82,7 +98,7 @@ export const usePersistence = () => {
       console.error("Save Error:", e);
       if (!isAutosave) showToast("Save failed.", "error");
     }
-  }, [gameHistory, gameWorld, character, showToast]);
+  }, [showToast]);
 
   const loadFromDb = useCallback(async (name: string) => {
     try {
@@ -123,7 +139,7 @@ export const usePersistence = () => {
     gameHistory.turnCount, 
     character, 
     gameWorld.sceneMode, 
-    gameWorld.knownEntities,
+    gameWorld.knownEntities.length,
     debouncedAutosave
   ]);
 

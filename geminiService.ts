@@ -1,8 +1,9 @@
+
 import { GoogleGenAI, Schema, Type, GenerateContentResponse } from "@google/genai";
 import { SAFETY_SETTINGS, IMAGE_SAFETY_SETTINGS, MAX_CONTEXT_HISTORY } from "./constants";
 import { ChatMessage, Role, ModelResponseSchema, Character, Scenario, SCENE_MODES, SceneMode, Lighting, LIGHTING_LEVELS } from "./types";
 
-// Schema Definition for Visceral Realism Engine 0.9.0
+// Schema Definition for Visceral Realism Engine 0.9.4
 const RESPONSE_SCHEMA: Schema = {
   type: Type.OBJECT,
   properties: {
@@ -191,6 +192,24 @@ export class GeminiService {
     this.ai = new GoogleGenAI({ apiKey: this.apiKey });
   }
 
+  private async withRetry<T>(fn: () => Promise<T>, maxRetries: number = 1): Promise<T> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+            return await fn();
+        } catch (e: unknown) {
+            lastError = e;
+            const errMsg = e instanceof Error ? e.message : String(e);
+            // Only retry on transient server errors
+            const isRetryable = errMsg.includes('503') || errMsg.includes('500') || errMsg.includes('overloaded');
+            if (!isRetryable || attempt === maxRetries) throw e;
+            // Exponential backoff: 2s, then 4s
+            await new Promise(r => setTimeout(r, (attempt + 1) * 2000));
+        }
+    }
+    throw lastError;
+  }
+
   private cleanJsonOutput(text: string): string {
     if (!text) return "{}";
     const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
@@ -252,6 +271,11 @@ export class GeminiService {
         if (typeof val === 'number') return val;
         if (typeof val === 'string' && !isNaN(Number(val))) return Number(val);
         return fallback;
+    };
+    const asOptionalNumber = (val: unknown): number | undefined => {
+        if (typeof val === 'number') return val;
+        if (typeof val === 'string' && !isNaN(Number(val))) return Number(val);
+        return undefined;
     };
     const asBoolean = (val: unknown): boolean => val === true;
     const asArray = <T>(val: unknown): T[] => Array.isArray(val) ? val as T[] : [];
@@ -335,10 +359,10 @@ export class GeminiService {
             removed_inventory: asArray(safeData.character_updates.removed_inventory),
             trauma_delta: asNumber(safeData.character_updates.trauma_delta, 0),
             bio_modifiers: isObject(safeData.character_updates.bio_modifiers) ? {
-                calories: asNumber(safeData.character_updates.bio_modifiers.calories, undefined as any),
-                hydration: asNumber(safeData.character_updates.bio_modifiers.hydration, undefined as any),
-                stamina: asNumber(safeData.character_updates.bio_modifiers.stamina, undefined as any),
-                lactation: asNumber(safeData.character_updates.bio_modifiers.lactation, undefined as any),
+                calories: asOptionalNumber(safeData.character_updates.bio_modifiers.calories),
+                hydration: asOptionalNumber(safeData.character_updates.bio_modifiers.hydration),
+                stamina: asOptionalNumber(safeData.character_updates.bio_modifiers.stamina),
+                lactation: asOptionalNumber(safeData.character_updates.bio_modifiers.lactation),
             } : undefined,
             relationships: asArray(safeData.character_updates.relationships),
             goals: asArray(safeData.character_updates.goals)
@@ -351,7 +375,7 @@ export class GeminiService {
       try {
           const textContent = history.map(h => `${h.role}: ${h.text}`).join('\n');
           const response = await this.ai.models.generateContent({
-              model: "gemini-3-flash-preview", 
+              model: "gemini-2.5-flash-lite", 
               contents: `Summarize the following RPG session logs into a concise paragraph (max 300 words). Focus on key events, injuries, and location changes:\n\n${textContent}`,
           });
           return response.text || "";
@@ -388,7 +412,7 @@ export class GeminiService {
       history: apiHistory,
       config: {
         systemInstruction: fullSystemInstruction,
-        temperature: 0.9,
+        temperature: parseFloat(localStorage.getItem('visceral_temperature') || '0.9'),
         topP: 0.95,
         topK: 40,
         safetySettings: SAFETY_SETTINGS,
@@ -398,12 +422,12 @@ export class GeminiService {
     });
 
     try {
-      const result = await Promise.race([
+      const result = await this.withRetry(() => Promise.race([
           chat.sendMessage({ message: currentUserMsg.text }),
           new Promise<never>((_, reject) => 
             setTimeout(() => reject(new Error("Request Timed Out")), REQUEST_TIMEOUT_MS)
           )
-      ]);
+      ]));
 
       const response = result as GenerateContentResponse; 
       const text = response.text;

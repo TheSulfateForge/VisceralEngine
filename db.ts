@@ -101,6 +101,34 @@ export class Database {
       });
   }
 
+  async cleanupOrphanedImages(activeImageIds: string[]): Promise<number> {
+    await this.init();
+    if (!this.db) throw new Error("DB not initialized");
+
+    const activeSet = new Set(activeImageIds);
+    let deletedCount = 0;
+
+    return new Promise((resolve, reject) => {
+        const transaction = this.db!.transaction([STORE_IMAGES], 'readwrite');
+        const store = transaction.objectStore(STORE_IMAGES);
+        const request = store.openCursor();
+
+        request.onsuccess = (event) => {
+            const cursor = (event.target as IDBRequest<IDBCursorWithValue>).result;
+            if (cursor) {
+                if (!activeSet.has(cursor.key as string)) {
+                    cursor.delete();
+                    deletedCount++;
+                }
+                cursor.continue();
+            }
+        };
+
+        transaction.oncomplete = () => resolve(deletedCount);
+        transaction.onerror = () => reject(transaction.error);
+    });
+  }
+
   // --- Save Handling ---
 
   async saveGame(save: GameSave): Promise<void> {

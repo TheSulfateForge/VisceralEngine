@@ -1,3 +1,4 @@
+
 import { useRef, useCallback } from 'react';
 import { GeminiService } from '../geminiService';
 import { ChatMessage, Role, ModelResponseSchema } from '../types';
@@ -9,6 +10,7 @@ import { db } from '../db';
 import { SYSTEM_INSTRUCTIONS } from '../systemInstructions';
 import { useGameStore } from '../store';
 import { SimulationEngine } from '../utils/simulationEngine';
+import { UI_CONFIG } from '../constants';
 
 const SUMMARIZATION_INTERVAL = 20;
 
@@ -56,6 +58,19 @@ export const useGeminiClient = () => {
     }
   }, [setShowKeyPrompt]);
 
+  const handleUndo = useCallback(() => {
+    const { preTurnSnapshot } = useGameStore.getState();
+    if (!preTurnSnapshot) {
+        showToast("No turn to undo.", "info");
+        return;
+    }
+    setGameHistory(preTurnSnapshot.history);
+    setGameWorld(preTurnSnapshot.world);
+    setCharacter(preTurnSnapshot.character);
+    useGameStore.getState().setPreTurnSnapshot(null);
+    showToast("Last turn reverted.", "success");
+  }, [setGameHistory, setGameWorld, setCharacter, showToast]);
+
   const handleVisualize = useCallback(async () => {
     try {
         const service = await getService();
@@ -75,7 +90,7 @@ export const useGeminiClient = () => {
                 setGameWorld(prev => ({ 
                     ...prev, 
                     visualUrl: imageId, 
-                    generatedImages: [imageId, ...prev.generatedImages], 
+                    generatedImages: [imageId, ...prev.generatedImages].slice(0, UI_CONFIG.MAX_GENERATED_IMAGES), 
                     isGeneratingVisual: false 
                 }));
             } catch (dbError) {
@@ -166,7 +181,7 @@ export const useGeminiClient = () => {
         }
 
         const preCallState = useGameStore.getState();
-        const contextPrompt = `${SYSTEM_INSTRUCTIONS}\n\n${constructGeminiPrompt(preCallState.gameHistory, preCallState.gameWorld, preCallState.character, text)}`;
+        const { prompt: contextPrompt, ragDebug } = constructGeminiPrompt(preCallState.gameHistory, preCallState.gameWorld, preCallState.character, text);
         const response: ModelResponseSchema = await service.sendMessage(
             contextPrompt, 
             [...preCallState.gameHistory.history, userMsg], 
@@ -183,6 +198,13 @@ export const useGeminiClient = () => {
         const currentWorld = freshState.gameWorld;
         const currentHistory = freshState.gameHistory;
 
+        // Capture pre-turn state for undo
+        useGameStore.getState().setPreTurnSnapshot({
+            history: currentHistory,
+            world: currentWorld,
+            character: currentCharacter
+        });
+
         // --- STATE DELTA PROCESSING ---
         // Pre-process explicit character updates from AI (Items, Conditions, Modifiers)
         let tempCharUpdates = { ...currentCharacter };
@@ -196,12 +218,12 @@ export const useGeminiClient = () => {
             if (updates.added_conditions?.length) {
                 updates.added_conditions.forEach(c => {
                     if (!newConditions.includes(c)) newConditions.push(c);
-                    showToast(`Condition Added: ${c}`, 'error');
+                    showToast(`Condition Added: ${c}`, 'error', 6000);
                 });
             }
             if (updates.removed_conditions?.length) {
                 newConditions = newConditions.filter(c => !updates.removed_conditions!.includes(c));
-                updates.removed_conditions.forEach(c => showToast(`Condition Removed: ${c}`, 'success'));
+                updates.removed_conditions.forEach(c => showToast(`Condition Removed: ${c}`, 'success', 6000));
             }
 
             // Process Inventory
@@ -276,6 +298,7 @@ export const useGeminiClient = () => {
             debugLog: [
                 ...currentHistoryState.debugLog, 
                 { timestamp: new Date().toISOString(), message: `Response Received [${requestId}]`, type: 'success' },
+                { timestamp: new Date().toISOString(), message: `[RAG] Lore: ${ragDebug.filteredLore}/${ragDebug.totalLore} | Entities: ${ragDebug.filteredEntities}/${ragDebug.totalEntities} | Tokens: [${ragDebug.queryTokens.slice(0, 10).join(', ')}]`, type: 'info' },
                 ...debugLogs
             ]
         }));
@@ -306,6 +329,7 @@ export const useGeminiClient = () => {
     handleSend,
     handleVisualize,
     handleKeyLink,
-    handleGenerateScenarios
+    handleGenerateScenarios,
+    handleUndo
   };
 };

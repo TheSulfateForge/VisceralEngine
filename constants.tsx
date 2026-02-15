@@ -45,18 +45,6 @@ export const SECRET_TRIGGER = "Architect";
 export const MAKER_SIGNATURE = "Q29weXJpZ2h0IChjKSAyMDI2IFRoZVN1bGZhdGVGb3JnZQ==";
 
 // ============================================================================
-// STORAGE KEYS
-// ============================================================================
-
-export const STORAGE_KEYS = {
-  AUTOSAVE: 'visceral_v5_autosave',
-  SAVE_PREFIX: 'visceral_v5_save_',
-  BRANCH_PREFIX: 'visceral_v5_branch_',
-  SETTINGS: 'visceral_v5_settings',
-  STATS: 'visceral_v5_stats',
-} as const;
-
-// ============================================================================
 // TIMING CONSTANTS (in milliseconds)
 // ============================================================================
 

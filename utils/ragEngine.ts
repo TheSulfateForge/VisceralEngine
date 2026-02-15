@@ -1,3 +1,4 @@
+
 import { LoreItem, KnownEntity, ChatMessage, Role } from '../types';
 
 const STOP_WORDS = new Set([
@@ -53,6 +54,13 @@ function hasOverlap(queryTokens: Set<string>, targetText: string): boolean {
 export interface RAGResult {
   relevantLore: LoreItem[];
   relevantEntities: KnownEntity[];
+  debugInfo: {
+    totalLore: number;
+    filteredLore: number;
+    totalEntities: number;
+    filteredEntities: number;
+    queryTokens: string[];
+  };
 }
 
 /**
@@ -109,5 +117,15 @@ export function retrieveRelevantContext(
   const remainingSlots = Math.max(0, entityLimit - relevantEntities.length);
   relevantEntities.push(...secondaryEntities.slice(0, remainingSlots));
 
-  return { relevantLore, relevantEntities };
+  return { 
+      relevantLore, 
+      relevantEntities,
+      debugInfo: {
+          totalLore: lore.length,
+          filteredLore: relevantLore.length,
+          totalEntities: knownEntities.length,
+          filteredEntities: relevantEntities.length,
+          queryTokens: Array.from(queryTokens).slice(0, 20)
+      }
+  };
 }

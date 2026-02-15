@@ -1,5 +1,6 @@
+
 import { GameHistory, GameWorld, Character } from '../types';
-import { retrieveRelevantContext } from './ragEngine';
+import { retrieveRelevantContext, RAGResult } from './ragEngine';
 
 const DOWNTIME_KEYWORDS = [
   'sleep', 'rest', 'wait', 'camp', 'hide', 
@@ -9,18 +10,23 @@ const DOWNTIME_KEYWORDS = [
   'say', 'ask', 'tell', 'shout', 'whisper', 'talk', 'kiss', 'hug'
 ];
 
+export interface PromptResult {
+    prompt: string;
+    ragDebug: RAGResult['debugInfo'];
+}
+
 export const constructGeminiPrompt = (
   gameHistory: GameHistory,
   gameWorld: GameWorld,
   character: Character,
   userInput: string
-): string => {
+): PromptResult => {
   // Memory is always injected in full — it's compact and globally relevant
   const memoryContext = gameWorld.memory.map(m => `• ${m.fact}`).join('\n');
 
   // RAG: Filter lore and entities by contextual relevance
   const activeThreatNames = (gameWorld.activeThreats || []).map(t => t.name);
-  const { relevantLore, relevantEntities } = retrieveRelevantContext(
+  const { relevantLore, relevantEntities, debugInfo } = retrieveRelevantContext(
     userInput,
     gameHistory.history,
     gameWorld.lore,
@@ -94,7 +100,7 @@ The simulation is running standard narrative protocols.
       `;
   }
 
-  return `
+  const promptString = `
 [CONTEXT]
 ${memoryContext}
 ${loreContext}
@@ -128,8 +134,14 @@ ${pacingInstruction}
 2. If the user input is social ("I talk to him"), do NOT ask for a Charisma roll. Write the dialogue.
 3. Analyze the user's intent in your 'thought_process' first.
 4. Estimate \`time_passed_minutes\` accurately.
+5. Check the current Conditions list before adding new ones. Do NOT add conditions that semantically duplicate existing ones (e.g., do not add "Broken Left Arm" if "Left Arm Fractured" already exists). If a condition worsens, REMOVE the old one and ADD the new severity.
 
 [INPUT]
 ${userInput}
 `;
+
+  return {
+      prompt: promptString,
+      ragDebug: debugInfo
+  };
 };

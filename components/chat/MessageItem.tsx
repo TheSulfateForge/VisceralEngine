@@ -60,6 +60,17 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({ msg, executeLocalRol
     // A simple heuristic: if the message is older than 5 seconds, show immediately.
     const isNew = (Date.now() - new Date(msg.timestamp).getTime()) < 5000;
 
+    const narrativeFontSize = (() => {
+        const size = localStorage.getItem('visceral_font_size') || 'xl';
+        const sizeMap: Record<string, string> = {
+            'sm': 'text-sm md:text-base',
+            'base': 'text-base md:text-lg',
+            'lg': 'text-lg md:text-xl',
+            'xl': 'text-xl md:text-2xl'
+        };
+        return sizeMap[size] || sizeMap['xl'];
+    })();
+
     return (
         <div className={`flex ${msg.role === Role.USER ? 'justify-end' : 'justify-start'} animate-fade-in`}>
             <div className={`w-full ${msg.role === Role.USER ? 'max-w-[85%]' : ''}`}>
@@ -93,7 +104,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({ msg, executeLocalRol
                     </div>
                 )}
 
-                <div className={`${msg.role === Role.USER ? 'bg-red-950/5 border-r border-red-900/20 pr-6 pl-4 py-4 rounded-sm text-gray-500 italic text-sm' : msg.role === Role.SYSTEM ? 'bg-gray-900/10 border border-gray-800 text-gray-600 rounded p-5 text-center text-[9px] uppercase font-mono' : 'serif-font text-xl md:text-2xl leading-[1.7] text-gray-300 font-light tracking-wide'}`}>
+                <div className={`${msg.role === Role.USER ? 'bg-red-950/5 border-r border-red-900/20 pr-6 pl-4 py-4 rounded-sm text-gray-500 italic text-sm' : msg.role === Role.SYSTEM ? 'bg-gray-900/10 border border-gray-800 text-gray-600 rounded p-5 text-center text-[9px] uppercase font-mono' : `serif-font ${narrativeFontSize} leading-[1.7] text-gray-300 font-light tracking-wide`}`}>
                     {isModel && isNew ? (
                         <TypewriterText text={msg.text} onComplete={() => setIsTypingComplete(true)} />
                     ) : (

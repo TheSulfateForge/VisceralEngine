@@ -8,7 +8,7 @@ export const useKeyboardShortcuts = () => {
     // We do NOT subscribe to the store state here to avoid re-renders.
     // We access state directly inside the callback via getState().
     const { handleExport } = usePersistence();
-    const { handleVisualize } = useGeminiClient();
+    const { handleVisualize, handleUndo } = useGeminiClient();
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -45,6 +45,11 @@ export const useKeyboardShortcuts = () => {
                     handleVisualize();
                 }
             }
+            // UNDO: ctrl+z
+            else if (ctrl && key === 'z') {
+                e.preventDefault();
+                handleUndo();
+            }
             // HELP/DEBUG: ctrl+/
             else if (ctrl && key === '/') {
                 e.preventDefault();
@@ -62,5 +67,5 @@ export const useKeyboardShortcuts = () => {
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [handleExport, handleVisualize]);
+    }, [handleExport, handleVisualize, handleUndo]);
 };

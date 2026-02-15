@@ -1,4 +1,3 @@
-
 import React, { useRef, useEffect } from 'react';
 import { useGameStore } from '../../store';
 
@@ -27,6 +26,7 @@ export const DebugModal: React.FC<DebugModalProps> = ({ onClose }) => {
                         <div key={idx} className={`border-l-2 pl-3 py-1 ${
                             entry.type === 'error' ? 'border-red-600 text-red-400' :
                             entry.type === 'success' ? 'border-green-600 text-green-400' :
+                            entry.type === 'warning' ? 'border-yellow-600 text-yellow-400' :
                             'border-gray-700 text-gray-500'
                         }`}>
                             <span className="opacity-50 mr-3">[{new Date(entry.timestamp).toLocaleTimeString()}]</span>

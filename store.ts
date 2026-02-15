@@ -83,6 +83,7 @@ interface GameStore {
     gameHistory: GameHistory;
     gameWorld: GameWorld;
     character: Character;
+    preTurnSnapshot: { history: GameHistory; world: GameWorld; character: Character } | null;
     
     // UI State
     view: View;
@@ -102,6 +103,7 @@ interface GameStore {
     setGameHistory: (update: GameHistory | ((prev: GameHistory) => GameHistory)) => void;
     setGameWorld: (update: GameWorld | ((prev: GameWorld) => GameWorld)) => void;
     setCharacter: (update: Character | ((prev: Character) => Character)) => void;
+    setPreTurnSnapshot: (snapshot: { history: GameHistory; world: GameWorld; character: Character } | null) => void;
     
     setView: (view: View) => void;
     setActiveTab: (tab: 'chat' | 'character' | 'world') => void;
@@ -112,7 +114,7 @@ interface GameStore {
     setScreenEffect: (effect: 'none' | 'fail' | 'crit') => void;
     setIsMobileMenuOpen: (open: boolean) => void;
     setPulseSeverity: (severity: 'none' | 'lethal' | 'traumatic' | 'minor') => void;
-    setIsPulsing: (isPulsing) => void;
+    setIsPulsing: (isPulsing: boolean) => void;
     setIsGalleryOpen: (open: boolean) => void;
     setIsDebugOpen: (open: boolean) => void;
 
@@ -128,6 +130,7 @@ export const useGameStore = create<GameStore>((set) => ({
     gameHistory: initialHistory,
     gameWorld: initialWorld,
     character: EMPTY_CHARACTER,
+    preTurnSnapshot: null,
     view: 'landing',
     activeTab: 'chat',
     isSettingsOpen: false,
@@ -151,6 +154,7 @@ export const useGameStore = create<GameStore>((set) => ({
     setCharacter: (update) => set((state) => ({ 
         character: typeof update === 'function' ? update(state.character) : update 
     })),
+    setPreTurnSnapshot: (preTurnSnapshot) => set({ preTurnSnapshot }),
 
     setView: (view) => set({ view }),
     setActiveTab: (activeTab) => set({ activeTab }),
@@ -174,6 +178,7 @@ export const useGameStore = create<GameStore>((set) => ({
         gameHistory: initialHistory,
         gameWorld: initialWorld,
         character: EMPTY_CHARACTER,
-        view: 'landing'
+        view: 'landing',
+        preTurnSnapshot: null
     })
 }));

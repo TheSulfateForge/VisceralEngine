@@ -11,7 +11,7 @@ export interface Toast {
 }
 
 interface ToastActions {
-  showToast: (message: string, type?: ToastType) => void;
+  showToast: (message: string, type?: ToastType, duration?: number) => void;
   removeToast: (id: string) => void;
 }
 
@@ -25,15 +25,17 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setToasts(prev => prev.filter(t => t.id !== id));
   }, []);
 
-  const showToast = useCallback((message: string, type: ToastType = 'info') => {
+  const showToast = useCallback((message: string, type: ToastType = 'info', duration?: number) => {
     const id = Math.random().toString(36).substring(7);
     const toast: Toast = { id, message, type };
 
     setToasts(prev => [...prev, toast]);
 
+    const time = duration || (type === 'error' ? 5000 : TIMING.TOAST_DURATION);
+
     setTimeout(() => {
       removeToast(id);
-    }, TIMING.TOAST_DURATION);
+    }, time);
   }, [removeToast]);
 
   const actions = useMemo(() => ({ showToast, removeToast }), [showToast, removeToast]);

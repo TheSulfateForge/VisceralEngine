@@ -8,6 +8,15 @@ interface SimulationResult {
     debugLogs: DebugLogEntry[];
 }
 
+const MAX_REGISTRY_LINES = 60;
+
+function trimHiddenRegistry(registry: string): string {
+    if (!registry) return "";
+    const lines = registry.split('\n').filter(l => l.trim());
+    if (lines.length <= MAX_REGISTRY_LINES) return registry;
+    return lines.slice(-MAX_REGISTRY_LINES).join('\n');
+}
+
 const TICK_RATES = {
     // 100 / 1.0 = 100 hours (~4 days) to empty. 
     // Was 1.8 (55 hours). Slower burn prevents starvation loops.
@@ -221,7 +230,7 @@ export const SimulationEngine = {
             debugLogs.push({
                 timestamp: new Date().toISOString(),
                 message: `[TIME-CLAMP] AI requested +${rawDelta}m, clamped to +${timeDelta}m (cap: ${maxAllowed}, sleep: ${!!hasSleep}, combat: ${isCombat})`,
-                type: 'warning' as any
+                type: 'warning'
             });
         }
         
@@ -234,6 +243,19 @@ export const SimulationEngine = {
         // 2. Biological Simulation
         const bioResult = processBiology(character, timeDelta, response.biological_inputs);
         const newBio = bioResult.updatedBio;
+
+        // Tension-based stamina pressure
+        // High tension (>70) causes faster stamina drain, simulating adrenaline fatigue
+        const tensionLevel = response.tension_level ?? currentWorld.tensionLevel;
+        if (tensionLevel > 70 && newBio.metabolism.stamina > 0) {
+            // Scaling up to 5% drain per turn at max tension
+            const tensionDrain = ((tensionLevel - 70) / 30) * 5; 
+            newBio.metabolism.stamina = Math.max(0, newBio.metabolism.stamina - tensionDrain);
+            if (tensionDrain > 1) {
+                debugLogs.push({ timestamp: new Date().toISOString(), message: `[TENSION] High stress drained ${Math.round(tensionDrain)}% stamina.`, type: 'warning' });
+            }
+        }
+
         bioResult.logs.forEach(l => debugLogs.push({ timestamp: new Date().toISOString(), message: `[BIO] ${l}`, type: 'success' }));
         
         // Merge bio-conditions with character
@@ -341,7 +363,7 @@ export const SimulationEngine = {
                 time: newTime,
                 lore: [...currentWorld.lore, ...newLore],
                 memory: [...currentWorld.memory, ...newMemory],
-                hiddenRegistry: newHiddenRegistry,
+                hiddenRegistry: trimHiddenRegistry(newHiddenRegistry),
                 pregnancies: currentPregnancies,
                 activeThreats: nextThreats,
                 environment: nextEnv,

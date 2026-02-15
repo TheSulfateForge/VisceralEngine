@@ -226,7 +226,7 @@ export interface ModelResponseSchema {
 export interface DebugLogEntry {
   timestamp: string;
   message: string;
-  type: 'info' | 'error' | 'success';
+  type: 'info' | 'error' | 'success' | 'warning';
 }
 
 export interface ChatMessage {
