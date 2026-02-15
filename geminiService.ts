@@ -1,9 +1,8 @@
-
 import { GoogleGenAI, Schema, Type, GenerateContentResponse } from "@google/genai";
 import { SAFETY_SETTINGS, IMAGE_SAFETY_SETTINGS, MAX_CONTEXT_HISTORY } from "./constants";
-import { ChatMessage, Role, ModelResponseSchema, Character, Scenario, SCENE_MODES, SceneMode, Lighting, LIGHTING_LEVELS } from "./types";
+import { ChatMessage, Role, ModelResponseSchema, Character, Scenario, SCENE_MODES, SceneMode, Lighting, LIGHTING_LEVELS, GeneratedCharacterFields } from "./types";
 
-// Schema Definition for Visceral Realism Engine 0.9.4
+// Schema Definition for Visceral Realism Engine 0.9.7
 const RESPONSE_SCHEMA: Schema = {
   type: Type.OBJECT,
   properties: {
@@ -176,6 +175,40 @@ const SCENARIO_SCHEMA: Schema = {
     },
     required: ["title", "description", "opening_line"]
   }
+};
+
+const CHARACTER_GEN_SCHEMA: Schema = {
+    type: Type.OBJECT,
+    properties: {
+        name: { type: Type.STRING, description: "A unique, setting-appropriate name. Avoid generic fantasy names." },
+        gender: { type: Type.STRING, description: "Gender identity." },
+        appearance: { type: Type.STRING, description: "Detailed physical description: height, build, skin, hair, eyes, distinguishing features. 2-4 sentences of visceral detail." },
+        notableFeatures: { type: Type.STRING, description: "Scars, tattoos, implants, mutations, or other distinguishing marks. Specific and visual." },
+        race: { type: Type.STRING, description: "Species or ancestry." },
+        backstory: { type: Type.STRING, description: "3-5 sentences of personal history. Include: origin, defining trauma or achievement, current situation, and a hook that drives action." },
+        setting: { type: Type.STRING, description: "The specific world/era/location. Be precise — not just 'fantasy' but 'Low-magic feudal Japan, Sengoku period'." },
+        inventory: { 
+            type: Type.ARRAY, 
+            items: { type: Type.STRING },
+            description: "3-6 starting items. Only significant gear — weapons, tools, key possessions. No generic 'clothes' or 'food'."
+        },
+        relationships: { 
+            type: Type.ARRAY, 
+            items: { type: Type.STRING },
+            description: "2-4 existing ties. Format: 'Name — relationship — status'. E.g. 'Mara — sister — estranged since the fire'."
+        },
+        conditions: { 
+            type: Type.ARRAY, 
+            items: { type: Type.STRING },
+            description: "0-2 starting conditions. Only if the concept demands it (e.g., 'Chronic Pain — Left Knee' for a war vet). Empty array for healthy characters."
+        },
+        goals: { 
+            type: Type.ARRAY, 
+            items: { type: Type.STRING },
+            description: "2-3 driving motivations. Mix of immediate needs and long-term ambitions."
+        }
+    },
+    required: ["name", "gender", "appearance", "notableFeatures", "race", "backstory", "setting", "inventory", "relationships", "conditions", "goals"]
 };
 
 const REQUEST_TIMEOUT_MS = 60000;
@@ -541,5 +574,126 @@ export class GeminiService {
       console.error("Image generation error:", error);
     }
     return null;
+  }
+
+  async generateCharacter(concept: string): Promise<GeneratedCharacterFields | null> {
+    try {
+        const prompt = `
+You are the character creation engine for a "Visceral Realism" roleplaying simulation.
+Generate a COMPLETE, DETAILED character based on this concept from the user:
+
+"${concept}"
+
+RULES:
+- The character must feel REAL. No generic fantasy tropes unless the concept demands it.
+- Backstory should include specific events, not vague descriptions.
+- Appearance should be cinematically detailed — a casting director should be able to picture them.
+- Inventory should reflect their life situation, not a game loadout.
+- Relationships should create dramatic tension and narrative hooks.
+- Setting should be SPECIFIC — a place, time, and situation, not just a genre.
+- If the concept is vague, make bold creative choices. Fill in the gaps with interesting details.
+- NEVER use these names: Elara, Kaela, Lyra, Aria, Kaelith, Kael, Vex, Nyx, Thorne.
+
+Output valid JSON matching the schema exactly.
+        `;
+
+        const response = await this.ai.models.generateContent({
+            model: this.modelName,
+            contents: prompt,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: CHARACTER_GEN_SCHEMA,
+                safetySettings: SAFETY_SETTINGS,
+                temperature: 1.0 // Higher creativity for character gen
+            }
+        });
+
+        const text = response.text;
+        if (!text) return null;
+
+        const clean = this.cleanJsonOutput(text);
+        const parsed = JSON.parse(clean);
+        return parsed as GeneratedCharacterFields;
+    } catch (e) {
+        console.error("Character generation failed:", e);
+        return null;
+    }
+  }
+
+  async generateCharacterField(
+    character: Partial<Character>, 
+    fieldName: string, 
+    fieldDescription: string
+  ): Promise<string | string[] | null> {
+    try {
+        // Build context from whatever the user has already filled in
+        const context = Object.entries(character)
+            .filter(([_, v]) => {
+                if (typeof v === 'string') return v.trim().length > 0;
+                if (Array.isArray(v)) return v.length > 0;
+                return false;
+            })
+            .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`)
+            .join('\n');
+
+        const isArrayField = ['inventory', 'relationships', 'conditions', 'goals'].includes(fieldName);
+
+        const prompt = `
+You are generating a SINGLE field for a character in a "Visceral Realism" RPG.
+
+EXISTING CHARACTER DATA (use this as context — maintain consistency):
+${context || "No data yet. Make bold creative choices."}
+
+GENERATE THE FOLLOWING FIELD: ${fieldName}
+FIELD DESCRIPTION: ${fieldDescription}
+
+${isArrayField ? 
+    `Return a JSON array of 2-5 strings. Each string should be specific and vivid.` : 
+    `Return a JSON object with a single "value" key containing the generated text. Be detailed and specific — 2-4 sentences for descriptive fields, concise for labels.`
+}
+
+RULES:
+- Stay consistent with existing data.
+- Be specific, not generic. Real-feeling details.
+- NEVER use these names: Elara, Kaela, Lyra, Aria, Kaelith, Kael, Vex, Nyx, Thorne.
+        `;
+
+        const schema: Schema = isArrayField ? {
+            type: Type.ARRAY,
+            items: { type: Type.STRING }
+        } : {
+            type: Type.OBJECT,
+            properties: {
+                value: { type: Type.STRING }
+            },
+            required: ["value"]
+        };
+
+        const response = await this.ai.models.generateContent({
+            model: this.modelName,
+            contents: prompt,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: schema,
+                safetySettings: SAFETY_SETTINGS,
+                temperature: 0.9
+            }
+        });
+
+        const text = response.text;
+        if (!text) return null;
+
+        const clean = this.cleanJsonOutput(text);
+        const parsed = JSON.parse(clean);
+
+        if (isArrayField) {
+            return Array.isArray(parsed) ? parsed : null;
+        } else {
+            return typeof parsed.value === 'string' ? parsed.value : null;
+        }
+    } catch (e) {
+        console.error(`Field generation failed for ${fieldName}:`, e);
+        return null;
+    }
   }
 }

@@ -1,15 +1,15 @@
-
 // ============================================================================
 // DB.TS - IndexedDB Wrapper
 // ============================================================================
 
-import { GameSave, SaveMetadata } from "./types";
+import { GameSave, SaveMetadata, CharacterTemplate } from "./types";
 import { generateSaveId, generateUUID } from "./idUtils";
 
 const DB_NAME = 'VisceralEngineDB';
-const DB_VERSION = 3; 
+const DB_VERSION = 4; 
 const STORE_SAVES = 'saves';
 const STORE_IMAGES = 'images';
+const STORE_TEMPLATES = 'templates';
 
 export class Database {
   private db: IDBDatabase | null = null;
@@ -49,6 +49,12 @@ export class Database {
         // Images Store
         if (!db.objectStoreNames.contains(STORE_IMAGES)) {
             db.createObjectStore(STORE_IMAGES, { keyPath: 'id' });
+        }
+
+        // Templates Store (NEW)
+        if (!db.objectStoreNames.contains(STORE_TEMPLATES)) {
+            const store = db.createObjectStore(STORE_TEMPLATES, { keyPath: 'id' });
+            store.createIndex('name', 'name', { unique: true });
         }
       };
     });
@@ -223,6 +229,84 @@ export class Database {
       };
       
       keyRequest.onerror = () => reject(keyRequest.error);
+    });
+  }
+
+  // --- Template Handling ---
+
+  async saveTemplate(template: CharacterTemplate): Promise<void> {
+    await this.init();
+    if (!this.db) throw new Error("DB not initialized");
+
+    return new Promise((resolve, reject) => {
+        const transaction = this.db!.transaction([STORE_TEMPLATES], 'readwrite');
+        const store = transaction.objectStore(STORE_TEMPLATES);
+        const index = store.index('name');
+
+        // Upsert by name: if a template with this name exists, overwrite it
+        const checkRequest = index.get(template.name);
+
+        checkRequest.onsuccess = () => {
+            const existing = checkRequest.result as CharacterTemplate;
+            if (existing) {
+                template.id = existing.id; // Keep same ID on overwrite
+            }
+            const putRequest = store.put(template);
+            putRequest.onerror = () => reject(putRequest.error);
+            putRequest.onsuccess = () => resolve();
+        };
+
+        checkRequest.onerror = () => reject(checkRequest.error);
+    });
+  }
+
+  async loadTemplate(name: string): Promise<CharacterTemplate | undefined> {
+    await this.init();
+    if (!this.db) throw new Error("DB not initialized");
+
+    return new Promise((resolve, reject) => {
+        const transaction = this.db!.transaction([STORE_TEMPLATES], 'readonly');
+        const store = transaction.objectStore(STORE_TEMPLATES);
+        const index = store.index('name');
+        const request = index.get(name);
+
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => resolve(request.result);
+    });
+  }
+
+  async getAllTemplates(): Promise<CharacterTemplate[]> {
+    await this.init();
+    if (!this.db) throw new Error("DB not initialized");
+
+    return new Promise((resolve, reject) => {
+        const transaction = this.db!.transaction([STORE_TEMPLATES], 'readonly');
+        const store = transaction.objectStore(STORE_TEMPLATES);
+        const request = store.getAll();
+
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+            const results = request.result as CharacterTemplate[];
+            // Sort newest first
+            results.sort((a, b) => 
+                new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+            );
+            resolve(results);
+        };
+    });
+  }
+
+  async deleteTemplate(id: string): Promise<void> {
+    await this.init();
+    if (!this.db) throw new Error("DB not initialized");
+
+    return new Promise((resolve, reject) => {
+        const transaction = this.db!.transaction([STORE_TEMPLATES], 'readwrite');
+        const store = transaction.objectStore(STORE_TEMPLATES);
+        const request = store.delete(id);
+
+        request.onsuccess = () => resolve();
+        request.onerror = () => reject(request.error);
     });
   }
 }

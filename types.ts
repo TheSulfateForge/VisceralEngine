@@ -1,3 +1,4 @@
+
 import React from 'react';
 
 // ============================================================================
@@ -9,6 +10,7 @@ declare global {
     // aistudio is declared in the global scope by the environment (Project IDX / GenAI)
     // We rely on the global interface merging from the environment.
     webkitAudioContext?: typeof AudioContext;
+    // Removed local aistudio declaration to avoid conflict with global AIStudio type
   }
 }
 
@@ -23,6 +25,8 @@ export type MessageId = string & { readonly __brand: 'MessageId' };
 export type SaveId = string & { readonly __brand: 'SaveId' };
 export type MemoryId = string & { readonly __brand: 'MemoryId' };
 export type LoreId = string & { readonly __brand: 'LoreId' };
+// --- Character Template System ---
+export type TemplateId = string & { readonly __brand: 'TemplateId' };
 
 export type RollOutcome = 
   | 'CRITICAL FAILURE'
@@ -256,6 +260,30 @@ export interface Character {
   trauma: number; // 0-100 scale of psychological damage
   bio: BioMonitor; // CHRONOS: Biological state
   hiddenNotes?: string;
+}
+
+export interface CharacterTemplate {
+  id: TemplateId;
+  name: string;            // User-given name: "My Hucow", "Cyberpunk Medic"
+  timestamp: string;
+  character: Omit<Character, 'bio' | 'trauma' | 'hiddenNotes'>;
+  // We omit runtime fields — templates store only the "creative" data
+  // bio/trauma/hiddenNotes reset fresh each playthrough
+}
+
+// Used by the AI generation endpoint
+export interface GeneratedCharacterFields {
+  name: string;
+  gender: string;
+  appearance: string;
+  notableFeatures: string;
+  race: string;
+  backstory: string;
+  setting: string;
+  inventory: string[];
+  relationships: string[];
+  conditions: string[];
+  goals: string[];
 }
 
 export interface MemoryItem {

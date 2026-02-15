@@ -98,7 +98,8 @@ export const WorldView: React.FC = () => {
                 {gameHistory.rollStats.totalRolls > 0 && (
                     <div className="space-y-3">
                         <span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest">Outcome Distribution</span>
-                        {Object.entries(gameHistory.rollStats.outcomes).map(([outcome, count]) => {
+                        {Object.entries(gameHistory.rollStats.outcomes).map(([outcome, rawCount]) => {
+                            const count = rawCount as number;
                             const pct = gameHistory.rollStats.totalRolls > 0 
                                 ? (count / gameHistory.rollStats.totalRolls) * 100 
                                 : 0;

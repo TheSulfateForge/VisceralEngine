@@ -1,4 +1,4 @@
-import { MessageId, SaveId, MemoryId, LoreId } from './types';
+import { MessageId, SaveId, MemoryId, LoreId, TemplateId } from './types';
 
 // Use standard UUID if available, otherwise fall back to a high-entropy timestamp mix
 export const generateUUID = (): string => {
@@ -27,3 +27,6 @@ export const generateMemoryId = (): MemoryId => {
 export const generateLoreId = (): LoreId => {
   return `lore_${generateUUID()}` as LoreId;
 };
+
+export const generateTemplateId = (): TemplateId => 
+  `tmpl_${generateUUID()}` as TemplateId;
