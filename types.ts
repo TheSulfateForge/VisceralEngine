@@ -33,7 +33,9 @@ export type RollOutcome =
   | 'CRITICAL SUCCESS';
 
 export type ConditionSeverity = 'lethal' | 'traumatic' | 'minor';
-export type SceneMode = 'NARRATIVE' | 'SOCIAL' | 'TENSION' | 'COMBAT';
+
+export const SCENE_MODES = ['NARRATIVE', 'SOCIAL', 'TENSION', 'COMBAT'] as const;
+export type SceneMode = typeof SCENE_MODES[number];
 
 // --- Chronos System ---
 
@@ -82,6 +84,9 @@ export interface BioInputs {
     relieved_pressure?: string[]; // ["lactation", "bladder"]
 }
 
+export const PREGNANCY_STATUSES = ['gestating', 'birth', 'terminated'] as const;
+export type PregnancyStatus = typeof PREGNANCY_STATUSES[number];
+
 export interface Pregnancy {
   id: string;
   motherName: string; // "Player" or NPC Name
@@ -90,19 +95,29 @@ export interface Pregnancy {
   conceptionTime: number; // Absolute minutes
   currentWeek: number;
   isVisible: boolean; // Becomes true after week 12
-  status: 'gestating' | 'birth' | 'terminated';
+  status: PregnancyStatus;
 }
 
 // --- Enemy AI Systems ---
 
-export type EnemyArchetype = 'AMATEUR' | 'PROFESSIONAL' | 'FANATIC' | 'MONSTER';
-export type EnemyState = 'EFFECTIVE' | 'COMPROMISED' | 'BROKEN';
-export type CoverState = 'OPEN' | 'PARTIAL' | 'FULL';
-export type Distance = 'MELEE' | 'CLOSE' | 'FAR';
+export const ENEMY_ARCHETYPES = ['AMATEUR', 'PROFESSIONAL', 'FANATIC', 'MONSTER'] as const;
+export type EnemyArchetype = typeof ENEMY_ARCHETYPES[number];
+
+export const ENEMY_STATES = ['EFFECTIVE', 'COMPROMISED', 'BROKEN'] as const;
+export type EnemyState = typeof ENEMY_STATES[number];
+
+export const COVER_STATES = ['OPEN', 'PARTIAL', 'FULL'] as const;
+export type CoverState = typeof COVER_STATES[number];
+
+export const DISTANCES = ['MELEE', 'CLOSE', 'FAR'] as const;
+export type Distance = typeof DISTANCES[number];
+
+export const LIGHTING_LEVELS = ['BRIGHT', 'DIM', 'DARK'] as const;
+export type Lighting = typeof LIGHTING_LEVELS[number];
 
 export interface CombatEnvironment {
   summary: string; // "Rain-slicked alleyway, minimal light"
-  lighting: 'BRIGHT' | 'DIM' | 'DARK';
+  lighting: Lighting;
   weather: string;
   terrain_tags: string[]; // ["Muddy", "Crowded", "Narrow"]
 }
@@ -120,7 +135,8 @@ export interface ActiveThreat {
 
 // --- Social Realism Systems ---
 
-export type RelationshipLevel = 'NEMESIS' | 'HOSTILE' | 'COLD' | 'NEUTRAL' | 'WARM' | 'ALLIED' | 'DEVOTED';
+export const RELATIONSHIP_LEVELS = ['NEMESIS', 'HOSTILE', 'COLD', 'NEUTRAL', 'WARM', 'ALLIED', 'DEVOTED'] as const;
+export type RelationshipLevel = typeof RELATIONSHIP_LEVELS[number];
 
 export interface KnownEntity {
   id: string;

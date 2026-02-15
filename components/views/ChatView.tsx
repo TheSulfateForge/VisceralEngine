@@ -1,4 +1,3 @@
-
 import React, { useLayoutEffect, useState, useRef, useCallback, useEffect } from 'react';
 import { useGameStore } from '../../store';
 import { useGeminiClient } from '../../hooks/useGeminiClient';
@@ -26,6 +25,20 @@ export const ChatView: React.FC = () => {
     const { isGeneratingVisual } = gameWorld;
 
     const [isAtBottom, setIsAtBottom] = useState(true);
+    const [visibleCount, setVisibleCount] = useState<number>(UI_CONFIG.MAX_ROLL_LOG_ENTRIES);
+
+    const totalMessages = history.length;
+    const startIndex = Math.max(0, totalMessages - visibleCount);
+    const displayHistory = history.slice(startIndex);
+    const hasOlderMessages = startIndex > 0;
+
+    const prevTurnCount = useRef(gameHistory.turnCount);
+    useEffect(() => {
+        if (gameHistory.turnCount < prevTurnCount.current) {
+            setVisibleCount(UI_CONFIG.MAX_ROLL_LOG_ENTRIES);
+        }
+        prevTurnCount.current = gameHistory.turnCount;
+    }, [gameHistory.turnCount]);
 
     // Scroll Logic: Check if user is near bottom
     const onScroll = () => {
@@ -85,8 +98,6 @@ export const ChatView: React.FC = () => {
         }
     }, [setGameHistory, handleSend, playSound, triggerHaptic]);
 
-    const displayHistory = history.slice(-UI_CONFIG.MAX_ROLL_LOG_ENTRIES); 
-
     const onSendMessage = (text: string) => {
         playSound('click');
         triggerHaptic('light');
@@ -107,6 +118,16 @@ export const ChatView: React.FC = () => {
                 ref={scrollRef}
                 onScroll={onScroll}
             >
+                {hasOlderMessages && (
+                    <div className="text-center py-6">
+                        <button
+                        onClick={() => setVisibleCount(prev => Math.min(prev + 50, totalMessages))}
+                        className="text-[9px] font-mono uppercase tracking-[0.3em] text-gray-600 hover:text-red-500 border border-gray-800 hover:border-red-900/40 px-4 py-2 transition-all"
+                        >
+                        Load Previous Memories ({totalMessages - visibleCount} remaining)
+                        </button>
+                    </div>
+                )}
                 {displayHistory.map(msg => (
                     <MessageItem 
                         key={msg.id} 

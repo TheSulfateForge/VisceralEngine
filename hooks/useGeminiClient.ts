@@ -63,8 +63,9 @@ export const useGeminiClient = () => {
 
         setGameWorld(prev => ({ ...prev, isGeneratingVisual: true }));
 
-        const lastScene = gameHistory.history.slice(-1)[0]?.text || character.setting;
-        const prompt = `Subject: ${character.name}, ${character.appearance}. Scene: ${lastScene.slice(0, 300)}.`;
+        const vizState = useGameStore.getState();
+        const lastScene = vizState.gameHistory.history.slice(-1)[0]?.text || vizState.character.setting;
+        const prompt = `Subject: ${vizState.character.name}, ${vizState.character.appearance}. Scene: ${lastScene.slice(0, 300)}.`;
 
         const base64Data = await service.generateImage(prompt);
 
@@ -98,7 +99,7 @@ export const useGeminiClient = () => {
         }
         showToast("Visual synthesis error.", "error");
     }
-  }, [getService, gameHistory.history, character, setGameWorld, showToast, setShowKeyPrompt]);
+  }, [getService, setGameWorld, showToast, setShowKeyPrompt]);
 
   const handleGenerateScenarios = useCallback(async () => {
     try {
@@ -159,21 +160,32 @@ export const useGeminiClient = () => {
             return;
         }
 
-        if (gameHistory.history.length > 0 && gameHistory.history.length % SUMMARIZATION_INTERVAL === 0) {
-            performSummarization(service, gameHistory.history).catch(console.error);
+        const historyForSummarization = useGameStore.getState().gameHistory;
+        if (historyForSummarization.history.length > 0 && historyForSummarization.history.length % SUMMARIZATION_INTERVAL === 0) {
+            performSummarization(service, historyForSummarization.history).catch(console.error);
         }
 
-        const contextPrompt = `${SYSTEM_INSTRUCTIONS}\n\n${constructGeminiPrompt(gameHistory, gameWorld, character, text)}`;
-        const response: ModelResponseSchema = await service.sendMessage(contextPrompt, [...gameHistory.history, userMsg], gameHistory.lastActiveSummary);
+        const preCallState = useGameStore.getState();
+        const contextPrompt = `${SYSTEM_INSTRUCTIONS}\n\n${constructGeminiPrompt(preCallState.gameHistory, preCallState.gameWorld, preCallState.character, text)}`;
+        const response: ModelResponseSchema = await service.sendMessage(
+            contextPrompt, 
+            [...preCallState.gameHistory.history, userMsg], 
+            preCallState.gameHistory.lastActiveSummary
+        );
 
         if (latestRequestId.current !== requestId) {
             console.log("Discarding stale response", requestId);
             return;
         }
 
+        const freshState = useGameStore.getState();
+        const currentCharacter = freshState.character;
+        const currentWorld = freshState.gameWorld;
+        const currentHistory = freshState.gameHistory;
+
         // --- STATE DELTA PROCESSING ---
         // Pre-process explicit character updates from AI (Items, Conditions, Modifiers)
-        let tempCharUpdates = { ...character };
+        let tempCharUpdates = { ...currentCharacter };
         
         if (response.character_updates) {
             const updates = response.character_updates!;
@@ -232,12 +244,12 @@ export const useGeminiClient = () => {
         }
 
         // --- SIMULATION ENGINE EXECUTION ---
-        const nextTurn = (gameHistory.turnCount || 0) + 1;
+        const nextTurn = (currentHistory.turnCount || 0) + 1;
         
         // Pass the already modified character to the engine for biological processing
         const { worldUpdate, characterUpdate, debugLogs } = SimulationEngine.processTurn(
             response, 
-            gameWorld, 
+            currentWorld, 
             tempCharUpdates, 
             nextTurn
         );
@@ -256,13 +268,13 @@ export const useGeminiClient = () => {
         setGameWorld(worldUpdate);
         setCharacter(characterUpdate);
 
-        setGameHistory(currentHistory => ({
-            ...currentHistory,
-            history: [...currentHistory.history, modelMsg],
+        setGameHistory(currentHistoryState => ({
+            ...currentHistoryState,
+            history: [...currentHistoryState.history, modelMsg],
             isThinking: false,
             turnCount: nextTurn,
             debugLog: [
-                ...currentHistory.debugLog, 
+                ...currentHistoryState.debugLog, 
                 { timestamp: new Date().toISOString(), message: `Response Received [${requestId}]`, type: 'success' },
                 ...debugLogs
             ]
@@ -288,7 +300,7 @@ export const useGeminiClient = () => {
         }));
         showToast("Signal Lost.", "error");
     }
-  }, [getService, character, gameHistory, gameWorld, setGameHistory, setGameWorld, setCharacter, showToast, setShowKeyPrompt, performSummarization]);
+  }, [getService, setGameHistory, setGameWorld, setCharacter, showToast, setShowKeyPrompt, performSummarization]);
 
   return {
     handleSend,

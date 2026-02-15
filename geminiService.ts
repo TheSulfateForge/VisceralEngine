@@ -1,6 +1,6 @@
 import { GoogleGenAI, Schema, Type, GenerateContentResponse } from "@google/genai";
 import { SAFETY_SETTINGS, IMAGE_SAFETY_SETTINGS, MAX_CONTEXT_HISTORY } from "./constants";
-import { ChatMessage, Role, ModelResponseSchema, Character, Scenario } from "./types";
+import { ChatMessage, Role, ModelResponseSchema, Character, Scenario, SCENE_MODES, SceneMode, Lighting, LIGHTING_LEVELS } from "./types";
 
 // Schema Definition for Visceral Realism Engine 0.9.0
 const RESPONSE_SCHEMA: Schema = {
@@ -258,8 +258,14 @@ export class GeminiService {
     
     // Scene Mode Guard
     const mode = asString(safeData.scene_mode, "NARRATIVE");
-    const validModes = ["NARRATIVE", "SOCIAL", "TENSION", "COMBAT"];
-    const scene_mode = validModes.includes(mode) ? mode as any : "NARRATIVE";
+    const scene_mode: SceneMode = (SCENE_MODES as readonly string[]).includes(mode)
+      ? mode as SceneMode
+      : 'NARRATIVE';
+
+    const rawLighting = asString((safeData.combat_context as any)?.environment?.lighting, "DIM");
+    const lighting: Lighting = (LIGHTING_LEVELS as readonly string[]).includes(rawLighting)
+        ? rawLighting as Lighting
+        : 'DIM';
 
     const sanitized: ModelResponseSchema = {
         thought_process: asString(safeData.thought_process, "Analysis protocol bypassed."),
@@ -283,7 +289,7 @@ export class GeminiService {
         combat_context: isObject(safeData.combat_context) ? {
             environment: {
                 summary: asString((safeData.combat_context.environment as any)?.summary, "Unknown"),
-                lighting: asString((safeData.combat_context.environment as any)?.lighting, "DIM") as any,
+                lighting: lighting,
                 weather: asString((safeData.combat_context.environment as any)?.weather, "None"),
                 terrain_tags: asArray((safeData.combat_context.environment as any)?.terrain_tags)
             },
@@ -297,8 +303,17 @@ export class GeminiService {
             biological_tells: asString(safeData.npc_interaction.biological_tells, "")
         } : undefined,
 
-        roll_request: safeData.roll_request as any,
-        bargain_request: safeData.bargain_request as any,
+        roll_request: isObject(safeData.roll_request) ? {
+            challenge: asString(safeData.roll_request.challenge, "Unknown Challenge"),
+            bonus: typeof safeData.roll_request.bonus === 'number' ? safeData.roll_request.bonus : undefined,
+            advantage: safeData.roll_request.advantage === true ? true : undefined,
+            disadvantage: safeData.roll_request.disadvantage === true ? true : undefined,
+        } : undefined,
+
+        bargain_request: isObject(safeData.bargain_request) ? {
+            description: asString(safeData.bargain_request.description, "Unknown Bargain")
+        } : undefined,
+
         hidden_update: typeof safeData.hidden_update === 'string' ? safeData.hidden_update : undefined,
         
         // New Memory Validation
@@ -306,7 +321,11 @@ export class GeminiService {
             fact: asString(safeData.new_memory.fact, "Unknown Memory")
         } : undefined,
 
-        new_lore: safeData.new_lore as any,
+        new_lore: isObject(safeData.new_lore) ? {
+            keyword: asString(safeData.new_lore.keyword, "Unknown"),
+            content: asString(safeData.new_lore.content, "")
+        } : undefined,
+
         biological_event: asBoolean(safeData.biological_event),
         
         character_updates: isObject(safeData.character_updates) ? {

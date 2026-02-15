@@ -1,5 +1,5 @@
-
 import { GameHistory, GameWorld, Character } from '../types';
+import { retrieveRelevantContext } from './ragEngine';
 
 const DOWNTIME_KEYWORDS = [
   'sleep', 'rest', 'wait', 'camp', 'hide', 
@@ -15,11 +15,23 @@ export const constructGeminiPrompt = (
   character: Character,
   userInput: string
 ): string => {
+  // Memory is always injected in full — it's compact and globally relevant
   const memoryContext = gameWorld.memory.map(m => `• ${m.fact}`).join('\n');
-  const loreContext = gameWorld.lore.map(l => `[${l.keyword}]: ${l.content}`).join('\n');
+
+  // RAG: Filter lore and entities by contextual relevance
+  const activeThreatNames = (gameWorld.activeThreats || []).map(t => t.name);
+  const { relevantLore, relevantEntities } = retrieveRelevantContext(
+    userInput,
+    gameHistory.history,
+    gameWorld.lore,
+    gameWorld.knownEntities || [],
+    activeThreatNames
+  );
+
+  const loreContext = relevantLore.map(l => `[${l.keyword}]: ${l.content}`).join('\n');
   
-  const knownEntitiesContext = gameWorld.knownEntities && gameWorld.knownEntities.length > 0
-    ? `\n[KNOWN ENTITY REGISTRY - SOCIAL & MEMORY]\n` + gameWorld.knownEntities.map(e => 
+  const knownEntitiesContext = relevantEntities.length > 0
+    ? `\n[KNOWN ENTITY REGISTRY - SOCIAL & MEMORY]\n` + relevantEntities.map(e => 
         `ID: ${e.id}
          Name: ${e.name} (${e.role})
          Location: ${e.location}
