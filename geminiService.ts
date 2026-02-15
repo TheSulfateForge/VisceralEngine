@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Schema, Type, GenerateContentResponse } from "@google/genai";
 import { SAFETY_SETTINGS, IMAGE_SAFETY_SETTINGS, MAX_CONTEXT_HISTORY } from "./constants";
 import { ChatMessage, Role, ModelResponseSchema, Character, Scenario, SCENE_MODES, SceneMode, Lighting, LIGHTING_LEVELS, GeneratedCharacterFields } from "./types";
@@ -154,12 +155,16 @@ const RESPONSE_SCHEMA: Schema = {
     new_lore: {
       type: Type.OBJECT,
       nullable: true,
+      description: "WORLD LORE: Record discovered facts about the world, setting, or creatures. Use sparingly — only for genuinely new information revealed through exploration or observation. Do NOT invent new biological rules, racial mechanics, or physiological systems that weren't established in the character backstory or setting. Lore should DESCRIBE what exists, not CREATE new constraints on the player character.",
       properties: {
-        keyword: { type: Type.STRING },
-        content: { type: Type.STRING }
+        keyword: { type: Type.STRING, description: "Short identifier for this lore entry (e.g., 'Kobold Tactics', 'Floor 1 Layout')" },
+        content: { type: Type.STRING, description: "Factual description of the discovered information. Must be observational, not prescriptive." }
       }
     },
-    biological_event: { type: Type.BOOLEAN }
+    biological_event: { 
+        type: Type.BOOLEAN, 
+        description: "CONCEPTION TRIGGER: Set true ONLY when unprotected vaginal insemination physically occurs in the narrative. This triggers an automatic pregnancy roll. Do NOT set true for lactation, arousal, pheromone events, combat stress, or other biological activity that is not direct insemination."
+    }
   },
   required: ["thought_process", "scene_mode", "tension_level", "narrative"]
 };

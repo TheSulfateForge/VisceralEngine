@@ -6,6 +6,7 @@ import { SaveLoadModal } from './SaveLoadModal';
 import { SettingsOverlay } from './SettingsOverlay';
 import { GalleryModal } from './GalleryModal';
 import { DebugModal } from './DebugModal';
+import { LoreApprovalModal } from './LoreApprovalModal';
 import { useGeminiClient } from '../../hooks/useGeminiClient';
 import { usePersistence } from '../../hooks/usePersistence';
 import { useSavedGames } from '../../hooks/useSavedGames';
@@ -39,6 +40,8 @@ export const ModalManager: React.FC = () => {
 
     return (
         <>
+            <LoreApprovalModal />
+            
             {store.showKeyPrompt && <KeyPromptModal onLink={handleKeyLink} />}
             
             {store.isSettingsOpen && (

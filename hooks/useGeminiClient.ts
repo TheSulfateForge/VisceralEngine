@@ -1,3 +1,4 @@
+
 import { useRef, useCallback } from 'react';
 import { GeminiService } from '../geminiService';
 import { ChatMessage, Role, ModelResponseSchema } from '../types';
@@ -13,12 +14,43 @@ import { UI_CONFIG } from '../constants';
 
 const SUMMARIZATION_INTERVAL = 20;
 
+const MODIFIER_CAPS = {
+    MIN: 0.25,  // Slowest: 4x slower than base
+    MAX: 4.0,   // Fastest: 4x faster than base
+};
+
+const clampModifier = (value: number | undefined, current: number): number => {
+    if (value === undefined) return current;
+    return Math.min(MODIFIER_CAPS.MAX, Math.max(MODIFIER_CAPS.MIN, value));
+};
+
+const deduplicateConditions = (conditions: string[]): string[] => {
+    const normalized = new Map<string, string>();
+    
+    for (const condition of conditions) {
+        // Create a rough key by lowercasing and removing severity words
+        const key = condition.toLowerCase()
+            .replace(/\b(agonizing|severe|mild|critical|continuous|active)\b/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+        
+        // Keep the longer/more specific version
+        const existing = normalized.get(key);
+        if (!existing || condition.length > existing.length) {
+            normalized.set(key, condition);
+        }
+    }
+    
+    return Array.from(normalized.values());
+};
+
 export const useGeminiClient = () => {
   const { 
       gameHistory, setGameHistory, 
       gameWorld, setGameWorld, 
       character, setCharacter, 
-      setShowKeyPrompt 
+      setShowKeyPrompt,
+      setPendingLore 
   } = useGameStore();
   
   const latestRequestId = useRef<string | null>(null);
@@ -317,13 +349,17 @@ export const useGeminiClient = () => {
             let newTrauma = (tempCharUpdates.trauma || 0) + (updates.trauma_delta || 0);
             newTrauma = Math.max(0, Math.min(100, newTrauma));
 
-            // Process Bio-Modifiers (Merging with existing)
+            // Process Bio-Modifiers (Merging with existing) with CLAMPING
             let newBioModifiers = { ...tempCharUpdates.bio.modifiers };
             if (updates.bio_modifiers) {
-                if (updates.bio_modifiers.calories !== undefined) newBioModifiers.calories = updates.bio_modifiers.calories;
-                if (updates.bio_modifiers.hydration !== undefined) newBioModifiers.hydration = updates.bio_modifiers.hydration;
-                if (updates.bio_modifiers.stamina !== undefined) newBioModifiers.stamina = updates.bio_modifiers.stamina;
-                if (updates.bio_modifiers.lactation !== undefined) newBioModifiers.lactation = updates.bio_modifiers.lactation;
+                if (updates.bio_modifiers.calories !== undefined) 
+                    newBioModifiers.calories = clampModifier(updates.bio_modifiers.calories, newBioModifiers.calories);
+                if (updates.bio_modifiers.hydration !== undefined) 
+                    newBioModifiers.hydration = clampModifier(updates.bio_modifiers.hydration, newBioModifiers.hydration);
+                if (updates.bio_modifiers.stamina !== undefined) 
+                    newBioModifiers.stamina = clampModifier(updates.bio_modifiers.stamina, newBioModifiers.stamina);
+                if (updates.bio_modifiers.lactation !== undefined) 
+                    newBioModifiers.lactation = clampModifier(updates.bio_modifiers.lactation, newBioModifiers.lactation);
             }
 
             tempCharUpdates = {
@@ -344,12 +380,18 @@ export const useGeminiClient = () => {
         const nextTurn = (currentHistory.turnCount || 0) + 1;
         
         // Pass the already modified character to the engine for biological processing
-        const { worldUpdate, characterUpdate, debugLogs } = SimulationEngine.processTurn(
+        const { worldUpdate, characterUpdate, debugLogs, pendingLore } = SimulationEngine.processTurn(
             response, 
             currentWorld, 
             tempCharUpdates, 
             nextTurn
         );
+
+        // Deduplicate conditions on the final update
+        const finalCharacterUpdate = {
+            ...characterUpdate,
+            conditions: deduplicateConditions(characterUpdate.conditions)
+        };
 
         const modelMsg: ChatMessage = {
             id: generateMessageId(),
@@ -363,7 +405,12 @@ export const useGeminiClient = () => {
 
         // Commit all updates
         setGameWorld(worldUpdate);
-        setCharacter(characterUpdate);
+        setCharacter(finalCharacterUpdate);
+
+        // Queue pending lore for player approval
+        if (pendingLore.length > 0) {
+            setPendingLore(prev => [...prev, ...pendingLore]);
+        }
 
         setGameHistory(currentHistoryState => ({
             ...currentHistoryState,
@@ -398,7 +445,7 @@ export const useGeminiClient = () => {
         }));
         showToast("Signal Lost.", "error");
     }
-  }, [getService, setGameHistory, setGameWorld, setCharacter, showToast, setShowKeyPrompt, performSummarization]);
+  }, [getService, setGameHistory, setGameWorld, setCharacter, showToast, setShowKeyPrompt, performSummarization, setPendingLore]);
 
   return {
     handleSend,

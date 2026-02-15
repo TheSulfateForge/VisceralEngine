@@ -8,7 +8,8 @@ import {
     Role, 
     MessageId,
     BioMonitor,
-    WorldTime
+    WorldTime,
+    LoreItem
 } from './types';
 import { MODELS } from './constants';
 
@@ -85,6 +86,9 @@ interface GameStore {
     character: Character;
     preTurnSnapshot: { history: GameHistory; world: GameWorld; character: Character } | null;
     
+    // Pending State
+    pendingLore: LoreItem[];
+    
     // UI State
     view: View;
     activeTab: 'chat' | 'character' | 'world';
@@ -105,6 +109,8 @@ interface GameStore {
     setCharacter: (update: Character | ((prev: Character) => Character)) => void;
     setPreTurnSnapshot: (snapshot: { history: GameHistory; world: GameWorld; character: Character } | null) => void;
     
+    setPendingLore: (update: LoreItem[] | ((prev: LoreItem[]) => LoreItem[])) => void;
+
     setView: (view: View) => void;
     setActiveTab: (tab: 'chat' | 'character' | 'world') => void;
     setIsSettingsOpen: (open: boolean) => void;
@@ -131,6 +137,7 @@ export const useGameStore = create<GameStore>((set) => ({
     gameWorld: initialWorld,
     character: EMPTY_CHARACTER,
     preTurnSnapshot: null,
+    pendingLore: [],
     view: 'landing',
     activeTab: 'chat',
     isSettingsOpen: false,
@@ -156,6 +163,10 @@ export const useGameStore = create<GameStore>((set) => ({
     })),
     setPreTurnSnapshot: (preTurnSnapshot) => set({ preTurnSnapshot }),
 
+    setPendingLore: (update) => set((state) => ({
+        pendingLore: typeof update === 'function' ? update(state.pendingLore) : update
+    })),
+
     setView: (view) => set({ view }),
     setActiveTab: (activeTab) => set({ activeTab }),
     setIsSettingsOpen: (isSettingsOpen) => set({ isSettingsOpen }),
@@ -179,6 +190,7 @@ export const useGameStore = create<GameStore>((set) => ({
         gameWorld: initialWorld,
         character: EMPTY_CHARACTER,
         view: 'landing',
-        preTurnSnapshot: null
+        preTurnSnapshot: null,
+        pendingLore: []
     })
 }));

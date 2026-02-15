@@ -1,3 +1,4 @@
+
 import { ModelResponseSchema, GameWorld, DebugLogEntry, LoreItem, Character, BioMonitor, MemoryItem } from '../types';
 import { ReproductionSystem } from './reproductionSystem';
 import { generateLoreId, generateMemoryId } from '../idUtils';
@@ -6,6 +7,7 @@ interface SimulationResult {
     worldUpdate: GameWorld;
     characterUpdate: Character;
     debugLogs: DebugLogEntry[];
+    pendingLore: LoreItem[];
 }
 
 const MAX_REGISTRY_LINES = 60;
@@ -326,12 +328,21 @@ export const SimulationEngine = {
         }
 
         // 8. New Lore
-        const newLore: LoreItem[] = response.new_lore ? [{
+        // IMPORTANT: Now we return this separately instead of auto-adding it to the world.
+        const pendingLore: LoreItem[] = response.new_lore ? [{
             id: generateLoreId(),
             keyword: response.new_lore.keyword,
             content: response.new_lore.content,
             timestamp: new Date().toISOString()
         }] : [];
+        
+        if (response.new_lore) {
+             debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `Pending Lore Generated: "${response.new_lore.keyword}"`,
+                type: 'info'
+            });
+        }
 
         // 9. New Memory (Long-term history)
         const newMemory: MemoryItem[] = response.new_memory ? [{
@@ -361,7 +372,8 @@ export const SimulationEngine = {
             worldUpdate: {
                 ...currentWorld,
                 time: newTime,
-                lore: [...currentWorld.lore, ...newLore],
+                // lore is NO LONGER modified here. It stays as currentWorld.lore.
+                lore: currentWorld.lore,
                 memory: [...currentWorld.memory, ...newMemory],
                 hiddenRegistry: trimHiddenRegistry(newHiddenRegistry),
                 pregnancies: currentPregnancies,
@@ -377,7 +389,8 @@ export const SimulationEngine = {
                 conditions: updatedConditions,
                 trauma: Math.min(100, Math.max(0, newTrauma)) // Ensure bounds
             },
-            debugLogs
+            debugLogs,
+            pendingLore // NEW: Return for UI approval
         };
     }
 };
