@@ -199,12 +199,33 @@ export class GeminiService {
     const firstBrace = clean.indexOf('{');
     const firstBracket = clean.indexOf('[');
     let start = -1;
+
     if (firstBrace !== -1 && firstBracket !== -1) {
-        start = Math.min(firstBrace, firstBracket);
+        if (firstBracket < firstBrace) {
+            // Verify the '[' actually starts a JSON array, not a tag like [DEVOTED]
+            const afterBracket = clean.substring(firstBracket + 1).trimStart();
+            if (/^[\[{"0-9\-tfn]/.test(afterBracket)) {
+                start = firstBracket; // Looks like real JSON array
+            } else {
+                start = firstBrace;   // Tag like [DEVOTED], skip to '{'
+            }
+        } else {
+            start = firstBrace;
+        }
+    } else if (firstBrace !== -1) {
+        start = firstBrace;
+    } else if (firstBracket !== -1) {
+        // Only '[' found — verify it's a real JSON array
+        const afterBracket = clean.substring(firstBracket + 1).trimStart();
+        if (/^[\[{"0-9\-tfn]/.test(afterBracket)) {
+            start = firstBracket;
+        } else {
+            return "{}"; // Not JSON at all
+        }
     } else {
-        start = Math.max(firstBrace, firstBracket);
+        return "{}";
     }
-    if (start === -1) return "{}";
+
     const lastBrace = clean.lastIndexOf('}');
     const lastBracket = clean.lastIndexOf(']');
     const end = Math.max(lastBrace, lastBracket);
@@ -216,7 +237,7 @@ export class GeminiService {
         .replace(/\/\*[\s\S]*?\*\//g, '')
         .replace(/(^|[^:])\/\/.*/g, '')
         .replace(/\\n/g, '\\n');
-  }
+}
 
   private validateResponse(data: unknown): ModelResponseSchema {
     // Strict Type Guarding without "any"
@@ -377,10 +398,10 @@ export class GeminiService {
           return this.validateResponse(raw);
       } catch (jsonError) {
           console.error("JSON Parse Error:", jsonError);
-          // Fallback
+          // In the catch block, clean the fallback narrative:
           if (text.length > 20) {
                return {
-                  narrative: text,
+                  narrative: text.replace(/^\[[\w\s/]+\]\.\s*/g, '').trim(),
                   thought_process: "JSON Structure Collapse. Raw output passed to narrative.",
                   scene_mode: "NARRATIVE",
                   tension_level: 50,
