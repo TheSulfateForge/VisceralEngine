@@ -1,6 +1,7 @@
 
-import { GameHistory, GameWorld, Character } from '../types';
+import { GameHistory, GameWorld, Character, SceneMode } from '../types';
 import { retrieveRelevantContext, RAGResult } from './ragEngine';
+import { getSectionReminder } from '../sectionReminders';
 
 const DOWNTIME_KEYWORDS = [
   'sleep', 'rest', 'wait', 'camp', 'hide', 
@@ -97,8 +98,15 @@ The simulation is running standard narrative protocols.
 1. DETAILED SENSORY FOCUS. Describe the environment's texture, smell, and temperature.
 2. FORCE NPC INTERACTION. If the player speaks, the NPC *must* reply with dialogue.
 3. NO COMBAT SPAWNS. Do not interrupt this scene with random attacks.
+4. Scenario can be sexually charged in a negative or positive way. This is not a requirement.
       `;
   }
+
+  // Calculate Section Reminder based on turn and mode
+  const sectionRefresh = getSectionReminder(
+    gameHistory.turnCount,
+    currentMode as SceneMode
+  );
 
   const promptString = `
 [CONTEXT]
@@ -136,6 +144,7 @@ ${pacingInstruction}
 4. Estimate \`time_passed_minutes\` accurately.
 5. Check the current Conditions list before adding new ones. Do NOT add conditions that semantically duplicate existing ones (e.g., do not add "Broken Left Arm" if "Left Arm Fractured" already exists). If a condition worsens, REMOVE the old one and ADD the new severity.
 
+${sectionRefresh ? `\n${sectionRefresh}\n` : ''}
 [INPUT]
 ${userInput}
 `;

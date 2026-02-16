@@ -11,6 +11,7 @@ import { SYSTEM_INSTRUCTIONS } from '../systemInstructions';
 import { useGameStore } from '../store';
 import { SimulationEngine } from '../utils/simulationEngine';
 import { UI_CONFIG } from '../constants';
+import { getSectionReminder } from '../sectionReminders';
 
 const SUMMARIZATION_INTERVAL = 20;
 
@@ -289,6 +290,25 @@ export const useGeminiClient = () => {
 
         const preCallState = useGameStore.getState();
         const { prompt: contextPrompt, ragDebug } = constructGeminiPrompt(preCallState.gameHistory, preCallState.gameWorld, preCallState.character, text);
+        
+        // Debug Log the injected reminder if active
+        const activeReminder = getSectionReminder(preCallState.gameHistory.turnCount, preCallState.gameWorld.sceneMode);
+        let requestLogs = [...preCallState.gameHistory.debugLog];
+        
+        if (activeReminder) {
+            const truncatedReminder = activeReminder.split('\n')[0];
+            requestLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[SYSTEM REFRESH] Injected: ${truncatedReminder}`,
+                type: 'info'
+            });
+            // Update state with this new log immediately so the user sees it while thinking
+            setGameHistory(prev => ({
+                ...prev,
+                debugLog: requestLogs
+            }));
+        }
+
         const response: ModelResponseSchema = await service.sendMessage(
             contextPrompt, 
             [...preCallState.gameHistory.history, userMsg], 
