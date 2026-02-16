@@ -1,3 +1,4 @@
+
 import { MessageId, SaveId, MemoryId, LoreId, TemplateId } from './types';
 
 // Use standard UUID if available, otherwise fall back to a high-entropy timestamp mix
@@ -19,6 +20,9 @@ export const generateMessageId = (): MessageId => {
 export const generateSaveId = (): SaveId => {
   return generateUUID() as SaveId;
 };
+
+// Constant ID for autosaves, typed correctly to avoid 'as any' casting elsewhere
+export const AUTOSAVE_ID = 'autosave_slot' as SaveId;
 
 export const generateMemoryId = (): MemoryId => {
   return `mem_${generateUUID()}` as MemoryId;

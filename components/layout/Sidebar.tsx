@@ -29,16 +29,8 @@ export const Sidebar: React.FC = () => {
         character, 
         gameWorld, 
         gameHistory,
-        activeTab, 
-        setActiveTab, 
-        isMobileMenuOpen, 
-        setIsMobileMenuOpen,
-        setView,
-        setIsSettingsOpen,
-        setShowSaveModal,
-        setShowLoadModal,
-        setIsGalleryOpen,
-        setIsDebugOpen
+        ui,
+        setUI
     } = useGameStore();
 
     const [expandedLedgerId, setExpandedLedgerId] = useState<string | null>(null);
@@ -68,14 +60,14 @@ export const Sidebar: React.FC = () => {
         <aside className={`
             fixed lg:static inset-y-0 left-0 z-[102] w-80 bg-[#0a0a0a] border-r border-red-900/10 flex flex-col p-6 space-y-8 
             transition-transform duration-500 lg:translate-x-0 overflow-y-auto h-full max-h-screen
-            ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
+            ${ui.isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
         `}>
             <div className="flex items-center justify-between mb-8 shrink-0">
-                <div className="flex items-center space-x-3 cursor-pointer" onClick={() => setView('landing')}>
+                <div className="flex items-center space-x-3 cursor-pointer" onClick={() => setUI({ view: 'landing' })}>
                     <div className="w-3 h-3 bg-red-900 shadow-[0_0_12px_rgba(153,27,27,0.6)] animate-pulse"></div>
                     <h1 className="text-lg font-bold tracking-tighter text-white uppercase italic">Visceral</h1>
                 </div>
-                <button onClick={() => setIsSettingsOpen(true)} className="text-gray-400 hover:text-white transition-colors">
+                <button onClick={() => setUI({ isSettingsOpen: true })} className="text-gray-400 hover:text-white transition-colors">
                     <svg width="18" height="18" fill="currentColor" viewBox="0 0 24 24"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path fillRule="evenodd" d="M1.323 11.447C2.811 6.976 7.028 3.75 12.001 3.75c4.97 0 9.185 3.223 10.675 7.69.12.362.12.752 0 1.113-1.487 4.471-5.705 7.697-10.677 7.697-4.97 0-9.186-3.223-10.675-7.69a1.762 1.762 0 010-1.113zM17.25 12a5.25 5.25 0 11-10.5 0 5.25 5.25 0 0110.5 0z" clipRule="evenodd"/></svg>
                 </button>
             </div>
@@ -102,7 +94,7 @@ export const Sidebar: React.FC = () => {
                 
                 <ImageCarousel 
                     images={gameWorld.generatedImages}
-                    onOpenGallery={() => setIsGalleryOpen(true)}
+                    onOpenGallery={() => setUI({ isGalleryOpen: true })}
                 />
 
                 <div className="space-y-2">
@@ -221,8 +213,8 @@ export const Sidebar: React.FC = () => {
                 {['chat', 'character', 'world'].map(t => (
                     <button 
                         key={t} 
-                        onClick={() => { setActiveTab(t as any); setIsMobileMenuOpen(false); }} 
-                        className={`text-left px-5 py-3 text-[9px] font-bold uppercase tracking-[0.3em] transition-all border-l-2 ${activeTab === t ? 'bg-red-950/10 border-red-700 text-white' : 'border-transparent text-gray-500'}`}
+                        onClick={() => setUI({ activeTab: t as any, isMobileMenuOpen: false })} 
+                        className={`text-left px-5 py-3 text-[9px] font-bold uppercase tracking-[0.3em] transition-all border-l-2 ${ui.activeTab === t ? 'bg-red-950/10 border-red-700 text-white' : 'border-transparent text-gray-500'}`}
                     >
                         {t}
                     </button>
@@ -232,13 +224,13 @@ export const Sidebar: React.FC = () => {
             <div className="space-y-2 border-t border-gray-900 pt-6 mb-8 shrink-0">
                 <label className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">Save Management</label>
                 <button 
-                    onClick={() => setShowSaveModal(true)}
+                    onClick={() => setUI({ showSaveModal: true })}
                     className="w-full py-2 bg-gray-900 border border-gray-800 text-gray-500 text-[9px] font-bold uppercase tracking-widest hover:border-red-900 hover:text-red-500 transition-all"
                 >
                     Save Checkpoint
                 </button>
                 <button 
-                    onClick={() => setShowLoadModal(true)}
+                    onClick={() => setUI({ showLoadModal: true })}
                     className="w-full py-2 bg-gray-900 border border-gray-800 text-gray-500 text-[9px] font-bold uppercase tracking-widest hover:border-red-900 hover:text-red-500 transition-all"
                 >
                     Load Checkpoint
@@ -258,7 +250,7 @@ export const Sidebar: React.FC = () => {
                         </p>
                     </div>
                 )}
-                <button onClick={() => setIsDebugOpen(true)} className="text-gray-500 hover:text-red-500 transition-colors" title="Debug Console">
+                <button onClick={() => setUI({ isDebugOpen: true })} className="text-gray-500 hover:text-red-500 transition-colors" title="Debug Console">
                     <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                 </button>
             </div>

@@ -13,24 +13,24 @@ import { ToastProvider } from './components/providers/ToastProvider';
 import { ToastContainer } from './components/ui/ToastContainer';
 import { UpdateNotification } from './components/common/UpdateNotification';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
-import { usePersistence } from './hooks/usePersistence';
+import { useAutosave } from './hooks/usePersistence';
 import { useGameEffects } from './hooks/useGameEffects';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 
 // Global Effect Handler component
 const GameLogicController: React.FC = () => {
     // We mount hooks here that need to run globally
-    usePersistence();
+    useAutosave();
     useGameEffects();
     useKeyboardShortcuts();
     return null;
 };
 
 const GameContent: React.FC = () => {
-  const store = useGameStore();
+  const { ui } = useGameStore();
 
   const renderView = () => {
-    switch (store.view) {
+    switch (ui.view) {
         case 'landing':
             return <LandingView />;
         case 'creator':
@@ -40,9 +40,9 @@ const GameContent: React.FC = () => {
         case 'game':
             return (
                 <MainLayout>
-                    {store.activeTab === 'chat' && <ChatView />}
-                    {store.activeTab === 'character' && <CharacterView />}
-                    {store.activeTab === 'world' && <WorldView />}
+                    {ui.activeTab === 'chat' && <ChatView />}
+                    {ui.activeTab === 'character' && <CharacterView />}
+                    {ui.activeTab === 'world' && <WorldView />}
                 </MainLayout>
             );
         default: return null;

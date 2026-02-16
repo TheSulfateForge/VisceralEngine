@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { Character, CharacterTemplate } from '../../types';
 import { ListEditor } from '../common/ListEditor';
@@ -52,7 +53,7 @@ type CreatorMode = 'manual' | 'neural';
 // ---- Main Component ----
 
 export const CreatorView: React.FC = () => {
-    const { character, setCharacter, setView, gameWorld } = useGameStore();
+    const { character, setCharacter, setUI, gameWorld } = useGameStore();
     const { handleGenerateScenarios, handleVisualize, handleGenerateCharacter, handleGenerateField } = useGeminiClient();
     const { showToast } = useToast();
     
@@ -212,7 +213,7 @@ export const CreatorView: React.FC = () => {
 
         const scenarios = await handleGenerateScenarios();
         if (scenarios === undefined) return;
-        setView('scenario');
+        setUI({ view: 'scenario' });
     };
 
     const updateChar = (field: keyof Character) => (val: string) => {
@@ -253,7 +254,7 @@ export const CreatorView: React.FC = () => {
                             Save Template
                         </button>
                         <button 
-                            onClick={() => setView('landing')} 
+                            onClick={() => setUI({ view: 'landing' })} 
                             className="text-xs text-gray-500 hover:text-white uppercase font-bold tracking-widest"
                         >
                             Abort

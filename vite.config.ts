@@ -9,6 +9,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'prompt', // Changed to prompt for manual update control
+      filename: 'service-worker.js', // Avoid conflict with legacy public/sw.js
       includeAssets: ['logo192.png', 'logo512.png'],
       // Use the external manifest.json file instead of defining it here
       // This prevents conflicts and ensures consistency

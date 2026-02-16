@@ -15,7 +15,7 @@ export const ModalManager: React.FC = () => {
     const store = useGameStore();
     const { handleKeyLink } = useGeminiClient();
     const { saveToDb, loadFromDb, handleExport, handleImport } = usePersistence();
-    const { saveList, deleteSave } = useSavedGames(store.showLoadModal || store.showSaveModal);
+    const { saveList, deleteSave } = useSavedGames(store.ui.showLoadModal || store.ui.showSaveModal);
     
     // Local state for the save input
     const [saveName, setSaveName] = React.useState('');
@@ -24,12 +24,12 @@ export const ModalManager: React.FC = () => {
         if (!saveName.trim()) return;
         await saveToDb(saveName);
         setSaveName('');
-        store.setShowSaveModal(false);
+        store.setUI({ showSaveModal: false });
     };
 
     const handleManualLoad = async (name: string) => {
         await loadFromDb(name);
-        store.setShowLoadModal(false);
+        store.setUI({ showLoadModal: false });
     };
 
     const handleDelete = async (name: string) => {
@@ -42,13 +42,13 @@ export const ModalManager: React.FC = () => {
         <>
             <LoreApprovalModal />
             
-            {store.showKeyPrompt && <KeyPromptModal onLink={handleKeyLink} />}
+            {store.ui.showKeyPrompt && <KeyPromptModal onLink={handleKeyLink} />}
             
-            {store.isSettingsOpen && (
+            {store.ui.isSettingsOpen && (
                 <SettingsOverlay 
                     currentModel={store.gameWorld.currentModel}
                     setModel={(m) => store.setGameWorld(prev => ({ ...prev, currentModel: m }))}
-                    onClose={() => store.setIsSettingsOpen(false)}
+                    onClose={() => store.setUI({ isSettingsOpen: false })}
                     onReLink={handleKeyLink} 
                     onExport={handleExport}
                     onImport={handleImport}
@@ -56,8 +56,8 @@ export const ModalManager: React.FC = () => {
             )}
             
             <SaveLoadModal 
-                show={store.showSaveModal}
-                onClose={() => store.setShowSaveModal(false)}
+                show={store.ui.showSaveModal}
+                onClose={() => store.setUI({ showSaveModal: false })}
                 mode="save"
                 savedGames={saveList}
                 onSave={handleManualSave}
@@ -68,8 +68,8 @@ export const ModalManager: React.FC = () => {
             />
             
             <SaveLoadModal 
-                show={store.showLoadModal}
-                onClose={() => store.setShowLoadModal(false)}
+                show={store.ui.showLoadModal}
+                onClose={() => store.setUI({ showLoadModal: false })}
                 mode="load"
                 savedGames={saveList}
                 onSave={() => {}}
@@ -79,16 +79,16 @@ export const ModalManager: React.FC = () => {
                 setSaveName={() => {}}
             />
 
-            {store.isGalleryOpen && (
+            {store.ui.isGalleryOpen && (
                 <GalleryModal 
                     images={store.gameWorld.generatedImages}
-                    onClose={() => store.setIsGalleryOpen(false)}
+                    onClose={() => store.setUI({ isGalleryOpen: false })}
                 />
             )}
 
-            {store.isDebugOpen && (
+            {store.ui.isDebugOpen && (
                 <DebugModal 
-                    onClose={() => store.setIsDebugOpen(false)}
+                    onClose={() => store.setUI({ isDebugOpen: false })}
                 />
             )}
         </>

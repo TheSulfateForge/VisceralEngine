@@ -26,12 +26,12 @@ export const useKeyboardShortcuts = () => {
             // SAVE: ctrl+s
             if (ctrl && key === 's') {
                 e.preventDefault();
-                state.setShowSaveModal(true);
+                state.setUI({ showSaveModal: true });
             }
             // LOAD: ctrl+l
             else if (ctrl && key === 'l') {
                 e.preventDefault();
-                state.setShowLoadModal(true);
+                state.setUI({ showLoadModal: true });
             }
             // EXPORT: ctrl+e
             else if (ctrl && key === 'e') {
@@ -53,15 +53,17 @@ export const useKeyboardShortcuts = () => {
             // HELP/DEBUG: ctrl+/
             else if (ctrl && key === '/') {
                 e.preventDefault();
-                state.setIsDebugOpen(!state.isDebugOpen);
+                state.setUI({ isDebugOpen: !state.ui.isDebugOpen });
             }
             // CLOSE MODALS: Escape
             else if (e.key === 'Escape') {
-                state.setShowSaveModal(false);
-                state.setShowLoadModal(false);
-                state.setIsSettingsOpen(false);
-                state.setIsGalleryOpen(false);
-                state.setIsDebugOpen(false);
+                state.setUI({
+                    showSaveModal: false,
+                    showLoadModal: false,
+                    isSettingsOpen: false,
+                    isGalleryOpen: false,
+                    isDebugOpen: false
+                });
             }
         };
 

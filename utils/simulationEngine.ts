@@ -1,6 +1,7 @@
 
-import { ModelResponseSchema, GameWorld, DebugLogEntry, LoreItem, Character, BioMonitor, MemoryItem } from '../types';
+import { ModelResponseSchema, GameWorld, DebugLogEntry, LoreItem, Character, MemoryItem, SceneMode, WorldTime } from '../types';
 import { ReproductionSystem } from './reproductionSystem';
+import { BioEngine } from './bioEngine';
 import { generateLoreId, generateMemoryId } from '../idUtils';
 
 interface SimulationResult {
@@ -11,46 +12,14 @@ interface SimulationResult {
 }
 
 const MAX_REGISTRY_LINES = 60;
+const TIME_CAPS = { AWAKE_MAX: 120, SLEEP_MAX: 540, COMBAT_MAX: 30 };
 
-function trimHiddenRegistry(registry: string): string {
-    if (!registry) return "";
-    const lines = registry.split('\n').filter(l => l.trim());
-    if (lines.length <= MAX_REGISTRY_LINES) return registry;
-    return lines.slice(-MAX_REGISTRY_LINES).join('\n');
-}
+// --- Pure Helper Functions ---
 
-const TICK_RATES = {
-    // 100 / 1.0 = 100 hours (~4 days) to empty. 
-    // Was 1.8 (55 hours). Slower burn prevents starvation loops.
-    CALORIES_PER_HOUR: 1.0,      
-    
-    // 100 / 1.5 = ~66 hours (~2.7 days) to empty. 
-    // Was 3.5 (28 hours). Prevents instant dehydration on large time skips.
-    WATER_PER_HOUR: 1.5,        
-    
-    // 100 / 5.0 = 20 hours to exhaustion.
-    // Was 6.0. Slightly more generous daily cycle.
-    STAMINA_PER_HOUR: 5.0,       
-    
-    // 100 / 5.0 = 20 hours (Painful if not tended to daily)
-    // Kept high as it's a core mechanic.
-    LACTATION_PER_HOUR: 5.0,   
-    
-    LIBIDO_PER_HOUR: 0.5,
-    SEMINAL_PER_HOUR: 2.0
-};
-
-// --- FIX 1: Time Clamp Caps ---
-// Gemini sometimes dumps "retrospective time" (entire off-screen days) into
-// a single turn. These caps prevent any single tick from nuking biology.
-const TIME_CAPS = {
-    AWAKE_MAX: 120,   // 2 hours — longest reasonable non-sleep scene beat
-    SLEEP_MAX: 540,   // 9 hours — generous full night's rest
-    COMBAT_MAX: 30,   // 30 minutes — combat rounds are short
-};
-
-// --- Time System ---
-const updateTime = (currentMinutes: number, delta: number) => {
+/**
+ * Updates the total minutes and calculates day/hour/minute display
+ */
+const updateTime = (currentMinutes: number, delta: number): WorldTime => {
     const totalMinutes = currentMinutes + delta;
     const day = Math.floor(totalMinutes / 1440) + 1;
     const hour = Math.floor((totalMinutes % 1440) / 60);
@@ -59,148 +28,43 @@ const updateTime = (currentMinutes: number, delta: number) => {
     return { totalMinutes, day, hour, minute, display };
 };
 
-// --- Bio Engine ---
-const processBiology = (char: Character, minutes: number, inputs?: any): { updatedBio: BioMonitor, logs: string[], addedConditions: string[], removedConditions: string[], traumaDelta: number } => {
-    // Deep copy to prevent mutation of state references
-    // Fallback provided to prevent JSON.parse errors if char.bio is undefined
-    const bio: BioMonitor = char.bio ? JSON.parse(JSON.stringify(char.bio)) : {
-        metabolism: { calories: 80, hydration: 80, stamina: 100, libido: 5 },
-        pressures: { bladder: 0, bowels: 0, lactation: 0, seminal: 0 },
-        timestamps: { lastSleep: 0, lastMeal: 0, lastOrgasm: 0 },
-        modifiers: { calories: 1.0, hydration: 1.0, stamina: 1.0, lactation: 1.0 }
-    };
-    
-    // Ensure nested objects exist (migration safety)
-    if (!bio.metabolism) bio.metabolism = { calories: 80, hydration: 80, stamina: 100, libido: 5 };
-    if (!bio.pressures) bio.pressures = { bladder: 0, bowels: 0, lactation: 0, seminal: 0 };
-    if (!bio.modifiers) bio.modifiers = { calories: 1.0, hydration: 1.0, stamina: 1.0, lactation: 1.0 };
-    if (!bio.timestamps) bio.timestamps = { lastSleep: 0, lastMeal: 0, lastOrgasm: 0 };
-    
-    const logs: string[] = [];
-    const addedConditions: string[] = [];
-    const removedConditions: string[] = [];
-    let traumaDelta = 0;
-
-    // CRITICAL FIX: If no time passed (0 minutes), metabolism is frozen.
-    // This prevents "Ghost Drain" during system errors or instant actions.
-    if (minutes <= 0 && !inputs) {
-        return { updatedBio: bio, logs, addedConditions, removedConditions, traumaDelta };
-    }
-
-    const hours = minutes / 60;
-
-    // --- FIX 2: Sleep Decay Reduction ---
-    // Body at rest burns resources at 40% rate. Prevents waking up dehydrated
-    // after a healthy 8-hour sleep (was draining 12 hydration per night).
-    const isSleeping = inputs?.sleep_hours && inputs.sleep_hours > 0;
-    const sleepFactor = isSleeping ? 0.4 : 1.0;
-
-    // 1. Inputs (Replenishment)
-    if (inputs) {
-        if (inputs.ingested_calories) {
-            // Slight boost to calorie efficiency
-            bio.metabolism.calories = Math.min(100, bio.metabolism.calories + (inputs.ingested_calories / 15));
-            logs.push(`Replenished: Calories (${inputs.ingested_calories})`);
-            bio.timestamps.lastMeal = Date.now(); 
-        }
-        if (inputs.ingested_water) {
-            // FIX: Removed the divisor. 1 Unit Input = 1 Unit Hydration.
-            // This ensures drinking actually combats the decay rate.
-            bio.metabolism.hydration = Math.min(100, bio.metabolism.hydration + inputs.ingested_water);
-            logs.push(`Replenished: Hydration (+${inputs.ingested_water})`);
-        }
-        if (inputs.sleep_hours) {
-            bio.metabolism.stamina = 100;
-            logs.push(`Restored: Stamina (Full)`);
-            bio.timestamps.lastSleep = Date.now();
-        }
-        if (inputs.relieved_pressure) {
-            inputs.relieved_pressure.forEach((p: string) => {
-                if (p === 'lactation') bio.pressures.lactation = 0;
-                if (p === 'bladder') bio.pressures.bladder = 0;
-                if (p === 'seminal') bio.pressures.seminal = 0;
-                logs.push(`Relieved Pressure: ${p}`);
-            });
-        }
-    }
-
-    // 2. Decay (Entropy) with Dynamic Modifiers + Sleep Factor
-    const calRate = TICK_RATES.CALORIES_PER_HOUR * (bio.modifiers.calories ?? 1.0);
-    const hydRate = TICK_RATES.WATER_PER_HOUR * (bio.modifiers.hydration ?? 1.0);
-    const staRate = TICK_RATES.STAMINA_PER_HOUR * (bio.modifiers.stamina ?? 1.0);
-    const lacRate = TICK_RATES.LACTATION_PER_HOUR * (bio.modifiers.lactation ?? 1.0);
-
-    bio.metabolism.calories = Math.max(0, bio.metabolism.calories - (hours * calRate * sleepFactor));
-    bio.metabolism.hydration = Math.max(0, bio.metabolism.hydration - (hours * hydRate * sleepFactor));
-    
-    // Stamina: skip decay entirely during sleep (it's being restored above)
-    if (!isSleeping) {
-        bio.metabolism.stamina = Math.max(0, bio.metabolism.stamina - (hours * staRate));
-    }
-    
-    // 3. Accumulation (Pressure) — lactation still builds during sleep (biology doesn't stop)
-    if (char.gender.toLowerCase().includes('female') || char.conditions.includes('Lactating')) {
-        bio.pressures.lactation = Math.min(120, bio.pressures.lactation + (hours * lacRate));
-    }
-    
-    // 4. Consequence Thresholds & Recovery Logic (The Gatekeeper)
-    
-    // --- Hydration ---
-    if (bio.metabolism.hydration < 5) {
-        addedConditions.push('Critical Dehydration');
-        traumaDelta += (0.5 * hours);
-    } else if (bio.metabolism.hydration < 25) {
-        addedConditions.push('Severe Dehydration');
-    } else if (bio.metabolism.hydration < 50) {
-        addedConditions.push('Thirsty');
-    }
-
-    // Hydration Recovery (Auto-Remove Conditions)
-    if (bio.metabolism.hydration > 10) removedConditions.push('Critical Dehydration');
-    if (bio.metabolism.hydration > 30) removedConditions.push('Severe Dehydration');
-    if (bio.metabolism.hydration > 60) removedConditions.push('Thirsty');
-    
-    // --- Calories ---
-    if (bio.metabolism.calories < 5) {
-        addedConditions.push('Starving');
-        traumaDelta += (0.2 * hours);
-    } else if (bio.metabolism.calories < 30) {
-        addedConditions.push('Hungry');
-    }
-
-    // Calorie Recovery
-    if (bio.metabolism.calories > 10) removedConditions.push('Starving');
-    if (bio.metabolism.calories > 40) removedConditions.push('Hungry');
-
-    // --- Stamina ---
-    if (bio.metabolism.stamina < 5) {
-        addedConditions.push('Exhausted');
-        traumaDelta += (0.1 * hours);
-    }
-
-    // Stamina Recovery
-    if (bio.metabolism.stamina > 20) removedConditions.push('Exhausted');
-
-    // --- Lactation ---
-    if (bio.pressures.lactation > 100) {
-        addedConditions.push('Agonizing Engorgement');
-        addedConditions.push('Leaking');
-        traumaDelta += (0.1 * hours);
-    } else if (bio.pressures.lactation > 75) {
-        addedConditions.push('Swollen Breasts');
-    }
-
-    // Lactation Recovery
-    if (bio.pressures.lactation < 90) {
-        removedConditions.push('Agonizing Engorgement');
-    }
-    if (bio.pressures.lactation < 60) {
-        removedConditions.push('Swollen Breasts');
-    }
-
-    return { updatedBio: bio, logs, addedConditions, removedConditions, traumaDelta };
+/**
+ * Trims the hidden registry string to prevent infinite growth
+ */
+const trimHiddenRegistry = (registry: string): string => {
+    if (!registry) return "";
+    const lines = registry.split('\n').filter(l => l.trim());
+    if (lines.length <= MAX_REGISTRY_LINES) return registry;
+    return lines.slice(-MAX_REGISTRY_LINES).join('\n');
 };
 
+/**
+ * Determines the safe amount of time to advance based on context
+ */
+const calculateTimeDelta = (
+    requestedMinutes: number | undefined, 
+    hasSleep: boolean, 
+    isCombat: boolean
+): { delta: number, log?: string } => {
+    const rawDelta = requestedMinutes ?? 0;
+    
+    let maxAllowed: number;
+    if (hasSleep) maxAllowed = TIME_CAPS.SLEEP_MAX;
+    else if (isCombat) maxAllowed = TIME_CAPS.COMBAT_MAX;
+    else maxAllowed = TIME_CAPS.AWAKE_MAX;
+
+    const delta = Math.min(Math.max(0, rawDelta), maxAllowed);
+    
+    if (rawDelta > maxAllowed) {
+        return { 
+            delta, 
+            log: `[TIME-CLAMP] AI requested +${rawDelta}m, clamped to +${delta}m (cap: ${maxAllowed})` 
+        };
+    }
+    return { delta };
+};
+
+// --- Pipeline Orchestrator ---
 
 export const SimulationEngine = {
     processTurn: (
@@ -210,90 +74,47 @@ export const SimulationEngine = {
         currentTurn: number
     ): SimulationResult => {
         const debugLogs: DebugLogEntry[] = [];
-        let currentPregnancies = currentWorld.pregnancies || [];
-        
-        // 1. Time Progression — WITH CLAMP (FIX 1)
-        const hasSleep = response.biological_inputs?.sleep_hours && response.biological_inputs.sleep_hours > 0;
+        const logs: string[] = []; // Temporary log buffer
+
+        // 1. Time Pipeline
+        const hasSleep = (response.biological_inputs?.sleep_hours ?? 0) > 0;
         const isCombat = response.scene_mode === 'COMBAT';
-
-        let maxAllowed: number;
-        if (hasSleep) {
-            maxAllowed = TIME_CAPS.SLEEP_MAX;
-        } else if (isCombat) {
-            maxAllowed = TIME_CAPS.COMBAT_MAX;
-        } else {
-            maxAllowed = TIME_CAPS.AWAKE_MAX;
-        }
-
-        const rawDelta = response.time_passed_minutes !== undefined ? response.time_passed_minutes : 0;
-        const timeDelta = Math.min(Math.max(0, rawDelta), maxAllowed);
-
-        if (rawDelta > maxAllowed) {
-            debugLogs.push({
-                timestamp: new Date().toISOString(),
-                message: `[TIME-CLAMP] AI requested +${rawDelta}m, clamped to +${timeDelta}m (cap: ${maxAllowed}, sleep: ${!!hasSleep}, combat: ${isCombat})`,
-                type: 'warning'
-            });
-        }
+        const { delta: timeDelta, log: timeLog } = calculateTimeDelta(response.time_passed_minutes, hasSleep, isCombat);
+        
+        if (timeLog) debugLogs.push({ timestamp: new Date().toISOString(), message: timeLog, type: 'warning' });
         
         const newTime = updateTime(currentWorld.time.totalMinutes, timeDelta);
-        
         if (timeDelta > 0) {
             debugLogs.push({ timestamp: new Date().toISOString(), message: `Time Advancement: +${timeDelta}m -> ${newTime.display}`, type: 'info' });
         }
 
-        // 2. Biological Simulation
-        const bioResult = processBiology(character, timeDelta, response.biological_inputs);
-        const newBio = bioResult.updatedBio;
-
-        // Tension-based stamina pressure
-        // High tension (>70) causes faster stamina drain, simulating adrenaline fatigue
+        // 2. Biology Pipeline (Delegated to BioEngine)
         const tensionLevel = response.tension_level ?? currentWorld.tensionLevel;
-        if (tensionLevel > 70 && newBio.metabolism.stamina > 0) {
-            // Scaling up to 5% drain per turn at max tension
-            const tensionDrain = ((tensionLevel - 70) / 30) * 5; 
-            newBio.metabolism.stamina = Math.max(0, newBio.metabolism.stamina - tensionDrain);
-            if (tensionDrain > 1) {
-                debugLogs.push({ timestamp: new Date().toISOString(), message: `[TENSION] High stress drained ${Math.round(tensionDrain)}% stamina.`, type: 'warning' });
-            }
-        }
-
+        const bioResult = BioEngine.tick(character, timeDelta, tensionLevel, response.biological_inputs);
+        
+        // Log Bio results
         bioResult.logs.forEach(l => debugLogs.push({ timestamp: new Date().toISOString(), message: `[BIO] ${l}`, type: 'success' }));
-        
-        // Merge bio-conditions with character
-        let updatedConditions = [...character.conditions];
-        
-        // FIX: Prioritize removal before addition to prevent sticky conditions
-        if (bioResult.removedConditions.length > 0) {
-            updatedConditions = updatedConditions.filter(c => !bioResult.removedConditions.includes(c));
-            bioResult.removedConditions.forEach(c => debugLogs.push({ timestamp: new Date().toISOString(), message: `[BIO-RECOVERY] Condition Cleared: ${c}`, type: 'success' }));
-        }
-        
-        bioResult.addedConditions.forEach(c => {
-            if (!updatedConditions.includes(c)) updatedConditions.push(c);
-        });
 
-        // Apply Biological Trauma
-        let newTrauma = (character.trauma || 0) + bioResult.traumaDelta;
+        // 3. Pregnancy Pipeline
+        let currentPregnancies = currentWorld.pregnancies || [];
+        const progressResult = ReproductionSystem.advancePregnancies(currentPregnancies, currentTurn);
+        currentPregnancies = progressResult.updated;
         
-        // 3. Log Hidden Updates
+        // 4. Registry Pipeline
         let newHiddenRegistry = response.hidden_update 
             ? `${currentWorld.hiddenRegistry}\n[${newTime.display}] ${response.hidden_update}`
             : currentWorld.hiddenRegistry;
 
-        // 4. Advance Pregnancies
-        const progressResult = ReproductionSystem.advancePregnancies(currentPregnancies, currentTurn);
-        currentPregnancies = progressResult.updated;
+        // Merge pregnancy logs into registry and debug
         progressResult.logs.forEach(log => {
             newHiddenRegistry += `\n[SYSTEM-AUTO] ${log}`;
             debugLogs.push({ timestamp: new Date().toISOString(), message: log, type: 'info' });
         });
 
-        // 5. Conception Logic
+        // 5. Conception Pipeline
         if (response.biological_event === true) {
             if (ReproductionSystem.rollForConception()) {
                 const newPreg = ReproductionSystem.initiatePregnancy(character, currentTurn, newTime.totalMinutes);
-                
                 currentPregnancies = [...currentPregnancies, newPreg];
                 const logMsg = `Conception Event Confirmed: ${newPreg.motherName} (ID: ${newPreg.id})`;
                 newHiddenRegistry += `\n[SYSTEM-AUTO] ${logMsg}`;
@@ -303,7 +124,7 @@ export const SimulationEngine = {
             }
         }
 
-        // 6. Combat/Environment Context
+        // 6. Context Pipeline (Combat & Threats)
         let nextThreats = currentWorld.activeThreats;
         let nextEnv = currentWorld.environment;
 
@@ -314,7 +135,7 @@ export const SimulationEngine = {
             nextThreats = [];
         }
 
-        // 7. Known Entity Updates
+        // 7. Entity Pipeline
         let updatedKnownEntities = [...(currentWorld.knownEntities || [])];
         if (response.known_entity_updates) {
             for (const update of response.known_entity_updates) {
@@ -327,8 +148,7 @@ export const SimulationEngine = {
             }
         }
 
-        // 8. New Lore
-        // IMPORTANT: Now we return this separately instead of auto-adding it to the world.
+        // 8. Lore & Memory Pipeline
         const pendingLore: LoreItem[] = response.new_lore ? [{
             id: generateLoreId(),
             keyword: response.new_lore.keyword,
@@ -337,14 +157,9 @@ export const SimulationEngine = {
         }] : [];
         
         if (response.new_lore) {
-             debugLogs.push({
-                timestamp: new Date().toISOString(),
-                message: `Pending Lore Generated: "${response.new_lore.keyword}"`,
-                type: 'info'
-            });
+             debugLogs.push({ timestamp: new Date().toISOString(), message: `Pending Lore Generated: "${response.new_lore.keyword}"`, type: 'info' });
         }
 
-        // 9. New Memory (Long-term history)
         const newMemory: MemoryItem[] = response.new_memory ? [{
             id: generateMemoryId(),
             fact: response.new_memory.fact,
@@ -352,28 +167,33 @@ export const SimulationEngine = {
         }] : [];
         
         if (response.new_memory) {
-            debugLogs.push({
-                timestamp: new Date().toISOString(),
-                message: `Memory Engram Created: "${response.new_memory.fact}"`,
-                type: 'success'
-            });
+            debugLogs.push({ timestamp: new Date().toISOString(), message: `Memory Engram Created: "${response.new_memory.fact}"`, type: 'success' });
         }
 
-        // 10. AI Thought Log
+        // 9. Thought Process
         if (response.thought_process) {
-            debugLogs.unshift({ 
-                timestamp: new Date().toISOString(), 
-                message: `[AI THOUGHT]: ${response.thought_process}`, 
-                type: 'info' 
-            });
+            debugLogs.unshift({ timestamp: new Date().toISOString(), message: `[AI THOUGHT]: ${response.thought_process}`, type: 'info' });
         }
+
+        // 10. Final State Assembly
+        
+        // Merge Conditions: Original + Bio Added - Bio Removed
+        let finalConditions = [...character.conditions];
+        if (bioResult.removedConditions.length > 0) {
+            finalConditions = finalConditions.filter(c => !bioResult.removedConditions.includes(c));
+            bioResult.removedConditions.forEach(c => debugLogs.push({ timestamp: new Date().toISOString(), message: `[BIO-RECOVERY] Condition Cleared: ${c}`, type: 'success' }));
+        }
+        bioResult.addedConditions.forEach(c => {
+            if (!finalConditions.includes(c)) finalConditions.push(c);
+        });
+
+        const finalTrauma = Math.min(100, Math.max(0, (character.trauma || 0) + bioResult.traumaDelta));
 
         return {
             worldUpdate: {
                 ...currentWorld,
                 time: newTime,
-                // lore is NO LONGER modified here. It stays as currentWorld.lore.
-                lore: currentWorld.lore,
+                lore: currentWorld.lore, // Lore updates are pending user approval
                 memory: [...currentWorld.memory, ...newMemory],
                 hiddenRegistry: trimHiddenRegistry(newHiddenRegistry),
                 pregnancies: currentPregnancies,
@@ -381,16 +201,16 @@ export const SimulationEngine = {
                 environment: nextEnv,
                 knownEntities: updatedKnownEntities,
                 sceneMode: response.scene_mode || 'NARRATIVE',
-                tensionLevel: response.tension_level ?? currentWorld.tensionLevel
+                tensionLevel: tensionLevel
             },
             characterUpdate: {
                 ...character,
-                bio: newBio,
-                conditions: updatedConditions,
-                trauma: Math.min(100, Math.max(0, newTrauma)) // Ensure bounds
+                bio: bioResult.bio,
+                conditions: finalConditions,
+                trauma: finalTrauma
             },
             debugLogs,
-            pendingLore // NEW: Return for UI approval
+            pendingLore
         };
     }
 };

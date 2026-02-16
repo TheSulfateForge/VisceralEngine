@@ -5,7 +5,7 @@ import { Scenario } from '../../types';
 import { useGeminiClient } from '../../hooks/useGeminiClient';
 
 export const ScenarioSelectionView: React.FC = () => {
-    const { gameWorld, setView } = useGameStore();
+    const { gameWorld, setUI } = useGameStore();
     const { handleSend } = useGeminiClient();
     const [customEntry, setCustomEntry] = useState('');
 
@@ -15,13 +15,13 @@ export const ScenarioSelectionView: React.FC = () => {
     const handleSelectScenario = (scenario: Scenario) => {
         // We instruct the system to start the specific scenario
         handleSend(`[SYSTEM: INITIALIZE SCENARIO: "${scenario.title}" | ${scenario.description} | Opening: ${scenario.opening_line}]`);
-        setView('game');
+        setUI({ view: 'game' });
     };
 
     const handleCustomStart = () => {
         if (!customEntry.trim()) return;
         handleSend(customEntry);
-        setView('game');
+        setUI({ view: 'game' });
     };
 
     return (
@@ -80,7 +80,7 @@ export const ScenarioSelectionView: React.FC = () => {
                 </div>
 
                  <div className="text-center pt-8">
-                     <button onClick={() => setView('creator')} className="text-[10px] text-gray-500 hover:text-red-500 uppercase tracking-widest">
+                     <button onClick={() => setUI({ view: 'creator' })} className="text-[10px] text-gray-500 hover:text-red-500 uppercase tracking-widest">
                          ← Return to Character Matrix
                      </button>
                  </div>

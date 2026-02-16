@@ -7,7 +7,7 @@ import { useSavedGames } from '../../hooks/useSavedGames';
 
 export const LandingView: React.FC = () => {
     // Direct store access
-    const { setCharacter, setView, setIsSettingsOpen, setShowLoadModal } = useGameStore();
+    const { setCharacter, setUI } = useGameStore();
     
     // Hooks handling their own logic
     const { loadFromDb } = usePersistence();
@@ -27,7 +27,7 @@ export const LandingView: React.FC = () => {
 
     const handleNewSimulation = () => {
         setCharacter(EMPTY_CHARACTER);
-        setView('creator');
+        setUI({ view: 'creator' });
     };
 
     return (
@@ -36,7 +36,7 @@ export const LandingView: React.FC = () => {
 
             <h1 className="text-7xl font-bold tracking-tighter uppercase italic text-red-900 animate-pulse mb-4 text-center">Visceral</h1>
             <p className="text-[10px] font-mono tracking-[0.8em] text-gray-500 uppercase mb-2 text-center">Realism Engine</p>
-            <p className="text-[10px] font-mono tracking-widest text-white opacity-90 mb-12 text-center">ver. 0.9.7</p>
+            <p className="text-[10px] font-mono tracking-widest text-white opacity-90 mb-12 text-center">ver. 0.9.7.528</p>
             
             <div className="flex flex-col space-y-3 w-64 z-10">
                 {hasAutosave && (
@@ -56,14 +56,14 @@ export const LandingView: React.FC = () => {
                 </button>
                 
                 <button 
-                    onClick={() => setShowLoadModal(true)} 
+                    onClick={() => setUI({ showLoadModal: true })} 
                     className="py-3 border border-gray-900 text-gray-500 uppercase text-[9px] font-bold tracking-widest hover:border-gray-700 hover:text-gray-300 transition-colors"
                 >
                     Restore Checkpoint
                 </button>
                 
                 <button 
-                    onClick={() => setIsSettingsOpen(true)} 
+                    onClick={() => setUI({ isSettingsOpen: true })} 
                     className="py-3 border border-gray-900 text-gray-500 uppercase text-[9px] font-bold tracking-widest hover:border-gray-700 hover:text-gray-300 transition-colors"
                 >
                     Configure Link

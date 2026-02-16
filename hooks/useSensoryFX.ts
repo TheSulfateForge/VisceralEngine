@@ -1,5 +1,5 @@
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect } from 'react';
 
 interface SoundPreset {
   freq: number;
@@ -7,7 +7,6 @@ interface SoundPreset {
   duration: number;
   vol: number;
   slide?: number;
-  noise?: boolean;
 }
 
 const FX_PRESETS: Record<string, SoundPreset> = {
@@ -15,31 +14,36 @@ const FX_PRESETS: Record<string, SoundPreset> = {
   hover: { freq: 200, type: 'triangle', duration: 0.03, vol: 0.02 },
   error: { freq: 150, type: 'sawtooth', duration: 0.3, vol: 0.1, slide: -100 },
   success: { freq: 600, type: 'sine', duration: 0.2, vol: 0.05, slide: 400 },
-  boot: { freq: 100, type: 'square', duration: 0.8, vol: 0.05, slide: 800 },
-  typewriter: { freq: 0, type: 'square', duration: 0.03, vol: 0.02, noise: true }
+  boot: { freq: 100, type: 'square', duration: 0.8, vol: 0.05, slide: 800 }
 };
 
+// Singleton AudioContext to prevent resource leaks and browser limits
+let globalAudioContext: AudioContext | null = null;
+
 export const useSensoryFX = () => {
-  const audioContext = useRef<AudioContext | null>(null);
   
   const initAudio = useCallback(() => {
-    if (!audioContext.current && typeof window !== 'undefined') {
+    if (typeof window === 'undefined') return;
+
+    if (!globalAudioContext) {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       if (AudioCtx) {
-        audioContext.current = new AudioCtx();
+        globalAudioContext = new AudioCtx();
       }
     }
-    if (audioContext.current?.state === 'suspended') {
-      audioContext.current.resume().catch(() => {});
+    
+    if (globalAudioContext?.state === 'suspended') {
+      globalAudioContext.resume().catch(() => {});
     }
   }, []);
 
   // --- ONE-SHOT SFX ---
   const playSound = useCallback((presetName: keyof typeof FX_PRESETS) => {
-    initAudio();
-    if (!audioContext.current) return;
+    // Ensure initialized before playing
+    if (!globalAudioContext) initAudio();
+    if (!globalAudioContext) return;
 
-    const ctx = audioContext.current;
+    const ctx = globalAudioContext;
     const preset = FX_PRESETS[presetName];
     
     try {
@@ -48,46 +52,30 @@ export const useSensoryFX = () => {
         
         let source: AudioScheduledSourceNode;
 
-        if (preset.noise) {
-            // White noise buffer for typewriter
-            const bufferSize = ctx.sampleRate * preset.duration;
-            const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-            const data = buffer.getChannelData(0);
-            for (let i = 0; i < bufferSize; i++) {
-                data[i] = Math.random() * 2 - 1;
-            }
-            const noise = ctx.createBufferSource();
-            noise.buffer = buffer;
-            source = noise;
-        } else {
-            // Oscillator for tones
-            const osc = ctx.createOscillator();
-            osc.type = preset.type;
-            osc.frequency.setValueAtTime(preset.freq, ctx.currentTime);
-            if (preset.slide) {
-                osc.frequency.linearRampToValueAtTime(preset.freq + preset.slide, ctx.currentTime + preset.duration);
-            }
-            source = osc;
+        // Oscillator for tones
+        const osc = ctx.createOscillator();
+        osc.type = preset.type;
+        osc.frequency.setValueAtTime(preset.freq, ctx.currentTime);
+        if (preset.slide) {
+            osc.frequency.linearRampToValueAtTime(preset.freq + preset.slide, ctx.currentTime + preset.duration);
         }
+        source = osc;
 
         source.connect(gain);
         
         // Envelope
-        gain.gain.setValueAtTime(preset.vol, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + preset.duration);
+        const now = ctx.currentTime;
+        gain.gain.setValueAtTime(preset.vol, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + preset.duration);
 
-        source.start();
-        source.stop(ctx.currentTime + preset.duration);
+        source.start(now);
+        source.stop(now + preset.duration);
         
-        // Garbage collection
-        setTimeout(() => {
-            try {
-                source.disconnect();
-                gain.disconnect();
-            } catch(e) {
-                // Ignore disconnect errors if already disconnected
-            }
-        }, preset.duration * 1000 + 100);
+        // Proper node cleanup via event listener instead of timeout
+        source.onended = () => {
+            source.disconnect();
+            gain.disconnect();
+        };
 
     } catch (e) {
         console.warn("Audio playback failed", e);
@@ -114,8 +102,11 @@ export const useSensoryFX = () => {
         initAudio();
     };
     
-    window.addEventListener('click', handleInteraction, { once: true });
-    window.addEventListener('keydown', handleInteraction, { once: true });
+    // Only attach listeners if context needs initialization or resuming
+    if (!globalAudioContext || globalAudioContext.state === 'suspended') {
+        window.addEventListener('click', handleInteraction, { once: true });
+        window.addEventListener('keydown', handleInteraction, { once: true });
+    }
     
     return () => {
       window.removeEventListener('click', handleInteraction);

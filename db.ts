@@ -62,49 +62,58 @@ export class Database {
     return this.initPromise;
   }
 
+  /**
+   * Generic transaction helper to reduce boilerplate.
+   * Handles opening transaction, executing a single request, and wrapping in Promise.
+   */
+  private async tx<T>(
+    storeName: string, 
+    mode: IDBTransactionMode, 
+    fn: (store: IDBObjectStore) => IDBRequest<T>
+  ): Promise<T> {
+    await this.init();
+    if (!this.db) throw new Error("DB not initialized");
+    
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction([storeName], mode);
+      const store = transaction.objectStore(storeName);
+      
+      const request = fn(store);
+      
+      transaction.onerror = () => reject(transaction.error);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  }
+
   // --- Image Handling ---
 
   async saveImage(base64Data: string): Promise<string> {
-      await this.init();
-      if (!this.db) throw new Error("DB not initialized");
+      // Optimization: Zero-network conversion using synchronous buffer operations
+      // Avoids overhead of fetch() for Data URIs
+      const parts = base64Data.split(',');
+      const header = parts[0];
+      const base64 = parts[1];
+      const mimeMatch = header.match(/:(.*?);/);
+      const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
 
-      // Modern approach: Fetch the data URI to get the blob directly.
-      const res = await fetch(base64Data);
-      const blob = await res.blob();
-            
-      // Use standard UUIDs for image IDs as well
+      const binary = atob(base64);
+      const len = binary.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+          bytes[i] = binary.charCodeAt(i);
+      }
+      const blob = new Blob([bytes], { type: mimeType });
       const id = `img_${generateUUID()}`;
 
-      return new Promise((resolve, reject) => {
-          const transaction = this.db!.transaction([STORE_IMAGES], 'readwrite');
-          const store = transaction.objectStore(STORE_IMAGES);
-          const request = store.put({ id, blob });
-
-          request.onsuccess = () => resolve(id);
-          request.onerror = () => reject(request.error);
-      });
+      // Returns the key (id)
+      await this.tx(STORE_IMAGES, 'readwrite', store => store.put({ id, blob }));
+      return id;
   }
 
-  // Returns the raw Blob. The CONSUMER is responsible for creating/revoking object URLs.
   async getImage(id: string): Promise<Blob | null> {
-      await this.init();
-      if (!this.db) throw new Error("DB not initialized");
-
-      return new Promise((resolve, reject) => {
-          const transaction = this.db!.transaction([STORE_IMAGES], 'readonly');
-          const store = transaction.objectStore(STORE_IMAGES);
-          const request = store.get(id);
-
-          request.onsuccess = () => {
-              const result = request.result;
-              if (result && result.blob) {
-                  resolve(result.blob);
-              } else {
-                  resolve(null);
-              }
-          };
-          request.onerror = () => reject(request.error);
-      });
+      const result = await this.tx(STORE_IMAGES, 'readonly', store => store.get(id));
+      return result?.blob || null;
   }
 
   async cleanupOrphanedImages(activeImageIds: string[]): Promise<number> {
@@ -166,44 +175,16 @@ export class Database {
   }
 
   async loadGame(name: string): Promise<GameSave | undefined> {
-    await this.init();
-    if (!this.db) throw new Error("DB not initialized");
-
-    return new Promise((resolve, reject) => {
-      const transaction = this.db!.transaction([STORE_SAVES], 'readonly');
-      const store = transaction.objectStore(STORE_SAVES);
-      const index = store.index('name');
-      
-      const request = index.get(name);
-
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => resolve(request.result);
-    });
+    return this.tx(STORE_SAVES, 'readonly', store => store.index('name').get(name));
   }
 
   async getAllSavesMetadata(): Promise<SaveMetadata[]> {
-    await this.init();
-    if (!this.db) throw new Error("DB not initialized");
-
-    return new Promise((resolve, reject) => {
-      const transaction = this.db!.transaction([STORE_SAVES], 'readonly');
-      const store = transaction.objectStore(STORE_SAVES);
-      
-      const request = store.getAll();
-
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => {
-        const results = request.result as GameSave[];
-        // Sort by timestamp descending (newest first)
-        const metadata = results.map(s => ({
-            name: s.name,
-            timestamp: s.timestamp,
-            id: s.id
-        })).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-        
-        resolve(metadata);
-      };
-    });
+    const results = await this.tx<GameSave[]>(STORE_SAVES, 'readonly', store => store.getAll());
+    return results.map(s => ({
+        name: s.name,
+        timestamp: s.timestamp,
+        id: s.id
+    })).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
   }
 
   async deleteGame(name: string): Promise<void> {
@@ -243,13 +224,12 @@ export class Database {
         const store = transaction.objectStore(STORE_TEMPLATES);
         const index = store.index('name');
 
-        // Upsert by name: if a template with this name exists, overwrite it
         const checkRequest = index.get(template.name);
 
         checkRequest.onsuccess = () => {
             const existing = checkRequest.result as CharacterTemplate;
             if (existing) {
-                template.id = existing.id; // Keep same ID on overwrite
+                template.id = existing.id;
             }
             const putRequest = store.put(template);
             putRequest.onerror = () => reject(putRequest.error);
@@ -261,53 +241,18 @@ export class Database {
   }
 
   async loadTemplate(name: string): Promise<CharacterTemplate | undefined> {
-    await this.init();
-    if (!this.db) throw new Error("DB not initialized");
-
-    return new Promise((resolve, reject) => {
-        const transaction = this.db!.transaction([STORE_TEMPLATES], 'readonly');
-        const store = transaction.objectStore(STORE_TEMPLATES);
-        const index = store.index('name');
-        const request = index.get(name);
-
-        request.onerror = () => reject(request.error);
-        request.onsuccess = () => resolve(request.result);
-    });
+    return this.tx(STORE_TEMPLATES, 'readonly', store => store.index('name').get(name));
   }
 
   async getAllTemplates(): Promise<CharacterTemplate[]> {
-    await this.init();
-    if (!this.db) throw new Error("DB not initialized");
-
-    return new Promise((resolve, reject) => {
-        const transaction = this.db!.transaction([STORE_TEMPLATES], 'readonly');
-        const store = transaction.objectStore(STORE_TEMPLATES);
-        const request = store.getAll();
-
-        request.onerror = () => reject(request.error);
-        request.onsuccess = () => {
-            const results = request.result as CharacterTemplate[];
-            // Sort newest first
-            results.sort((a, b) => 
-                new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-            );
-            resolve(results);
-        };
-    });
+    const results = await this.tx<CharacterTemplate[]>(STORE_TEMPLATES, 'readonly', store => store.getAll());
+    return results.sort((a, b) => 
+        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
   }
 
   async deleteTemplate(id: string): Promise<void> {
-    await this.init();
-    if (!this.db) throw new Error("DB not initialized");
-
-    return new Promise((resolve, reject) => {
-        const transaction = this.db!.transaction([STORE_TEMPLATES], 'readwrite');
-        const store = transaction.objectStore(STORE_TEMPLATES);
-        const request = store.delete(id);
-
-        request.onsuccess = () => resolve();
-        request.onerror = () => reject(request.error);
-    });
+    await this.tx(STORE_TEMPLATES, 'readwrite', store => store.delete(id));
   }
 }
 

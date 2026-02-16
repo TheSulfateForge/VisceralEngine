@@ -1,46 +1,108 @@
 
 import { useCallback, useEffect, useRef } from 'react';
 import { GameSave } from '../types';
-import { generateSaveId, generateMessageId } from '../idUtils';
+import { generateSaveId, AUTOSAVE_ID } from '../idUtils';
 import { db } from '../db';
 import { downloadFile, debounce } from '../utils';
 import { useToast } from '../components/providers/ToastProvider';
 import { TIMING } from '../constants';
 import { useGameStore } from '../store';
 
-export const usePersistence = () => {
-  const { 
-      gameHistory, setGameHistory, 
-      gameWorld, setGameWorld, 
-      character, setCharacter, 
-      setView, setIsSettingsOpen 
-  } = useGameStore();
+/**
+ * HOOK: useAutosave
+ * Handles background persistence logic (Autosave, cleanup).
+ * Subscribes to store changes. Should be used once in the app root.
+ */
+export const useAutosave = () => {
+    const { showToast } = useToast();
 
+    // Reactive State Subscriptions
+    // We select specific slices to ensure we only trigger when necessary
+    const turnCount = useGameStore(state => state.gameHistory.turnCount);
+    const historyLength = useGameStore(state => state.gameHistory.history.length);
+    const sceneMode = useGameStore(state => state.gameWorld.sceneMode);
+    const knownEntitiesLen = useGameStore(state => state.gameWorld.knownEntities.length);
+    const character = useGameStore(state => state.character);
+    
+    // Refs for tracking
+    const isInitialized = useRef(false);
+    const lastCleanupTurn = useRef(0);
+
+    // Initialization Check
+    useEffect(() => {
+        if (turnCount > 0 || character.name) {
+            isInitialized.current = true;
+        }
+    }, [turnCount, character.name]);
+
+    // Image Cleanup (Every 20 turns)
+    useEffect(() => {
+        if (turnCount > 0 && turnCount % 20 === 0 && turnCount !== lastCleanupTurn.current) {
+            lastCleanupTurn.current = turnCount;
+            const activeIds = useGameStore.getState().gameWorld.generatedImages || [];
+            db.cleanupOrphanedImages(activeIds).then(count => {
+                if (count > 0) console.log(`[Cleanup] Removed ${count} orphaned images`);
+            }).catch(console.error);
+        }
+    }, [turnCount]);
+
+    // Internal Save Helper
+    const performAutosave = useCallback(async () => {
+        try {
+            const currentState = useGameStore.getState();
+            await db.saveGame({
+                id: AUTOSAVE_ID,
+                name: 'AUTOSAVE',
+                timestamp: new Date().toISOString(),
+                gameState: { history: currentState.gameHistory, world: currentState.gameWorld },
+                character: currentState.character
+            });
+            // Quiet success for autosave
+        } catch (e) {
+            console.error("Autosave Error:", e);
+        }
+    }, []);
+
+    // Debouncer
+    const debouncedAutosave = useRef(
+        debounce(() => {
+            if (isInitialized.current) {
+                performAutosave();
+            }
+        }, TIMING.AUTOSAVE_DEBOUNCE)
+    ).current;
+
+    // Autosave Trigger
+    useEffect(() => {
+        if (isInitialized.current) {
+            debouncedAutosave();
+        }
+        return () => {
+            debouncedAutosave.cancel();
+        };
+    }, [
+        historyLength, 
+        turnCount, 
+        character, 
+        sceneMode, 
+        knownEntitiesLen, 
+        debouncedAutosave
+    ]);
+};
+
+/**
+ * HOOK: usePersistence
+ * Provides manual actions for Saving, Loading, Exporting, Importing.
+ * Optimized to NOT trigger re-renders on game state changes.
+ */
+export const usePersistence = () => {
   const { showToast } = useToast();
   
-  // Track if initial load is done to avoid overwriting autosave with empty state
-  const isInitialized = useRef(false);
-  const lastCleanupTurn = useRef(0);
-
-  useEffect(() => {
-    // We consider the game initialized if there are turns recorded or a character name exists
-    if (gameHistory.turnCount > 0 || character.name) {
-      isInitialized.current = true;
-    }
-  }, [gameHistory.turnCount, character.name]);
-
-  // Image cleanup: run every 20 turns to remove orphaned blobs
-  useEffect(() => {
-    const currentState = useGameStore.getState();
-    const turnCount = currentState.gameHistory.turnCount;
-    if (turnCount > 0 && turnCount % 20 === 0 && turnCount !== lastCleanupTurn.current) {
-        lastCleanupTurn.current = turnCount;
-        const activeIds = currentState.gameWorld.generatedImages || [];
-        db.cleanupOrphanedImages(activeIds).then(count => {
-            if (count > 0) console.log(`[Cleanup] Removed ${count} orphaned images from IndexedDB`);
-        }).catch(console.error);
-    }
-  }, [gameHistory.turnCount]);
+  // Stable Setters (Zustand setters don't change)
+  const setGameHistory = useGameStore(state => state.setGameHistory);
+  const setGameWorld = useGameStore(state => state.setGameWorld);
+  const setCharacter = useGameStore(state => state.setCharacter);
+  const setUI = useGameStore(state => state.setUI);
 
   const handleExport = useCallback(() => {
     const currentState = useGameStore.getState();
@@ -52,7 +114,7 @@ export const usePersistence = () => {
       character: currentState.character,
       thumbnail: currentState.gameWorld.visualUrl
     };
-    // Sanitize filename
+    
     const safeName = save.name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
     const filename = `visceral_backup_${safeName}.json`;
     
@@ -72,31 +134,28 @@ export const usePersistence = () => {
       setGameHistory(save.gameState.history);
       setGameWorld(save.gameState.world);
       setCharacter(save.character);
-      setView('game');
+      setUI({ view: 'game', isSettingsOpen: false });
       showToast("Reality state reconstructed.", "success");
-      setIsSettingsOpen(false);
     } catch (e) {
       console.error(e);
       showToast("Import failed. Corrupt data.", "error");
     }
-  }, [setGameHistory, setGameWorld, setCharacter, setView, showToast, setIsSettingsOpen]);
+  }, [setGameHistory, setGameWorld, setCharacter, setUI, showToast]);
 
-  const saveToDb = useCallback(async (name: string, isAutosave = false) => {
+  const saveToDb = useCallback(async (name: string) => {
     try {
       const currentState = useGameStore.getState();
       await db.saveGame({
-        id: isAutosave ? 'autosave_slot' as any : generateMessageId() as any, 
+        id: generateSaveId(),
         name,
         timestamp: new Date().toISOString(),
         gameState: { history: currentState.gameHistory, world: currentState.gameWorld },
         character: currentState.character
       });
-      if (!isAutosave) {
-        showToast("Checkpoint saved to Core.", "success");
-      }
+      showToast("Checkpoint saved to Core.", "success");
     } catch (e) {
       console.error("Save Error:", e);
-      if (!isAutosave) showToast("Save failed.", "error");
+      showToast("Save failed.", "error");
     }
   }, [showToast]);
 
@@ -107,7 +166,7 @@ export const usePersistence = () => {
         setGameHistory({ ...save.gameState.history, isThinking: false });
         setGameWorld({ ...save.gameState.world });
         setCharacter({ ...save.character });
-        setView('game');
+        setUI({ view: 'game' });
         showToast("Reality restored.", "success");
       } else {
         showToast("Save file not found.", "error");
@@ -116,32 +175,7 @@ export const usePersistence = () => {
       console.error("Load Error:", e);
       showToast("Load failed.", "error");
     }
-  }, [setGameHistory, setGameWorld, setCharacter, setView, showToast]);
-
-  // Autosave Effect with Cleanup
-  const debouncedAutosave = useRef(
-    debounce(() => {
-        if (isInitialized.current) {
-            saveToDb('AUTOSAVE', true);
-        }
-    }, TIMING.AUTOSAVE_DEBOUNCE)
-  ).current;
-
-  useEffect(() => {
-    if (isInitialized.current) {
-        debouncedAutosave();
-    }
-    return () => {
-        debouncedAutosave.cancel();
-    };
-  }, [
-    gameHistory.history.length, 
-    gameHistory.turnCount, 
-    character, 
-    gameWorld.sceneMode, 
-    gameWorld.knownEntities.length,
-    debouncedAutosave
-  ]);
+  }, [setGameHistory, setGameWorld, setCharacter, setUI, showToast]);
 
   return {
     handleExport,

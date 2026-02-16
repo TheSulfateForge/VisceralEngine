@@ -68,7 +68,7 @@ const EditableList: React.FC<{
 };
 
 export const CharacterView: React.FC = () => {
-    const { character, setCharacter, gameWorld, setIsGalleryOpen } = useGameStore();
+    const { character, setCharacter, gameWorld, setUI } = useGameStore();
     const { handleVisualize } = useGeminiClient();
     const [isEditing, setIsEditing] = useState(false);
 
@@ -110,7 +110,7 @@ export const CharacterView: React.FC = () => {
             <div className="w-full max-w-2xl mx-auto">
                 <ImageCarousel 
                     images={gameWorld.generatedImages} 
-                    onOpenGallery={() => setIsGalleryOpen(true)}
+                    onOpenGallery={() => setUI({ isGalleryOpen: true })}
                     heightClass="min-h-[300px]"
                 />
             </div>

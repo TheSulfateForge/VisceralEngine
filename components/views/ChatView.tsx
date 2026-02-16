@@ -1,11 +1,11 @@
 
-import React, { useLayoutEffect, useState, useRef, useCallback, useEffect } from 'react';
+import React, { useLayoutEffect, useState, useRef, useCallback } from 'react';
 import { useGameStore } from '../../store';
 import { useGeminiClient } from '../../hooks/useGeminiClient';
 import { useRollSystem } from '../../hooks/core';
+import { useVirtualizedMessages } from '../../hooks/useVirtualizedMessages';
 import { MessageItem } from '../chat/MessageItem';
 import { InputArea } from '../chat/InputArea';
-import { UI_CONFIG } from '../../constants';
 import { RollRequest } from '../../types';
 import { useSensoryFX } from '../../hooks/useSensoryFX';
 
@@ -22,25 +22,18 @@ export const ChatView: React.FC = () => {
     const scrollRef = useRef<HTMLDivElement>(null);
     const rollSystem = useRollSystem();
 
-    const { history, isThinking } = gameHistory;
+    const { history, isThinking, turnCount } = gameHistory;
     const { isGeneratingVisual } = gameWorld;
     const hasUndoSnapshot = useGameStore(state => state.preTurnSnapshot !== null);
 
+    const { 
+        displayHistory, 
+        hasOlderMessages, 
+        remainingCount, 
+        loadMore 
+    } = useVirtualizedMessages(history, turnCount);
+
     const [isAtBottom, setIsAtBottom] = useState(true);
-    const [visibleCount, setVisibleCount] = useState<number>(UI_CONFIG.MAX_ROLL_LOG_ENTRIES);
-
-    const totalMessages = history.length;
-    const startIndex = Math.max(0, totalMessages - visibleCount);
-    const displayHistory = history.slice(startIndex);
-    const hasOlderMessages = startIndex > 0;
-
-    const prevTurnCount = useRef(gameHistory.turnCount);
-    useEffect(() => {
-        if (gameHistory.turnCount < prevTurnCount.current) {
-            setVisibleCount(UI_CONFIG.MAX_ROLL_LOG_ENTRIES);
-        }
-        prevTurnCount.current = gameHistory.turnCount;
-    }, [gameHistory.turnCount]);
 
     // Scroll Logic: Check if user is near bottom
     const onScroll = () => {
@@ -123,10 +116,10 @@ export const ChatView: React.FC = () => {
                 {hasOlderMessages && (
                     <div className="text-center py-6">
                         <button
-                        onClick={() => setVisibleCount(prev => Math.min(prev + 50, totalMessages))}
+                        onClick={loadMore}
                         className="text-[9px] font-mono uppercase tracking-[0.3em] text-gray-600 hover:text-red-500 border border-gray-800 hover:border-red-900/40 px-4 py-2 transition-all"
                         >
-                        Load Previous Memories ({totalMessages - visibleCount} remaining)
+                        Load Previous Memories ({remainingCount} remaining)
                         </button>
                     </div>
                 )}

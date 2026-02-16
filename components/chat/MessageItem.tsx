@@ -15,7 +15,6 @@ interface MessageItemProps {
 
 const TypewriterText: React.FC<{ text: string; onComplete?: () => void }> = ({ text, onComplete }) => {
     const [displayed, setDisplayed] = useState('');
-    const { playSound } = useSensoryFX();
     const index = useRef(0);
 
     useEffect(() => {
@@ -34,8 +33,6 @@ const TypewriterText: React.FC<{ text: string; onComplete?: () => void }> = ({ t
             if (index.current < text.length) {
                 setDisplayed(prev => prev + text.charAt(index.current));
                 index.current++;
-                // Play sound every 3 chars to be less annoying
-                if (index.current % 3 === 0) playSound('typewriter');
             } else {
                 clearInterval(interval);
                 onComplete?.();
@@ -43,7 +40,7 @@ const TypewriterText: React.FC<{ text: string; onComplete?: () => void }> = ({ t
         }, 10); // Speed: 10ms per char
 
         return () => clearInterval(interval);
-    }, [text, playSound, onComplete]);
+    }, [text, onComplete]);
 
     return <MarkdownRenderer content={displayed} />;
 };

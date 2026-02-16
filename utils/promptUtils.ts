@@ -1,5 +1,5 @@
 
-import { GameHistory, GameWorld, Character, SceneMode } from '../types';
+import { GameHistory, GameWorld, Character, SceneMode, MemoryItem, LoreItem, KnownEntity, BioMonitor } from '../types';
 import { retrieveRelevantContext, RAGResult } from './ragEngine';
 import { getSectionReminder } from '../sectionReminders';
 
@@ -16,16 +16,108 @@ export interface PromptResult {
     ragDebug: RAGResult['debugInfo'];
 }
 
+// --- Builder Functions ---
+
+const buildMemoryContext = (memory: MemoryItem[]): string => {
+    if (memory.length === 0) return "";
+    return memory.map(m => `• ${m.fact}`).join('\n');
+};
+
+const buildLoreContext = (lore: LoreItem[]): string => {
+    if (lore.length === 0) return "";
+    return lore.map(l => `[${l.keyword}]: ${l.content}`).join('\n');
+};
+
+const buildEntityContext = (entities: KnownEntity[]): string => {
+    if (entities.length === 0) return "";
+    
+    const entityStrings = entities.map(e => 
+        `ID: ${e.id}
+         Name: ${e.name} (${e.role})
+         Location: ${e.location}
+         Current State: [${e.relationship_level}] - ${e.impression}
+         Leverage: ${e.leverage}
+         Ledger (Memories): [${e.ledger.join(', ')}]`
+    ).join('\n----------------\n');
+
+    return `\n[KNOWN ENTITY REGISTRY - SOCIAL & MEMORY]\n${entityStrings}`;
+};
+
+const buildBioStatus = (bio: BioMonitor | undefined, timeDisplay: string): string => {
+    const safeBio = bio || { 
+        metabolism: { calories: 80, hydration: 80, stamina: 100, libido: 5 }, 
+        pressures: { bladder: 0, bowels: 0, lactation: 0, seminal: 0 },
+        timestamps: { lastSleep: 0, lastMeal: 0, lastOrgasm: 0 },
+        modifiers: { calories: 1.0, hydration: 1.0, stamina: 1.0, lactation: 1.0 }
+    };
+
+    return `
+[BIOLOGICAL STATUS]
+Time: ${timeDisplay}
+Calories: ${Math.round(safeBio.metabolism.calories)}/100 ${safeBio.metabolism.calories < 40 ? "(HUNGRY)" : ""}
+Hydration: ${Math.round(safeBio.metabolism.hydration)}/100 ${safeBio.metabolism.hydration < 40 ? "(THIRSTY)" : ""}
+Stamina: ${Math.round(safeBio.metabolism.stamina)}/100
+Lactation Pressure: ${Math.round(safeBio.pressures.lactation)}%
+
+[ACTIVE MODIFIERS] (1.0 = Base)
+Calorie Burn: x${safeBio.modifiers.calories}
+Water Burn: x${safeBio.modifiers.hydration}
+Stamina Burn: x${safeBio.modifiers.stamina}
+Lactation Rate: x${safeBio.modifiers.lactation}
+    `.trim();
+};
+
+const buildPacingInstruction = (tension: number, currentMode: string, isDowntime: boolean): string => {
+    if (tension > 70 || currentMode === 'COMBAT') {
+        return `
+[PACING: HIGH TENSION / SURVIVAL]
+1. Focus on survival, adrenaline, and rapid consequences.
+2. Short, punchy sentences.
+3. If the user hesitates, the threat advances.
+        `.trim();
+    } 
+    
+    if (isDowntime || currentMode === 'SOCIAL') {
+        return `
+[PACING: SLOW / SOCIAL]
+1. DETAILED SENSORY FOCUS. Describe the environment's texture, smell, and temperature.
+2. FORCE NPC INTERACTION. If the player speaks, the NPC *must* reply with dialogue.
+3. NO COMBAT SPAWNS. Do not interrupt this scene with random attacks.
+4. Scenario can be sexually charged in a negative or positive way. This is not a requirement.
+        `.trim();
+    }
+
+    return `
+[PACING: NEUTRAL]
+The simulation is running standard narrative protocols.
+    `.trim();
+};
+
+const buildCharacterBlock = (character: Character): string => {
+    return `
+**Primary Directive: Player Character Data**
+This is the player character. This data is ABSOLUTE TRUTH.
+- **Name:** ${character.name} (${character.gender}, ${character.race})
+- **Appearance:** ${character.appearance}
+- **Markings:** ${character.notableFeatures}
+- **Backstory:** ${character.backstory}
+- **Setting:** ${character.setting}
+- **Inventory:** ${character.inventory.join(', ')}
+- **Conditions:** ${character.conditions.join(', ')}
+- **Relationships:** ${character.relationships.join(', ')}
+- **Goals:** ${character.goals.join(', ')}
+    `.trim();
+};
+
+// --- Main Function ---
+
 export const constructGeminiPrompt = (
   gameHistory: GameHistory,
   gameWorld: GameWorld,
   character: Character,
   userInput: string
 ): PromptResult => {
-  // Memory is always injected in full — it's compact and globally relevant
-  const memoryContext = gameWorld.memory.map(m => `• ${m.fact}`).join('\n');
-
-  // RAG: Filter lore and entities by contextual relevance
+  // 1. RAG Retrieval
   const activeThreatNames = (gameWorld.activeThreats || []).map(t => t.name);
   const { relevantLore, relevantEntities, debugInfo } = retrieveRelevantContext(
     userInput,
@@ -35,79 +127,30 @@ export const constructGeminiPrompt = (
     activeThreatNames
   );
 
-  const loreContext = relevantLore.map(l => `[${l.keyword}]: ${l.content}`).join('\n');
-  
-  const knownEntitiesContext = relevantEntities.length > 0
-    ? `\n[KNOWN ENTITY REGISTRY - SOCIAL & MEMORY]\n` + relevantEntities.map(e => 
-        `ID: ${e.id}
-         Name: ${e.name} (${e.role})
-         Location: ${e.location}
-         Current State: [${e.relationship_level}] - ${e.impression}
-         Leverage: ${e.leverage}
-         Ledger (Memories): [${e.ledger.join(', ')}]`
-      ).join('\n----------------\n')
-    : "";
+  // 2. Build Context Strings
+  const memoryContext = buildMemoryContext(gameWorld.memory);
+  const loreContext = buildLoreContext(relevantLore);
+  const knownEntitiesContext = buildEntityContext(relevantEntities);
 
-  // Narrative Intent Detection
+  // 3. Narrative Intent & State
   const lowerInput = userInput.toLowerCase();
   const isDowntime = DOWNTIME_KEYWORDS.some(kw => lowerInput.includes(kw));
-
-  // Determine current atmospheric pressure
   const tension = gameWorld.tensionLevel || 0;
   const currentMode = gameWorld.sceneMode || 'NARRATIVE';
-
-  // --- CHRONOS & BIO CONTEXT ---
   const timeDisplay = gameWorld.time?.display || "Day 1, 09:00";
-  const bio = character.bio || { 
-      metabolism: { calories: 80, hydration: 80, stamina: 100, libido: 5 }, 
-      pressures: { bladder: 0, bowels: 0, lactation: 0, seminal: 0 },
-      timestamps: { lastSleep: 0, lastMeal: 0, lastOrgasm: 0 },
-      modifiers: { calories: 1.0, hydration: 1.0, stamina: 1.0, lactation: 1.0 }
-  };
-  
-  const bioStatus = `
-[BIOLOGICAL STATUS]
-Time: ${timeDisplay}
-Calories: ${Math.round(bio.metabolism.calories)}/100 ${bio.metabolism.calories < 40 ? "(HUNGRY)" : ""}
-Hydration: ${Math.round(bio.metabolism.hydration)}/100 ${bio.metabolism.hydration < 40 ? "(THIRSTY)" : ""}
-Stamina: ${Math.round(bio.metabolism.stamina)}/100
-Lactation Pressure: ${Math.round(bio.pressures.lactation)}%
 
-[ACTIVE MODIFIERS] (1.0 = Base)
-Calorie Burn: x${bio.modifiers.calories}
-Water Burn: x${bio.modifiers.hydration}
-Stamina Burn: x${bio.modifiers.stamina}
-Lactation Rate: x${bio.modifiers.lactation}
-  `;
+  // 4. Build Instructions
+  const bioStatus = buildBioStatus(character.bio, timeDisplay);
+  const pacingInstruction = buildPacingInstruction(tension, currentMode, isDowntime);
+  const characterBlock = buildCharacterBlock(character);
 
-  let pacingInstruction = `
-[PACING: NEUTRAL]
-The simulation is running standard narrative protocols.
-  `;
-
-  if (tension > 70 || currentMode === 'COMBAT') {
-      pacingInstruction = `
-[PACING: HIGH TENSION / SURVIVAL]
-1. Focus on survival, adrenaline, and rapid consequences.
-2. Short, punchy sentences.
-3. If the user hesitates, the threat advances.
-      `;
-  } else if (isDowntime || currentMode === 'SOCIAL') {
-      pacingInstruction = `
-[PACING: SLOW / SOCIAL]
-1. DETAILED SENSORY FOCUS. Describe the environment's texture, smell, and temperature.
-2. FORCE NPC INTERACTION. If the player speaks, the NPC *must* reply with dialogue.
-3. NO COMBAT SPAWNS. Do not interrupt this scene with random attacks.
-4. Scenario can be sexually charged in a negative or positive way. This is not a requirement.
-      `;
-  }
-
-  // Calculate Section Reminder based on turn and mode
+  // 5. Section Reminders
   const sectionRefresh = getSectionReminder(
     gameHistory.turnCount,
     currentMode as SceneMode
   );
 
+  // 6. Assembly
   const promptString = `
 [CONTEXT]
 ${memoryContext}
@@ -123,17 +166,7 @@ ${bioStatus}
 [HIDDEN_REGISTRY]
 ${gameWorld.hiddenRegistry}
 
-**Primary Directive: Player Character Data**
-This is the player character. This data is ABSOLUTE TRUTH.
-- **Name:** ${character.name} (${character.gender}, ${character.race})
-- **Appearance:** ${character.appearance}
-- **Markings:** ${character.notableFeatures}
-- **Backstory:** ${character.backstory}
-- **Setting:** ${character.setting}
-- **Inventory:** ${character.inventory.join(', ')}
-- **Conditions:** ${character.conditions.join(', ')}
-- **Relationships:** ${character.relationships.join(', ')}
-- **Goals:** ${character.goals.join(', ')}
+${characterBlock}
 
 ${pacingInstruction}
 

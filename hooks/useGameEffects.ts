@@ -4,7 +4,7 @@ import { useGameStore } from '../store';
 import { getConditionSeverity } from '../utils';
 
 export const useGameEffects = () => {
-    const { character, setPulseSeverity, setIsPulsing } = useGameStore();
+    const { character, setUI } = useGameStore();
     const prevConditionsRef = useRef<string[]>([]);
 
     // Pulse Effect for Conditions
@@ -19,11 +19,10 @@ export const useGameEffects = () => {
                     if (s === 'lethal') { maxSev = 'lethal'; break; }
                     if (s === 'traumatic') maxSev = 'traumatic';
                 }
-                setPulseSeverity(maxSev);
-                setIsPulsing(true);
-                setTimeout(() => setIsPulsing(false), 5000);
+                setUI({ pulseSeverity: maxSev, isPulsing: true });
+                setTimeout(() => setUI({ isPulsing: false }), 5000);
             }
             prevConditionsRef.current = conditions;
         }
-    }, [character.conditions, setPulseSeverity, setIsPulsing]);
+    }, [character.conditions, setUI]);
 };

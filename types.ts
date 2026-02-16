@@ -8,9 +8,8 @@ import React from 'react';
 declare global {
   interface Window {
     // aistudio is declared in the global scope by the environment (Project IDX / GenAI)
-    // We rely on the global interface merging from the environment.
     webkitAudioContext?: typeof AudioContext;
-    // Removed local aistudio declaration to avoid conflict with global AIStudio type
+    // Removed aistudio declaration to avoid conflict with existing 'AIStudio' type
   }
 }
 

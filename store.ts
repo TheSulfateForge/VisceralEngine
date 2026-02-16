@@ -77,6 +77,36 @@ const initialWorld: GameWorld = {
     time: DEFAULT_TIME
 };
 
+interface UIState {
+    view: View;
+    activeTab: 'chat' | 'character' | 'world';
+    isSettingsOpen: boolean;
+    showKeyPrompt: boolean;
+    showSaveModal: boolean;
+    showLoadModal: boolean;
+    screenEffect: 'none' | 'fail' | 'crit';
+    isMobileMenuOpen: boolean;
+    pulseSeverity: 'none' | 'lethal' | 'traumatic' | 'minor';
+    isPulsing: boolean;
+    isGalleryOpen: boolean;
+    isDebugOpen: boolean;
+}
+
+const initialUI: UIState = {
+    view: 'landing',
+    activeTab: 'chat',
+    isSettingsOpen: false,
+    showKeyPrompt: false,
+    showSaveModal: false,
+    showLoadModal: false,
+    screenEffect: 'none',
+    isMobileMenuOpen: false,
+    pulseSeverity: 'none',
+    isPulsing: false,
+    isGalleryOpen: false,
+    isDebugOpen: false,
+};
+
 // --- Store Interface ---
 
 interface GameStore {
@@ -90,18 +120,7 @@ interface GameStore {
     pendingLore: LoreItem[];
     
     // UI State
-    view: View;
-    activeTab: 'chat' | 'character' | 'world';
-    isSettingsOpen: boolean;
-    showKeyPrompt: boolean;
-    showSaveModal: boolean;
-    showLoadModal: boolean;
-    screenEffect: 'none' | 'fail' | 'crit';
-    isMobileMenuOpen: boolean;
-    pulseSeverity: 'none' | 'lethal' | 'traumatic' | 'minor';
-    isPulsing: boolean;
-    isGalleryOpen: boolean;
-    isDebugOpen: boolean;
+    ui: UIState;
 
     // Actions
     setGameHistory: (update: GameHistory | ((prev: GameHistory) => GameHistory)) => void;
@@ -111,18 +130,8 @@ interface GameStore {
     
     setPendingLore: (update: LoreItem[] | ((prev: LoreItem[]) => LoreItem[])) => void;
 
-    setView: (view: View) => void;
-    setActiveTab: (tab: 'chat' | 'character' | 'world') => void;
-    setIsSettingsOpen: (open: boolean) => void;
-    setShowKeyPrompt: (show: boolean) => void;
-    setShowSaveModal: (show: boolean) => void;
-    setShowLoadModal: (show: boolean) => void;
-    setScreenEffect: (effect: 'none' | 'fail' | 'crit') => void;
-    setIsMobileMenuOpen: (open: boolean) => void;
-    setPulseSeverity: (severity: 'none' | 'lethal' | 'traumatic' | 'minor') => void;
-    setIsPulsing: (isPulsing: boolean) => void;
-    setIsGalleryOpen: (open: boolean) => void;
-    setIsDebugOpen: (open: boolean) => void;
+    // UI Actions
+    setUI: (update: Partial<UIState>) => void;
 
     // Composite Actions
     triggerScreenEffect: (effect: 'none' | 'fail' | 'crit') => void;
@@ -138,18 +147,7 @@ export const useGameStore = create<GameStore>((set) => ({
     character: EMPTY_CHARACTER,
     preTurnSnapshot: null,
     pendingLore: [],
-    view: 'landing',
-    activeTab: 'chat',
-    isSettingsOpen: false,
-    showKeyPrompt: false,
-    showSaveModal: false,
-    showLoadModal: false,
-    screenEffect: 'none',
-    isMobileMenuOpen: false,
-    pulseSeverity: 'none',
-    isPulsing: false,
-    isGalleryOpen: false,
-    isDebugOpen: false,
+    ui: initialUI,
 
     // Actions
     setGameHistory: (update) => set((state) => ({ 
@@ -167,30 +165,21 @@ export const useGameStore = create<GameStore>((set) => ({
         pendingLore: typeof update === 'function' ? update(state.pendingLore) : update
     })),
 
-    setView: (view) => set({ view }),
-    setActiveTab: (activeTab) => set({ activeTab }),
-    setIsSettingsOpen: (isSettingsOpen) => set({ isSettingsOpen }),
-    setShowKeyPrompt: (showKeyPrompt) => set({ showKeyPrompt }),
-    setShowSaveModal: (showSaveModal) => set({ showSaveModal }),
-    setShowLoadModal: (showLoadModal) => set({ showLoadModal }),
-    setScreenEffect: (screenEffect) => set({ screenEffect }),
-    setIsMobileMenuOpen: (isMobileMenuOpen) => set({ isMobileMenuOpen }),
-    setPulseSeverity: (pulseSeverity) => set({ pulseSeverity }),
-    setIsPulsing: (isPulsing) => set({ isPulsing }),
-    setIsGalleryOpen: (isGalleryOpen) => set({ isGalleryOpen }),
-    setIsDebugOpen: (isDebugOpen) => set({ isDebugOpen }),
+    setUI: (update) => set((state) => ({
+        ui: { ...state.ui, ...update }
+    })),
 
     triggerScreenEffect: (effect) => {
-        set({ screenEffect: effect });
-        setTimeout(() => set({ screenEffect: 'none' }), 1200);
+        set((state) => ({ ui: { ...state.ui, screenEffect: effect } }));
+        setTimeout(() => set((state) => ({ ui: { ...state.ui, screenEffect: 'none' } })), 1200);
     },
 
     resetState: () => set({
         gameHistory: initialHistory,
         gameWorld: initialWorld,
         character: EMPTY_CHARACTER,
-        view: 'landing',
         preTurnSnapshot: null,
-        pendingLore: []
+        pendingLore: [],
+        ui: initialUI
     })
 }));
