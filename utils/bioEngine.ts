@@ -1,4 +1,3 @@
-
 import { Character, BioMonitor, BioInputs } from '../types';
 
 interface BioRates {
@@ -108,8 +107,11 @@ const drainMetabolism = (
 const accumulatePressures = (bio: BioMonitor, char: Character, hours: number): void => {
     const lacRate = RATES.LACTATION * (bio.modifiers.lactation ?? 1.0);
     
-    // Biology continues during sleep. Checks gender and condition tags.
-    if (char.gender.toLowerCase().includes('female') || char.conditions.includes('Lactating')) {
+    // FIX: Only accumulate lactation pressure if the character has the 'Lactating' condition.
+    // Being female alone does NOT cause lactation — it requires an explicit condition
+    // (e.g. post-birth, hucow trait, drug effect, etc.) to be added via the narrative system.
+    // Previous bug: used || which made ALL female characters lactate unconditionally.
+    if (char.conditions.includes('Lactating')) {
         bio.pressures.lactation = Math.min(120, bio.pressures.lactation + (hours * lacRate));
     }
 };
@@ -191,35 +193,35 @@ export const BioEngine = {
         const bio = cloneBio(character.bio);
         const logs: string[] = [];
         
-        // 0. Freeze metabolism if no time passed and no inputs (prevents ghost drain)
-        if (minutes <= 0 && !inputs) {
-            return { bio, logs, addedConditions: [], removedConditions: [], traumaDelta: 0 };
-        }
-
+        // 0. Convert minutes to hours for all rate calculations
         const hours = minutes / 60;
+        if (hours <= 0) return { bio, logs: ['No time passed.'], addedConditions: [], removedConditions: [], traumaDelta: 0 };
+
         const isSleeping = (inputs?.sleep_hours ?? 0) > 0;
 
-        // 1. Process Replenishment
-        if (inputs) processIngestion(bio, inputs, logs);
+        // Phase 1: Process any inputs (eating, drinking, sleeping, relief)
+        if (inputs) {
+            processIngestion(bio, inputs, logs);
+        }
 
-        // 2. Process Metabolic Drain
+        // Phase 2: Drain metabolism
         drainMetabolism(bio, hours, isSleeping, tensionLevel);
 
-        // 3. Process Pressure Accumulation
+        // Phase 3: Accumulate pressures
         accumulatePressures(bio, character, hours);
 
-        // 4. Evaluate Negative Thresholds
-        const consequences = evaluateThresholds(bio, hours);
+        // Phase 4: Evaluate thresholds
+        const { added, trauma } = evaluateThresholds(bio, hours);
 
-        // 5. Apply Recovery Logic
-        const recovery = applyRecovery(bio);
+        // Phase 5: Apply recovery
+        const { removed } = applyRecovery(bio);
 
         return {
             bio,
             logs,
-            addedConditions: consequences.added,
-            removedConditions: recovery.removed,
-            traumaDelta: consequences.trauma
+            addedConditions: added,
+            removedConditions: removed,
+            traumaDelta: trauma
         };
     }
 };
