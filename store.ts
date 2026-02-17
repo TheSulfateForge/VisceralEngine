@@ -74,7 +74,8 @@ const initialWorld: GameWorld = {
     },
     sceneMode: 'NARRATIVE',
     tensionLevel: 10,
-    time: DEFAULT_TIME
+    time: DEFAULT_TIME,
+    lastWorldTickTurn: 0
 };
 
 interface UIState {

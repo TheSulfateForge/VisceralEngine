@@ -177,7 +177,18 @@ export const SimulationEngine = {
         
         // 9.5 World Tick Pipeline (v1.1: Proactive World)
         const worldTick = response.world_tick;
+        let lastWorldTickTurn = currentWorld.lastWorldTickTurn ?? 0;
+
         if (worldTick) {
+            // Check for meaningful activity (visible or hidden)
+            const hasActivity = (worldTick.npc_actions && worldTick.npc_actions.length > 0) || 
+                               (worldTick.environment_changes && worldTick.environment_changes.length > 0) || 
+                               (worldTick.emerging_threats && worldTick.emerging_threats.length > 0);
+            
+            if (hasActivity) {
+                lastWorldTickTurn = currentTurn;
+            }
+
             // Hidden NPC actions feed into the registry
             const hiddenActions = worldTick.npc_actions.filter(a => !a.player_visible);
             for (const action of hiddenActions) {
@@ -250,7 +261,8 @@ export const SimulationEngine = {
                 environment: nextEnv,
                 knownEntities: updatedKnownEntities,
                 sceneMode: response.scene_mode || 'NARRATIVE',
-                tensionLevel: tensionLevel
+                tensionLevel: tensionLevel,
+                lastWorldTickTurn // Added v1.1
             },
             characterUpdate: {
                 ...character,

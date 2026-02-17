@@ -353,6 +353,7 @@ export interface GameWorld {
   sceneMode: SceneMode;
   tensionLevel: number;
   time: WorldTime; // CHRONOS: Global Clock
+  lastWorldTickTurn: number; // v1.1 patch: tracks last turn with NPC activity
 }
 
 // Composite for Persistence

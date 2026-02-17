@@ -112,11 +112,11 @@ This is the player character. This data is ABSOLUTE TRUTH.
 const buildWorldPressure = (
     knownEntities: KnownEntity[], 
     turnCount: number, 
-    hiddenRegistry: string
+    lastWorldTickTurn: number
 ): string => {
     // Count turns since registry last had a WORLD-TICK entry
-    const registryLines = hiddenRegistry.split('\n').filter(l => l.includes('[WORLD-TICK]') || l.includes('[EMERGING]'));
-    const hasRecentWorldActivity = registryLines.length > 0;
+    const turnsSinceActivity = turnCount - lastWorldTickTurn;
+    const hasRecentWorldActivity = turnsSinceActivity < 4;
     
     // Build NPC goal summary from entities that have ledger entries suggesting active goals
     const activeNPCs = knownEntities
@@ -127,7 +127,7 @@ const buildWorldPressure = (
 
     // Every 4+ turns of low world activity, increase pressure
     const pressureNote = turnCount > 5 && !hasRecentWorldActivity 
-        ? `\n⚠ WARNING: The world has been static. At least one NPC MUST take a meaningful action this turn. Check their goals.`
+        ? `\n⚠ WARNING: The world has been static for ${turnsSinceActivity} turns. At least one NPC MUST take a meaningful action this turn. Check their goals.`
         : '';
 
     if (!activeNPCs) return '';
@@ -184,7 +184,7 @@ export const constructGeminiPrompt = (
   const worldPressure = buildWorldPressure(
       relevantEntities,
       gameHistory.turnCount,
-      gameWorld.hiddenRegistry
+      gameWorld.lastWorldTickTurn ?? 0
   );
 
   // 7. Assembly
