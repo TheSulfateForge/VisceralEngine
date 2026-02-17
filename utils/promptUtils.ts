@@ -109,6 +109,36 @@ This is the player character. This data is ABSOLUTE TRUTH.
     `.trim();
 };
 
+const buildWorldPressure = (
+    knownEntities: KnownEntity[], 
+    turnCount: number, 
+    hiddenRegistry: string
+): string => {
+    // Count turns since registry last had a WORLD-TICK entry
+    const registryLines = hiddenRegistry.split('\n').filter(l => l.includes('[WORLD-TICK]') || l.includes('[EMERGING]'));
+    const hasRecentWorldActivity = registryLines.length > 0;
+    
+    // Build NPC goal summary from entities that have ledger entries suggesting active goals
+    const activeNPCs = knownEntities
+        .filter(e => e.relationship_level !== 'NEUTRAL' || e.ledger.length > 2)
+        .slice(0, 6) // Cap to avoid prompt bloat
+        .map(e => `- ${e.name} [${e.relationship_level}]: "${e.impression}" — Ledger: ${e.ledger.slice(-2).join('; ')}`)
+        .join('\n');
+
+    // Every 4+ turns of low world activity, increase pressure
+    const pressureNote = turnCount > 5 && !hasRecentWorldActivity 
+        ? `\n⚠ WARNING: The world has been static. At least one NPC MUST take a meaningful action this turn. Check their goals.`
+        : '';
+
+    if (!activeNPCs) return '';
+
+    return `
+[NPC STATUS — These people have lives. What are they doing RIGHT NOW?]
+${activeNPCs}
+${pressureNote}
+    `.trim();
+};
+
 // --- Main Function ---
 
 export const constructGeminiPrompt = (
@@ -149,8 +179,15 @@ export const constructGeminiPrompt = (
     gameHistory.turnCount,
     currentMode as SceneMode
   );
+  
+  // 6. World Pressure (v1.1)
+  const worldPressure = buildWorldPressure(
+      relevantEntities,
+      gameHistory.turnCount,
+      gameWorld.hiddenRegistry
+  );
 
-  // 6. Assembly
+  // 7. Assembly
   const promptString = `
 [CONTEXT]
 ${memoryContext}
@@ -170,12 +207,15 @@ ${characterBlock}
 
 ${pacingInstruction}
 
+${worldPressure ? `\n${worldPressure}\n` : ''}
+
 [STRICT INPUT RULES]
 1. If the user input is mundane ("I look around"), do NOT ask for a roll. Just describe.
 2. If the user input is social ("I talk to him"), do NOT ask for a Charisma roll. Write the dialogue.
 3. Analyze the user's intent in your 'thought_process' first.
 4. Estimate \`time_passed_minutes\` accurately.
 5. Check the current Conditions list before adding new ones. Do NOT add conditions that semantically duplicate existing ones (e.g., do not add "Broken Left Arm" if "Left Arm Fractured" already exists). If a condition worsens, REMOVE the old one and ADD the new severity.
+6. Populate \`world_tick\` with at least one NPC action. The world does not pause.
 
 ${sectionRefresh ? `\n${sectionRefresh}\n` : ''}
 [INPUT]

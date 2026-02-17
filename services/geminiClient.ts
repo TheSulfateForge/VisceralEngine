@@ -170,6 +170,31 @@ export class GeminiClient {
 
         biological_event: asBoolean(safeData.biological_event),
         
+        // v1.1: World Tick validation
+        world_tick: isObject(safeData.world_tick) ? {
+            npc_actions: asArray<{ npc_name: string; action: string; player_visible: boolean }>(
+                safeData.world_tick.npc_actions
+            ).map((a: unknown) => {
+                const action = isObject(a) ? a : {};
+                return {
+                    npc_name: asString(action.npc_name, 'Unknown NPC'),
+                    action: asString(action.action, 'No action recorded'),
+                    player_visible: action.player_visible !== false // default true
+                };
+            }),
+            environment_changes: asArray<string>(safeData.world_tick.environment_changes)
+                .filter((s: unknown): s is string => typeof s === 'string'),
+            emerging_threats: asArray<{ description: string; turns_until_impact?: number }>(
+                safeData.world_tick.emerging_threats
+            ).map((t: unknown) => {
+                const threat = isObject(t) ? t : {};
+                return {
+                    description: asString(threat.description, 'Unknown threat'),
+                    turns_until_impact: asOptionalNumber(threat.turns_until_impact)
+                };
+            })
+        } : { npc_actions: [], environment_changes: [], emerging_threats: [] },
+        
         character_updates: isObject(safeData.character_updates) ? {
             added_conditions: asArray(safeData.character_updates.added_conditions),
             removed_conditions: asArray(safeData.character_updates.removed_conditions),
@@ -250,7 +275,8 @@ export class GeminiClient {
                   thought_process: "JSON Structure Collapse. Raw output passed to narrative.",
                   scene_mode: "NARRATIVE",
                   tension_level: 50,
-                  time_passed_minutes: 0
+                  time_passed_minutes: 0,
+                  world_tick: { npc_actions: [], environment_changes: [], emerging_threats: [] }
                };
           }
           throw new Error("Failed to parse model response structure.");
@@ -266,7 +292,8 @@ export class GeminiClient {
             thought_process: "Server Overload",
             scene_mode: "NARRATIVE",
             tension_level: 0,
-            time_passed_minutes: 0
+            time_passed_minutes: 0,
+            world_tick: { npc_actions: [], environment_changes: [], emerging_threats: [] }
           };
       }
       return { 
@@ -274,7 +301,8 @@ export class GeminiClient {
         thought_process: "System Failure.",
         scene_mode: "NARRATIVE",
         tension_level: 50,
-        time_passed_minutes: 0
+        time_passed_minutes: 0,
+        world_tick: { npc_actions: [], environment_changes: [], emerging_threats: [] }
       };
     }
   }

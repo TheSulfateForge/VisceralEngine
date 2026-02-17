@@ -174,6 +174,55 @@ export const SimulationEngine = {
         if (response.thought_process) {
             debugLogs.unshift({ timestamp: new Date().toISOString(), message: `[AI THOUGHT]: ${response.thought_process}`, type: 'info' });
         }
+        
+        // 9.5 World Tick Pipeline (v1.1: Proactive World)
+        const worldTick = response.world_tick;
+        if (worldTick) {
+            // Hidden NPC actions feed into the registry
+            const hiddenActions = worldTick.npc_actions.filter(a => !a.player_visible);
+            for (const action of hiddenActions) {
+                newHiddenRegistry += `\n[${newTime.display}] [WORLD-TICK] ${action.npc_name}: ${action.action}`;
+            }
+            
+            // Visible NPC actions get debug logs
+            const visibleActions = worldTick.npc_actions.filter(a => a.player_visible);
+            for (const action of visibleActions) {
+                debugLogs.push({ 
+                    timestamp: new Date().toISOString(), 
+                    message: `[WORLD] ${action.npc_name}: ${action.action}`, 
+                    type: 'info' 
+                });
+            }
+            if (hiddenActions.length > 0) {
+                debugLogs.push({ 
+                    timestamp: new Date().toISOString(), 
+                    message: `[WORLD] ${hiddenActions.length} hidden NPC action(s) logged to registry.`, 
+                    type: 'info' 
+                });
+            }
+            
+            // Environment changes get debug logs
+            for (const change of worldTick.environment_changes) {
+                debugLogs.push({ 
+                    timestamp: new Date().toISOString(), 
+                    message: `[ENV] ${change}`, 
+                    type: 'info' 
+                });
+            }
+            
+            // Emerging threats get logged and fed into registry for AI context
+            for (const threat of worldTick.emerging_threats) {
+                const eta = threat.turns_until_impact !== undefined 
+                    ? ` (ETA: ~${threat.turns_until_impact} turns)` 
+                    : '';
+                newHiddenRegistry += `\n[${newTime.display}] [EMERGING] ${threat.description}${eta}`;
+                debugLogs.push({ 
+                    timestamp: new Date().toISOString(), 
+                    message: `[THREAT SEED] ${threat.description}${eta}`, 
+                    type: 'warning' 
+                });
+            }
+        }
 
         // 10. Final State Assembly
         

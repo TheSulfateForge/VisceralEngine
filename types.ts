@@ -201,6 +201,25 @@ export interface CharacterUpdates {
   goals?: string[];
 }
 
+// --- World Tick Types (v1.1: Proactive World) ---
+
+export interface WorldTickAction {
+  npc_name: string;
+  action: string;
+  player_visible: boolean;
+}
+
+export interface WorldTickEvent {
+  description: string;
+  turns_until_impact?: number;
+}
+
+export interface WorldTick {
+  npc_actions: WorldTickAction[];
+  environment_changes: string[];
+  emerging_threats: WorldTickEvent[];
+}
+
 export interface ModelResponseSchema {
   thought_process: string; // New: Inner monologue for reasoning
   scene_mode: SceneMode; // New: Explicit state tracking
@@ -222,6 +241,9 @@ export interface ModelResponseSchema {
   new_memory?: { fact: string }; // MEMORY FRAGMENTS: AI can now save permanent history
   new_lore?: { keyword: string; content: string };
   biological_event?: boolean; 
+  
+  // v1.1: World Proactivity — REQUIRED every turn
+  world_tick?: WorldTick;
 }
 
 // --- Application Types ---

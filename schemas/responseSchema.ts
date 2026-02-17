@@ -162,7 +162,44 @@ export const RESPONSE_SCHEMA: Schema = {
     biological_event: { 
         type: Type.BOOLEAN, 
         description: "CONCEPTION TRIGGER: Set true ONLY when unprotected vaginal insemination physically occurs in the narrative. This triggers an automatic pregnancy roll. Do NOT set true for lactation, arousal, pheromone events, combat stress, or other biological activity that is not direct insemination."
+    },
+    world_tick: {
+      type: Type.OBJECT,
+      description: "WORLD PULSE — REQUIRED EVERY TURN. The world moves whether the player acts or not. Report what NPCs did, what changed in the environment, and what threats are developing. Even during mundane turns, NPCs pursue their goals. If nothing dramatic happened, report the mundane (a merchant restocked, guards changed shift, an ally ate breakfast). This field must NEVER be empty.",
+      properties: {
+        npc_actions: {
+          type: Type.ARRAY,
+          description: "What named NPCs did this turn — on-screen or off. At least one NPC should act per turn. Include scheming, traveling, working, socializing, or pursuing goals. Set player_visible=false for actions the player wouldn't know about yet.",
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              npc_name: { type: Type.STRING, description: "Name of the NPC taking action." },
+              action: { type: Type.STRING, description: "What they did. Be specific: 'Bribed the dock foreman for shipping manifests' not 'worked on her plan'." },
+              player_visible: { type: Type.BOOLEAN, description: "Would the player notice or learn about this? false = hidden (logged to registry only)." }
+            },
+            required: ["npc_name", "action", "player_visible"]
+          }
+        },
+        environment_changes: {
+          type: Type.ARRAY,
+          description: "Observable changes in the world: weather shifts, new postings on a board, a shop closing, a fire in a distant district, sounds from another room. Empty array [] only if truly nothing changed.",
+          items: { type: Type.STRING }
+        },
+        emerging_threats: {
+          type: Type.ARRAY,
+          description: "Developing situations that will affect the player soon. A gang consolidating territory, a storm approaching, a political shift, a bounty being posted. Empty array [] if no threats are developing.",
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              description: { type: Type.STRING, description: "What is developing." },
+              turns_until_impact: { type: Type.INTEGER, description: "Estimated turns before this affects the player directly. 0 = this turn. 1-3 = imminent. 4+ = distant." }
+            },
+            required: ["description"]
+          }
+        }
+      },
+      required: ["npc_actions", "environment_changes", "emerging_threats"]
     }
   },
-  required: ["thought_process", "scene_mode", "tension_level", "narrative"]
+  required: ["thought_process", "scene_mode", "tension_level", "narrative", "world_tick"]
 };
