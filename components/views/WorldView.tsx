@@ -175,7 +175,7 @@ export const WorldView: React.FC = () => {
                                 value={newMemoryFact}
                                 onChange={e => setNewMemoryFact(e.target.value)}
                                 className="w-full bg-black border border-gray-900 px-4 py-3 text-sm focus:border-red-900 outline-none text-gray-200 min-h-[80px] resize-none"
-                                placeholder="e.g. Lost left eye in duel with The Red King. / Took Valerius as a lover."
+                                placeholder="e.g. Lost left eye in duel with The Red King. / Took Contessa as a lover."
                             />
                         </div>
                         <div className="flex justify-end pt-2">

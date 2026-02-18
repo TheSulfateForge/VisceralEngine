@@ -95,7 +95,10 @@ export const useGeminiClient = () => {
         }
 
         const preCallState = useGameStore.getState();
-        const { prompt: contextPrompt, ragDebug } = constructGeminiPrompt(preCallState.gameHistory, preCallState.gameWorld, preCallState.character, text);
+        const playerRemovedConditions = preCallState.playerRemovedConditions;
+        useGameStore.getState().clearPlayerRemovedConditions();
+
+        const { prompt: contextPrompt, ragDebug } = constructGeminiPrompt(preCallState.gameHistory, preCallState.gameWorld, preCallState.character, text, playerRemovedConditions);
         
         // Debug Log the injected reminder if active
         const activeReminder = getSectionReminder(preCallState.gameHistory.turnCount, preCallState.gameWorld.sceneMode);
@@ -151,7 +154,8 @@ export const useGeminiClient = () => {
             response, 
             currentWorld, 
             tempCharUpdates, 
-            nextTurn
+            nextTurn,
+            playerRemovedConditions
         );
 
         // Deduplicate conditions on the final update (extracted to utils/characterUtils.ts)
