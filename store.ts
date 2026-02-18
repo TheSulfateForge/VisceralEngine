@@ -1,4 +1,3 @@
-
 import { create } from 'zustand';
 import { 
     GameHistory, 
@@ -119,6 +118,15 @@ interface GameStore {
     
     // Pending State
     pendingLore: LoreItem[];
+
+    /**
+     * Tracks conditions the player manually removed this session (via the character panel).
+     * Passed to BioEngine.tick() so the bio engine applies a grace buffer before
+     * re-imposing them. Reset to [] at the start of each new AI turn so that over
+     * time the engine can legitimately re-apply conditions if the underlying need
+     * genuinely deteriorates far enough.
+     */
+    playerRemovedConditions: string[];
     
     // UI State
     ui: UIState;
@@ -130,6 +138,11 @@ interface GameStore {
     setPreTurnSnapshot: (snapshot: { history: GameHistory; world: GameWorld; character: Character } | null) => void;
     
     setPendingLore: (update: LoreItem[] | ((prev: LoreItem[]) => LoreItem[])) => void;
+
+    /** Called by the character panel when a player manually removes a condition. */
+    addPlayerRemovedCondition: (condition: string) => void;
+    /** Called at the start of each AI turn to expire the grace period. */
+    clearPlayerRemovedConditions: () => void;
 
     // UI Actions
     setUI: (update: Partial<UIState>) => void;
@@ -148,6 +161,7 @@ export const useGameStore = create<GameStore>((set) => ({
     character: EMPTY_CHARACTER,
     preTurnSnapshot: null,
     pendingLore: [],
+    playerRemovedConditions: [],
     ui: initialUI,
 
     // Actions
@@ -166,6 +180,14 @@ export const useGameStore = create<GameStore>((set) => ({
         pendingLore: typeof update === 'function' ? update(state.pendingLore) : update
     })),
 
+    addPlayerRemovedCondition: (condition) => set((state) => ({
+        playerRemovedConditions: state.playerRemovedConditions.includes(condition)
+            ? state.playerRemovedConditions
+            : [...state.playerRemovedConditions, condition]
+    })),
+
+    clearPlayerRemovedConditions: () => set({ playerRemovedConditions: [] }),
+
     setUI: (update) => set((state) => ({
         ui: { ...state.ui, ...update }
     })),
@@ -181,6 +203,7 @@ export const useGameStore = create<GameStore>((set) => ({
         character: EMPTY_CHARACTER,
         preTurnSnapshot: null,
         pendingLore: [],
+        playerRemovedConditions: [],
         ui: initialUI
     })
 }));

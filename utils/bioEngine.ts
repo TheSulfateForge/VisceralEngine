@@ -119,31 +119,51 @@ const accumulatePressures = (bio: BioMonitor, char: Character, hours: number): v
 /**
  * Phase 4: Threshold Evaluation (Consequences)
  * Checks if current values should trigger negative conditions or trauma.
+ *
+ * playerRemovedConditions: Conditions the player manually cleared this session.
+ * These require a SEVERE breach (grace buffer applied) before the bio engine
+ * can re-impose them, preventing the "condition treadmill" exploit where the
+ * AI forces conditions back onto a player who just removed them.
+ *
+ * Grace buffer logic: a condition in playerRemovedConditions is only re-added
+ * if the underlying metric is 40% below the normal trigger threshold.
+ * Example: "Thirsty" normally triggers at hydration < 50.
+ *          With grace, it only re-triggers at hydration < 30 (50 * 0.6).
  */
-const evaluateThresholds = (bio: BioMonitor, hours: number): { added: string[], trauma: number } => {
+const GRACE_FACTOR = 0.6; // Multiply normal threshold by this to get the grace threshold
+
+const evaluateThresholds = (
+    bio: BioMonitor,
+    hours: number,
+    playerRemovedConditions: string[] = []
+): { added: string[], trauma: number } => {
     const added: string[] = [];
     let trauma = 0;
 
+    const gracedOut = (condition: string) => playerRemovedConditions.includes(condition);
+
     // Hydration Thresholds
     if (bio.metabolism.hydration < 5) {
+        // Critical Dehydration is life-threatening — always apply regardless of grace
         added.push('Critical Dehydration');
         trauma += (0.5 * hours);
-    } else if (bio.metabolism.hydration < 25) {
+    } else if (bio.metabolism.hydration < (gracedOut('Severe Dehydration') ? 25 * GRACE_FACTOR : 25)) {
         added.push('Severe Dehydration');
-    } else if (bio.metabolism.hydration < 50) {
+    } else if (bio.metabolism.hydration < (gracedOut('Thirsty') ? 50 * GRACE_FACTOR : 50)) {
         added.push('Thirsty');
     }
 
     // Calorie Thresholds
     if (bio.metabolism.calories < 5) {
+        // Starving is life-threatening — always apply regardless of grace
         added.push('Starving');
         trauma += (0.2 * hours);
-    } else if (bio.metabolism.calories < 30) {
+    } else if (bio.metabolism.calories < (gracedOut('Hungry') ? 30 * GRACE_FACTOR : 30)) {
         added.push('Hungry');
     }
 
     // Stamina Thresholds
-    if (bio.metabolism.stamina < 5) {
+    if (bio.metabolism.stamina < (gracedOut('Exhausted') ? 5 * GRACE_FACTOR : 5)) {
         added.push('Exhausted');
         trauma += (0.1 * hours);
     }
@@ -152,7 +172,7 @@ const evaluateThresholds = (bio: BioMonitor, hours: number): { added: string[], 
     if (bio.pressures.lactation > 100) {
         added.push('Agonizing Engorgement', 'Leaking');
         trauma += (0.1 * hours);
-    } else if (bio.pressures.lactation > 75) {
+    } else if (bio.pressures.lactation > (gracedOut('Swollen Breasts') ? 75 / GRACE_FACTOR : 75)) {
         added.push('Swollen Breasts');
     }
 
@@ -189,7 +209,23 @@ const applyRecovery = (bio: BioMonitor): { removed: string[] } => {
  * Main Bio Engine
  */
 export const BioEngine = {
-    tick(character: Character, minutes: number, tensionLevel: number, inputs?: BioInputs): BioResult {
+    /**
+     * @param character           Current character state
+     * @param minutes             Time elapsed this turn (in minutes)
+     * @param tensionLevel        Current scene tension (0-100)
+     * @param inputs              Biological inputs from AI (food/water/sleep)
+     * @param playerRemovedConditions Conditions the player manually cleared this turn.
+     *                            The bio engine applies a grace buffer before re-imposing
+     *                            these, preventing the "condition treadmill" where the
+     *                            engine immediately re-adds what the player just removed.
+     */
+    tick(
+        character: Character,
+        minutes: number,
+        tensionLevel: number,
+        inputs?: BioInputs,
+        playerRemovedConditions: string[] = []
+    ): BioResult {
         const bio = cloneBio(character.bio);
         const logs: string[] = [];
         
@@ -210,8 +246,8 @@ export const BioEngine = {
         // Phase 3: Accumulate pressures
         accumulatePressures(bio, character, hours);
 
-        // Phase 4: Evaluate thresholds
-        const { added, trauma } = evaluateThresholds(bio, hours);
+        // Phase 4: Evaluate thresholds (respects player-removed condition grace period)
+        const { added, trauma } = evaluateThresholds(bio, hours, playerRemovedConditions);
 
         // Phase 5: Apply recovery
         const { removed } = applyRecovery(bio);

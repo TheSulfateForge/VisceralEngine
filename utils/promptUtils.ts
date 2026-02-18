@@ -1,5 +1,4 @@
-
-import { GameHistory, GameWorld, Character, SceneMode, MemoryItem, LoreItem, KnownEntity, BioMonitor } from '../types';
+import { GameHistory, GameWorld, Character, SceneMode, MemoryItem, LoreItem, KnownEntity, BioMonitor, ActiveThreat } from '../types';
 import { retrieveRelevantContext, RAGResult } from './ragEngine';
 import { getSectionReminder } from '../sectionReminders';
 
@@ -141,11 +140,56 @@ ${pressureNote}
 
 // --- Main Function ---
 
+/**
+ * Builds a hard scope lock block for combat/tension encounters.
+ * Prevents the AI from retroactively introducing entities (tracking hounds,
+ * reinforcements, mages) that were never established in the scene.
+ */
+const buildEncounterScopeLock = (activeThreats: ActiveThreat[]): string => {
+    if (!activeThreats || activeThreats.length === 0) return '';
+    const threatList = activeThreats
+        .map(t => `- ${t.name} [${t.archetype}] — Status: ${t.status}, Condition: ${t.condition}`)
+        .join('\n');
+    return `
+[⚠ ENCOUNTER SCOPE LOCK — CONSISTENCY ENFORCEMENT]
+The ONLY hostile entities present in this encounter are those listed below. This list is ABSOLUTE.
+You may NOT retroactively introduce new enemy types, creatures, reinforcements, or assets
+(e.g. tracking hounds, mages, backup squads) that do not already appear here.
+If new forces arrive, they must be seeded as an emerging_threat FIRST and arrive in a future turn.
+Violating this rule breaks simulation consistency and is a SYSTEM ERROR.
+
+ESTABLISHED HOSTILE ENTITIES:
+${threatList}
+    `.trim();
+};
+
+/**
+ * Builds a condition lock block when the player has manually removed conditions.
+ * Informs the AI that these conditions were deliberately cleared and must NOT
+ * be re-added via character_updates unless strong new narrative evidence justifies it.
+ */
+const buildConditionLock = (playerRemovedConditions: string[]): string => {
+    if (!playerRemovedConditions || playerRemovedConditions.length === 0) return '';
+    const list = playerRemovedConditions.map(c => `- ${c}`).join('\n');
+    return `
+[⚠ CONDITION LOCK — PLAYER-CLEARED STATES]
+The player manually removed the following conditions this turn. Do NOT re-add them via
+\`character_updates.added_conditions\` unless this turn's narrative contains a direct,
+specific new cause for each condition. "The character is still dehydrated" is NOT sufficient —
+you must describe a concrete new event that would cause the condition to return.
+Player action already addressed these conditions. Respect that.
+
+CLEARED CONDITIONS (do not re-add without new narrative cause):
+${list}
+    `.trim();
+};
+
 export const constructGeminiPrompt = (
   gameHistory: GameHistory,
   gameWorld: GameWorld,
   character: Character,
-  userInput: string
+  userInput: string,
+  playerRemovedConditions: string[] = []
 ): PromptResult => {
   // 1. RAG Retrieval
   const activeThreatNames = (gameWorld.activeThreats || []).map(t => t.name);
@@ -187,7 +231,11 @@ export const constructGeminiPrompt = (
       gameWorld.lastWorldTickTurn ?? 0
   );
 
-  // 7. Assembly
+  // 7. Narrative Integrity Guards (v1.2)
+  const encounterScopeLock = buildEncounterScopeLock(gameWorld.activeThreats || []);
+  const conditionLock = buildConditionLock(playerRemovedConditions);
+
+  // 8. Assembly
   const promptString = `
 [CONTEXT]
 ${memoryContext}
@@ -208,6 +256,8 @@ ${characterBlock}
 ${pacingInstruction}
 
 ${worldPressure ? `\n${worldPressure}\n` : ''}
+${encounterScopeLock ? `\n${encounterScopeLock}\n` : ''}
+${conditionLock ? `\n${conditionLock}\n` : ''}
 
 [STRICT INPUT RULES]
 1. If the user input is mundane ("I look around"), do NOT ask for a roll. Just describe.

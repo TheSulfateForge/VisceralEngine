@@ -1,4 +1,3 @@
-
 import { SceneMode } from './types';
 
 // Condensed reinforcements derived from SYSTEM_INSTRUCTIONS
@@ -37,6 +36,26 @@ NPCs are NOT furniture.
 5. Write EVERYTHING in real-time. Only the PLAYER can skip scenes.
 6. Pleasure and threat receive equal narrative depth and specificity.`,
 
+  // v1.2: New reminder — Narrative Integrity (counterbalances FIDELITY's escalation bias)
+  NARRATIVE_INTEGRITY: `[SYSTEM REMINDER: NARRATIVE INTEGRITY — CONSISTENCY CHECK]
+Before writing this turn, verify in your thought_process:
+
+ENCOUNTER SCOPE: Are any enemies or entities present that were NOT established in a prior turn?
+→ If yes, you are retconning. Remove them. New forces must be seeded as emerging_threats first.
+
+CONDITIONS: Are you adding conditions to the character?
+→ For EACH condition: did THIS TURN's narrative contain a specific direct cause? One bad moment ≠ multiple new conditions.
+→ Are any of these conditions recently cleared by the player? If so, you need a stronger new cause.
+
+NEW LORE: Are you proposing new_lore?
+→ Does it document something discovered THIS TURN, or does it retroactively justify something you already wrote?
+→ Retroactive lore that worsens the player's position (new enemy capabilities, factions, etc.) is a SIMULATION FAILURE.
+
+THREAT SCALE: Are emerging threats proportional to the established faction's known resources?
+→ A small patrol → small manhunt, not a kingdom-wide dragnet with magical assets.
+
+FIDELITY renders everything. INTEGRITY ensures what's rendered is consistent. Both rules apply.`,
+
   // v1.1: New reminder — World Proactivity
   WORLD_PULSE: `[SYSTEM REMINDER: WORLD PULSE — PROACTIVITY CHECK]
 The world_tick field is REQUIRED. Before writing your narrative:
@@ -61,15 +80,19 @@ export const getSectionReminder = (turnCount: number, mode: SceneMode): string |
   // Priority 3: Combat Tactics (Combat Mode Only, every 3 turns)
   if (mode === 'COMBAT' && turnCount % 3 === 0) return REMINDERS.COMBAT;
 
-  // Priority 4: Simulation Fidelity (Every 6 turns, or on SOCIAL/COMBAT mode transitions)
+  // Priority 4: Narrative Integrity (Every 5 turns) — fires BEFORE FIDELITY to counterbalance
+  // escalation bias. Reminds the AI that consistency is as important as content depth.
+  if (turnCount % 5 === 0) return REMINDERS.NARRATIVE_INTEGRITY;
+
+  // Priority 5: Simulation Fidelity (Every 6 turns)
   if (turnCount % 6 === 0) return REMINDERS.FIDELITY;
 
-  // Priority 5: World Pulse (Every 3 turns during NARRATIVE, every 5 otherwise)
+  // Priority 6: World Pulse (Every 3 turns during NARRATIVE, every 7 otherwise)
   if (mode === 'NARRATIVE' && turnCount % 3 === 0) return REMINDERS.WORLD_PULSE;
-  if (turnCount % 5 === 0) return REMINDERS.WORLD_PULSE;
+  if (turnCount % 7 === 0) return REMINDERS.WORLD_PULSE;
 
-  // Priority 6 (fallback): NPC Autonomy (Every 7 turns — less frequent now that WORLD_PULSE covers it)
-  if (turnCount % 7 === 0) return REMINDERS.NPC;
+  // Priority 7 (fallback): NPC Autonomy (Every 9 turns)
+  if (turnCount % 9 === 0) return REMINDERS.NPC;
 
   return null;
 };

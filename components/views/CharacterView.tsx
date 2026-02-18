@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { useGameStore } from '../../store';
 import { useGeminiClient } from '../../hooks/useGeminiClient';
@@ -15,6 +14,7 @@ const EditableList: React.FC<{
     borderColor?: string;
 }> = ({ label, items, field, character, setCharacter, isEditing, borderColor = 'border-red-900' }) => {
     const [newItem, setNewItem] = useState('');
+    const { addPlayerRemovedCondition } = useGameStore();
 
     const addItem = () => {
         if (!newItem.trim()) return;
@@ -26,6 +26,11 @@ const EditableList: React.FC<{
     };
 
     const removeItem = (index: number) => {
+        // If the player is manually removing a condition, register it for the
+        // bio engine grace period so it isn't immediately re-imposed next turn.
+        if (field === 'conditions') {
+            addPlayerRemovedCondition(items[index]);
+        }
         setCharacter(prev => ({
             ...prev,
             [field]: prev[field].filter((_, i) => i !== index)

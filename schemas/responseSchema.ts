@@ -1,4 +1,3 @@
-
 import { Schema, Type } from "@google/genai";
 import { SCENE_MODES, LIGHTING_LEVELS } from "../types";
 
@@ -153,10 +152,10 @@ export const RESPONSE_SCHEMA: Schema = {
     new_lore: {
       type: Type.OBJECT,
       nullable: true,
-      description: "WORLD LORE: Record discovered facts about the world, setting, or creatures. Use sparingly — only for genuinely new information revealed through exploration or observation. Do NOT invent new biological rules, racial mechanics, or physiological systems that weren't established in the character backstory or setting. Lore should DESCRIBE what exists, not CREATE new constraints on the player character.",
+      description: "WORLD LORE — STRICT DISCOVERY ONLY: Record facts the player directly discovered or witnessed THIS TURN through exploration, observation, or NPC disclosure. VALID: A note found describing guard patrol schedules. A captured enemy revealing their faction's base location. INVALID: Retroactively establishing that 'tracking hounds were always part of this patrol' to justify something you've already written. INVALID: Inventing new enemy capabilities, faction assets, or world rules that weren't established before this turn and happen to worsen the player's position. Lore DOCUMENTS what was discovered. It does NOT retroactively create facts to support narrative decisions already made. Do NOT invent new biological rules, racial mechanics, or physiological systems not established in backstory. One entry per turn maximum. If in doubt, skip it.",
       properties: {
         keyword: { type: Type.STRING, description: "Short identifier for this lore entry (e.g., 'Kobold Tactics', 'Floor 1 Layout')" },
-        content: { type: Type.STRING, description: "Factual description of the discovered information. Must be observational, not prescriptive." }
+        content: { type: Type.STRING, description: "Factual description of the discovered information. Must describe something actually encountered this turn. Must be observational, not prescriptive, and must not retroactively add threats or capabilities to existing established entities." }
       }
     },
     biological_event: { 

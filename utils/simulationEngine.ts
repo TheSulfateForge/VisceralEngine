@@ -1,4 +1,3 @@
-
 import { ModelResponseSchema, GameWorld, DebugLogEntry, LoreItem, Character, MemoryItem, SceneMode, WorldTime } from '../types';
 import { ReproductionSystem } from './reproductionSystem';
 import { BioEngine } from './bioEngine';
@@ -71,7 +70,8 @@ export const SimulationEngine = {
         response: ModelResponseSchema, 
         currentWorld: GameWorld, 
         character: Character,
-        currentTurn: number
+        currentTurn: number,
+        playerRemovedConditions: string[] = []
     ): SimulationResult => {
         const debugLogs: DebugLogEntry[] = [];
         const logs: string[] = []; // Temporary log buffer
@@ -90,7 +90,8 @@ export const SimulationEngine = {
 
         // 2. Biology Pipeline (Delegated to BioEngine)
         const tensionLevel = response.tension_level ?? currentWorld.tensionLevel;
-        const bioResult = BioEngine.tick(character, timeDelta, tensionLevel, response.biological_inputs);
+        // Pass playerRemovedConditions so the bio engine respects player-cleared conditions
+        const bioResult = BioEngine.tick(character, timeDelta, tensionLevel, response.biological_inputs, playerRemovedConditions);
         
         // Log Bio results
         bioResult.logs.forEach(l => debugLogs.push({ timestamp: new Date().toISOString(), message: `[BIO] ${l}`, type: 'success' }));
