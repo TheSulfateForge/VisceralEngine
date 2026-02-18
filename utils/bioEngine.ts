@@ -183,24 +183,25 @@ const evaluateThresholds = (
  * Phase 5: Recovery (Healing)
  * Checks if current values are healthy enough to remove negative conditions.
  */
-const applyRecovery = (bio: BioMonitor): { removed: string[] } => {
+const applyRecovery = (bio: BioMonitor, activeConditions: string[]): { removed: string[] } => {
+    const has = (c: string) => activeConditions.includes(c);
     const removed: string[] = [];
 
     // Hydration Recovery
-    if (bio.metabolism.hydration > 10) removed.push('Critical Dehydration');
-    if (bio.metabolism.hydration > 30) removed.push('Severe Dehydration');
-    if (bio.metabolism.hydration > 60) removed.push('Thirsty');
+    if (has('Critical Dehydration') && bio.metabolism.hydration > 10) removed.push('Critical Dehydration');
+    if (has('Severe Dehydration') && bio.metabolism.hydration > 30) removed.push('Severe Dehydration');
+    if (has('Thirsty') && bio.metabolism.hydration > 60) removed.push('Thirsty');
 
     // Calorie Recovery
-    if (bio.metabolism.calories > 10) removed.push('Starving');
-    if (bio.metabolism.calories > 40) removed.push('Hungry');
+    if (has('Starving') && bio.metabolism.calories > 10) removed.push('Starving');
+    if (has('Hungry') && bio.metabolism.calories > 40) removed.push('Hungry');
 
     // Stamina Recovery
-    if (bio.metabolism.stamina > 20) removed.push('Exhausted');
+    if (has('Exhausted') && bio.metabolism.stamina > 20) removed.push('Exhausted');
 
     // Lactation Recovery
-    if (bio.pressures.lactation < 90) removed.push('Agonizing Engorgement');
-    if (bio.pressures.lactation < 60) removed.push('Swollen Breasts');
+    if (has('Agonizing Engorgement') && bio.pressures.lactation < 90) removed.push('Agonizing Engorgement');
+    if (has('Swollen Breasts') && bio.pressures.lactation < 60) removed.push('Swollen Breasts');
 
     return { removed };
 };
@@ -249,8 +250,8 @@ export const BioEngine = {
         // Phase 4: Evaluate thresholds (respects player-removed condition grace period)
         const { added, trauma } = evaluateThresholds(bio, hours, playerRemovedConditions);
 
-        // Phase 5: Apply recovery
-        const { removed } = applyRecovery(bio);
+        // Phase 5: Apply recovery (only removes conditions the character actually has)
+        const { removed } = applyRecovery(bio, character.conditions);
 
         return {
             bio,
