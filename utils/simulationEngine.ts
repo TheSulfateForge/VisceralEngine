@@ -2,6 +2,12 @@ import { ModelResponseSchema, GameWorld, DebugLogEntry, LoreItem, Character, Mem
 import { ReproductionSystem } from './reproductionSystem';
 import { BioEngine } from './bioEngine';
 import { generateLoreId, generateMemoryId } from '../idUtils';
+import {
+    validateResponse,
+    decayBioModifiers,
+    findExpiredConditions,
+    checkMemoryDuplicate,
+} from './contentValidation';
 
 interface SimulationResult {
     worldUpdate: GameWorld;
@@ -150,6 +156,9 @@ export const SimulationEngine = {
         }
 
         // 8. Lore & Memory Pipeline
+
+        // --- Lore ---
+        // Pass through to LoreApprovalModal for user review; dedup happens there
         const pendingLore: LoreItem[] = response.new_lore ? [{
             id: generateLoreId(),
             keyword: response.new_lore.keyword,
@@ -161,14 +170,56 @@ export const SimulationEngine = {
              debugLogs.push({ timestamp: new Date().toISOString(), message: `Pending Lore Generated: "${response.new_lore.keyword}"`, type: 'info' });
         }
 
-        const newMemory: MemoryItem[] = response.new_memory ? [{
-            id: generateMemoryId(),
-            fact: response.new_memory.fact,
-            timestamp: new Date().toISOString()
-        }] : [];
-        
+        // --- Memory (with semantic deduplication) ---
+        let finalMemory = [...currentWorld.memory];
         if (response.new_memory) {
-            debugLogs.push({ timestamp: new Date().toISOString(), message: `Memory Engram Created: "${response.new_memory.fact}"`, type: 'success' });
+            const { isDuplicate, isUpdate, existingIndex } = checkMemoryDuplicate(
+                response.new_memory.fact,
+                currentWorld.memory
+            );
+
+            if (isDuplicate) {
+                debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    message: `[MEMORY] Duplicate fragment suppressed (matches fragment #${existingIndex}): "${response.new_memory.fact.substring(0, 80)}"`,
+                    type: 'info'
+                });
+            } else if (isUpdate) {
+                // New fact is more specific — replace the existing one
+                const updated = [...currentWorld.memory];
+                updated[existingIndex] = {
+                    id: updated[existingIndex].id, // preserve original ID
+                    fact: response.new_memory.fact,
+                    timestamp: new Date().toISOString()
+                };
+                finalMemory = updated;
+                debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    message: `[MEMORY] Fragment updated (supersedes #${existingIndex}): "${response.new_memory.fact.substring(0, 80)}"`,
+                    type: 'success'
+                });
+            } else {
+                finalMemory = [...currentWorld.memory, {
+                    id: generateMemoryId(),
+                    fact: response.new_memory.fact,
+                    timestamp: new Date().toISOString()
+                }];
+                debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    message: `[MEMORY] Engram Created: "${response.new_memory.fact.substring(0, 80)}"`,
+                    type: 'success'
+                });
+            }
+        }
+
+        // --- Banned Name Validation ---
+        const { bannedNameViolations } = validateResponse(response);
+        if (bannedNameViolations.length > 0) {
+            debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[⚠ BANNED NAME VIOLATION] AI used forbidden name(s): ${bannedNameViolations.join(', ')} — check narrative for [RENAME:X] markers`,
+                type: 'warning'
+            });
         }
 
         // 9. Thought Process
@@ -238,7 +289,8 @@ export const SimulationEngine = {
 
         // 10. Final State Assembly
         
-        // Merge Conditions: Original + Bio Added - Bio Removed
+        // --- Condition Pipeline ---
+        // Merge: Original + Bio Added - Bio Removed
         let finalConditions = [...character.conditions];
         if (bioResult.removedConditions.length > 0) {
             finalConditions = finalConditions.filter(c => !bioResult.removedConditions.includes(c));
@@ -248,6 +300,48 @@ export const SimulationEngine = {
             if (!finalConditions.includes(c)) finalConditions.push(c);
         });
 
+        // --- Timed Condition Expiry ---
+        // Build/update conditionTimestamps: stamp any newly added conditions with the current time
+        const updatedTimestamps: Record<string, number> = { ...(character.conditionTimestamps ?? {}) };
+        // Stamp new conditions that were just added this turn
+        for (const c of bioResult.addedConditions) {
+            if (!(c in updatedTimestamps)) {
+                updatedTimestamps[c] = newTime.totalMinutes;
+            }
+        }
+        // Also stamp conditions the AI added via character_updates (already merged into finalConditions)
+        for (const c of finalConditions) {
+            if (!(c in updatedTimestamps)) {
+                updatedTimestamps[c] = newTime.totalMinutes;
+            }
+        }
+        // Expire timed conditions whose duration has elapsed
+        const expiredConditions = findExpiredConditions(finalConditions, updatedTimestamps, newTime.totalMinutes);
+        if (expiredConditions.length > 0) {
+            finalConditions = finalConditions.filter(c => !expiredConditions.includes(c));
+            expiredConditions.forEach(c => {
+                delete updatedTimestamps[c];
+                debugLogs.push({ timestamp: new Date().toISOString(), message: `[TIMED-EXPIRY] Condition Elapsed: ${c}`, type: 'success' });
+            });
+        }
+        // Remove timestamps for conditions that are no longer active
+        for (const key of Object.keys(updatedTimestamps)) {
+            if (!finalConditions.includes(key)) delete updatedTimestamps[key];
+        }
+
+        // --- Bio Modifier Passive Decay ---
+        // Modifiers set by the AI during exertion/combat gradually return to 1.0
+        // unless held in place by an active condition that justified them.
+        const decayedModifiers = decayBioModifiers(bioResult.bio.modifiers);
+        const modifiersChanged = JSON.stringify(decayedModifiers) !== JSON.stringify(bioResult.bio.modifiers);
+        if (modifiersChanged) {
+            debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[BIO-DECAY] Modifiers decaying toward baseline: cal×${decayedModifiers.calories.toFixed(2)} hyd×${decayedModifiers.hydration.toFixed(2)} sta×${decayedModifiers.stamina.toFixed(2)}`,
+                type: 'info'
+            });
+        }
+
         const finalTrauma = Math.min(100, Math.max(0, (character.trauma || 0) + bioResult.traumaDelta));
 
         return {
@@ -255,7 +349,7 @@ export const SimulationEngine = {
                 ...currentWorld,
                 time: newTime,
                 lore: currentWorld.lore, // Lore updates are pending user approval
-                memory: [...currentWorld.memory, ...newMemory],
+                memory: finalMemory,
                 hiddenRegistry: trimHiddenRegistry(newHiddenRegistry),
                 pregnancies: currentPregnancies,
                 activeThreats: nextThreats,
@@ -267,8 +361,12 @@ export const SimulationEngine = {
             },
             characterUpdate: {
                 ...character,
-                bio: bioResult.bio,
+                bio: {
+                    ...bioResult.bio,
+                    modifiers: decayedModifiers,
+                },
                 conditions: finalConditions,
+                conditionTimestamps: updatedTimestamps,
                 trauma: finalTrauma
             },
             debugLogs,

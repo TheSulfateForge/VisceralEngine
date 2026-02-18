@@ -1,6 +1,7 @@
 import { GameHistory, GameWorld, Character, SceneMode, MemoryItem, LoreItem, KnownEntity, BioMonitor, ActiveThreat } from '../types';
 import { retrieveRelevantContext, RAGResult } from './ragEngine';
 import { getSectionReminder } from '../sectionReminders';
+import { partitionConditions } from './contentValidation';
 
 const DOWNTIME_KEYWORDS = [
   'sleep', 'rest', 'wait', 'camp', 'hide', 
@@ -93,6 +94,16 @@ The simulation is running standard narrative protocols.
 };
 
 const buildCharacterBlock = (character: Character): string => {
+    // Partition conditions: long personality/trait paragraphs that leaked in from
+    // character creation are separated from short mechanical game-states.
+    // Traits go into the CHARACTER TRAITS section (read-only context for the AI).
+    // Active conditions go into the CONDITIONS field (the AI may add/remove these).
+    const { active: activeConditions, traits } = partitionConditions(character.conditions);
+
+    const traitsSection = traits.length > 0
+        ? `\n- **Character Traits (fixed, do NOT add/remove via character_updates):**\n${traits.map(t => `  • ${t}`).join('\n')}`
+        : '';
+
     return `
 **Primary Directive: Player Character Data**
 This is the player character. This data is ABSOLUTE TRUTH.
@@ -102,7 +113,7 @@ This is the player character. This data is ABSOLUTE TRUTH.
 - **Backstory:** ${character.backstory}
 - **Setting:** ${character.setting}
 - **Inventory:** ${character.inventory.join(', ')}
-- **Conditions:** ${character.conditions.join(', ')}
+- **Active Conditions (mechanical game-states, may be updated):** ${activeConditions.length > 0 ? activeConditions.join(', ') : 'None'}${traitsSection}
 - **Relationships:** ${character.relationships.join(', ')}
 - **Goals:** ${character.goals.join(', ')}
     `.trim();

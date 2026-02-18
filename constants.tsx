@@ -1,4 +1,3 @@
-
 // ============================================================================
 // CONSTANTS.TSX - All Constants and Configuration
 // ============================================================================
@@ -67,6 +66,19 @@ export const ROLL_OUTCOMES: Record<RollOutcome, { min?: number; max?: number }> 
   'STRONG SUCCESS': { min: 17, max: 19 },
   'CRITICAL SUCCESS': { min: 20 },
 } as const;
+
+// ============================================================================
+// BANNED NAMES (mirrors the FORBIDDEN VOCABULARY list in systemInstructions.ts)
+// Used by runtime validation to catch AI violations before they enter saved state.
+// When updating systemInstructions, update this list too.
+// ============================================================================
+
+export const BANNED_NAMES: readonly string[] = [
+  'Elara', 'Kaela', 'Lyra', 'Aria', 'Kaelith', 'Kaelin', 'Kael', 'Anya',
+  'Vex', 'Velarius', 'Kaelen', 'Fenris', 'Nyx', 'Vane', 'Thorne', 'Thorn',
+  'Valerius', 'Seraphina', 'Aurelia', 'Isolde', 'Rowan', 'Raven', 'Zephyr',
+  'Sable', 'Draven', 'Aethelgard', 'Kaelthas',
+] as const;
 
 // ============================================================================
 // CONDITION SEVERITY KEYWORDS

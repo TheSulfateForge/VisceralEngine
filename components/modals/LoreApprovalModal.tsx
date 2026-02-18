@@ -1,8 +1,8 @@
-
 import React, { useState } from 'react';
 import { LoreItem } from '../../types';
 import { useGameStore } from '../../store';
 import { useToast } from '../providers/ToastProvider';
+import { findExistingLore } from '../../utils/contentValidation';
 
 export const LoreApprovalModal: React.FC = () => {
     const { pendingLore, setPendingLore, setGameWorld } = useGameStore();
@@ -13,15 +13,30 @@ export const LoreApprovalModal: React.FC = () => {
 
     const current = pendingLore[0];
 
+    // Check if this keyword already exists in canonical lore
+    const existingLore = useGameStore.getState().gameWorld.lore;
+    const duplicate = findExistingLore(current.keyword, existingLore);
+
     const handleApprove = (lore: LoreItem) => {
-        // Add to canonical lore
         setGameWorld(prev => ({
             ...prev,
             lore: [...prev.lore, lore]
         }));
-        // Remove from queue
         setPendingLore(prev => prev.slice(1));
         showToast(`Lore Accepted: ${lore.keyword}`, 'success');
+        setEditingContent(null);
+    };
+
+    const handleReplace = (lore: LoreItem) => {
+        // Replace the existing entry with the same keyword
+        setGameWorld(prev => ({
+            ...prev,
+            lore: prev.lore.map(l =>
+                l.keyword.toLowerCase() === lore.keyword.toLowerCase() ? lore : l
+            )
+        }));
+        setPendingLore(prev => prev.slice(1));
+        showToast(`Lore Updated: ${lore.keyword}`, 'success');
         setEditingContent(null);
     };
 
@@ -38,7 +53,8 @@ export const LoreApprovalModal: React.FC = () => {
 
     const handleSaveEdit = () => {
         if (editingContent !== null) {
-            handleApprove({ ...current, content: editingContent });
+            const edited = { ...current, content: editingContent };
+            duplicate ? handleReplace(edited) : handleApprove(edited);
         }
     };
 
@@ -50,7 +66,7 @@ export const LoreApprovalModal: React.FC = () => {
                     <span className="text-amber-500 text-lg">⚡</span>
                     <div className="flex-1">
                         <h3 className="text-sm font-bold uppercase tracking-[0.2em] text-amber-400">
-                            New World Lore Discovered
+                            {duplicate ? 'Lore Update — Duplicate Keyword' : 'New World Lore Discovered'}
                         </h3>
                         <p className="text-[9px] text-gray-500 uppercase tracking-widest mt-1">
                             AI-Generated — Requires Your Approval
@@ -62,6 +78,24 @@ export const LoreApprovalModal: React.FC = () => {
                         </span>
                     )}
                 </div>
+
+                {/* Duplicate warning */}
+                {duplicate && (
+                    <div className="bg-amber-950/30 border border-amber-700/40 px-4 py-3 rounded-sm">
+                        <p className="text-[9px] text-amber-500 uppercase tracking-widest mb-2 font-bold">
+                            ⚠ Duplicate Keyword Detected
+                        </p>
+                        <p className="text-[10px] text-gray-400 leading-relaxed mb-2">
+                            <span className="text-amber-300 font-bold">[{duplicate.keyword}]</span> already exists in world canon:
+                        </p>
+                        <p className="text-[10px] text-gray-500 italic leading-relaxed">
+                            "{duplicate.content.substring(0, 120)}{duplicate.content.length > 120 ? '...' : ''}"
+                        </p>
+                        <p className="text-[9px] text-gray-600 mt-2">
+                            Approve to <span className="text-amber-400">add alongside</span> the existing entry, or use Replace to <span className="text-red-400">overwrite</span> it.
+                        </p>
+                    </div>
+                )}
 
                 {/* Keyword */}
                 <div className="bg-amber-950/20 border border-amber-900/20 px-4 py-2 rounded-sm">
@@ -97,11 +131,19 @@ export const LoreApprovalModal: React.FC = () => {
                 {/* Actions */}
                 <div className="flex gap-2 pt-2">
                     <button
-                        onClick={() => editingContent !== null ? handleSaveEdit() : handleApprove(current)}
+                        onClick={() => editingContent !== null ? handleSaveEdit() : (duplicate ? handleApprove(current) : handleApprove(current))}
                         className="flex-1 py-3 bg-amber-900 text-white text-[10px] font-bold uppercase tracking-widest hover:bg-amber-700 transition-all border border-amber-800/50"
                     >
                         {editingContent !== null ? 'Save & Approve' : 'Approve'}
                     </button>
+                    {duplicate && editingContent === null && (
+                        <button
+                            onClick={() => handleReplace(current)}
+                            className="flex-1 py-3 bg-orange-950 text-orange-400 text-[10px] font-bold uppercase tracking-widest hover:bg-orange-900 transition-all border border-orange-800/40"
+                        >
+                            Replace Existing
+                        </button>
+                    )}
                     {editingContent === null && (
                         <button
                             onClick={handleEdit}

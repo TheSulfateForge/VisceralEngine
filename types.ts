@@ -1,4 +1,3 @@
-
 import React from 'react';
 
 // ============================================================================
@@ -281,6 +280,13 @@ export interface Character {
   trauma: number; // 0-100 scale of psychological damage
   bio: BioMonitor; // CHRONOS: Biological state
   hiddenNotes?: string;
+  /**
+   * Maps condition text → the game totalMinutes at which it was applied.
+   * Used by the timed-condition expiry system to auto-remove conditions
+   * that carry an explicit duration in their name (e.g. "Adrenaline Surge (10 mins)").
+   * Optional for backwards compatibility with saves that predate this field.
+   */
+  conditionTimestamps?: Record<string, number>;
 }
 
 export interface CharacterTemplate {
