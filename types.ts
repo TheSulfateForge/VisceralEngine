@@ -17,8 +17,12 @@ export type TemplateId = Brand<string, 'TemplateId'>;
 export const SCENE_MODES = ['NARRATIVE', 'SOCIAL', 'TENSION', 'COMBAT'] as const;
 export type SceneMode = typeof SCENE_MODES[number];
 
-export const ROLES = ['user', 'model', 'system'] as const;
-export type Role = typeof ROLES[number];
+export enum Role {
+    USER = 'user',
+    MODEL = 'model',
+    SYSTEM = 'system',
+}
+export type RoleType = Role;
 
 export type RollOutcome = 'CRITICAL FAILURE' | 'FAILURE' | 'MIXED/COST' | 'SUCCESS' | 'STRONG SUCCESS' | 'CRITICAL SUCCESS';
 
