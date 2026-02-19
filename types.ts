@@ -1,82 +1,55 @@
-import React from 'react';
-
 // ============================================================================
-// TYPES.TS - Enhanced Type Definitions
+// TYPES.TS — Visceral Engine Type Definitions
 // ============================================================================
 
-declare global {
-  interface Window {
-    // aistudio is declared in the global scope by the environment (Project IDX / GenAI)
-    webkitAudioContext?: typeof AudioContext;
-    // Removed aistudio declaration to avoid conflict with existing 'AIStudio' type
-  }
-}
+// --- Nominal ID Types (prevent accidental mixing) ---
+declare const __brand: unique symbol;
+type Brand<T, B> = T & { [__brand]: B };
 
-export enum Role {
-  USER = 'user',
-  MODEL = 'model',
-  SYSTEM = 'system'
-}
+export type SaveId    = Brand<string, 'SaveId'>;
+export type MessageId = Brand<string, 'MessageId'>;
+export type LoreId    = Brand<string, 'LoreId'>;
+export type MemoryId  = Brand<string, 'MemoryId'>;
+export type TemplateId = Brand<string, 'TemplateId'>;
 
-// Branded types for better type safety
-export type MessageId = string & { readonly __brand: 'MessageId' };
-export type SaveId = string & { readonly __brand: 'SaveId' };
-export type MemoryId = string & { readonly __brand: 'MemoryId' };
-export type LoreId = string & { readonly __brand: 'LoreId' };
-// --- Character Template System ---
-export type TemplateId = string & { readonly __brand: 'TemplateId' };
-
-export type RollOutcome = 
-  | 'CRITICAL FAILURE'
-  | 'FAILURE'
-  | 'MIXED/COST'
-  | 'SUCCESS'
-  | 'STRONG SUCCESS'
-  | 'CRITICAL SUCCESS';
-
-export type ConditionSeverity = 'lethal' | 'traumatic' | 'minor';
+// --- Scalar / Union Types ---
 
 export const SCENE_MODES = ['NARRATIVE', 'SOCIAL', 'TENSION', 'COMBAT'] as const;
 export type SceneMode = typeof SCENE_MODES[number];
 
-// --- Chronos System ---
+export const ROLES = ['user', 'model', 'system'] as const;
+export type Role = typeof ROLES[number];
 
-export interface WorldTime {
-  totalMinutes: number;   // Absolute counter
-  day: number;            // Derived
-  hour: number;           // Derived
-  minute: number;         // Derived
-  display: string;        // "Day 1, 09:00"
-}
+export type RollOutcome = 'CRITICAL FAILURE' | 'FAILURE' | 'MIXED/COST' | 'SUCCESS' | 'STRONG SUCCESS' | 'CRITICAL SUCCESS';
 
-// --- Biological Systems ---
+// --- Bio Types ---
 
 export interface BioModifiers {
-    calories: number;       // Default 1.0. <1 = Slow Burn (Good), >1 = Fast Burn (Bad)
-    hydration: number;      // Default 1.0
-    stamina: number;        // Default 1.0
-    lactation: number;      // Default 1.0. >1 = Faster Production
+    calories: number;
+    hydration: number;
+    stamina: number;
+    lactation: number;
 }
 
 export interface BioMonitor {
     metabolism: {
-        calories: number;       // 0-100 (Energy)
-        hydration: number;      // 0-100 (Water)
-        stamina: number;        // 0-100 (Sleep need)
-        libido: number;         // 0-100 (Pressure)
+        calories: number;
+        hydration: number;
+        stamina: number;
+        libido: number;
     };
     pressures: {
-        bladder: number;        // 0-100
-        bowels: number;         // 0-100
-        lactation: number;      // 0-100 (Milk storage)
-        seminal: number;        // 0-100 (Seed storage)
+        bladder: number;
+        bowels: number;
+        lactation: number;
+        seminal: number;
     };
     timestamps: {
         lastSleep: number;
         lastMeal: number;
         lastOrgasm: number;
     };
-    modifiers: BioModifiers; // Dynamic Multipliers managed by AI
+    modifiers: BioModifiers;
 }
 
 export interface BioInputs {
@@ -90,14 +63,14 @@ export const PREGNANCY_STATUSES = ['gestating', 'birth', 'terminated'] as const;
 export type PregnancyStatus = typeof PREGNANCY_STATUSES[number];
 
 export interface Pregnancy {
-  id: string;
-  motherName: string; // "Player" or NPC Name
-  fatherName: string; // "Unknown" or NPC Name
-  conceptionTurn: number;
-  conceptionTime: number; // Absolute minutes
-  currentWeek: number;
-  isVisible: boolean; // Becomes true after week 12
-  status: PregnancyStatus;
+    id: string;
+    motherName: string;
+    fatherName: string;
+    conceptionTurn: number;
+    conceptionTime: number;
+    currentWeek: number;
+    isVisible: boolean;
+    status: PregnancyStatus;
 }
 
 // --- Enemy AI Systems ---
@@ -118,21 +91,21 @@ export const LIGHTING_LEVELS = ['BRIGHT', 'DIM', 'DARK'] as const;
 export type Lighting = typeof LIGHTING_LEVELS[number];
 
 export interface CombatEnvironment {
-  summary: string; // "Rain-slicked alleyway, minimal light"
-  lighting: Lighting;
-  weather: string;
-  terrain_tags: string[]; // ["Muddy", "Crowded", "Narrow"]
+    summary: string;
+    lighting: Lighting;
+    weather: string;
+    terrain_tags: string[];
 }
 
 export interface ActiveThreat {
-  id: string;
-  name: string;
-  archetype: EnemyArchetype;
-  status: EnemyState;
-  condition: string; // Brief description of their physical state e.g. "Knee-capped"
-  current_action: string; // What they are doing THIS turn e.g. "Suppressing Fire"
-  cover_state: CoverState;
-  distance: Distance;
+    id: string;
+    name: string;
+    archetype: EnemyArchetype;
+    status: EnemyState;
+    condition: string;
+    current_action: string;
+    cover_state: CoverState;
+    distance: Distance;
 }
 
 // --- Social Realism Systems ---
@@ -141,240 +114,293 @@ export const RELATIONSHIP_LEVELS = ['NEMESIS', 'HOSTILE', 'COLD', 'NEUTRAL', 'WA
 export type RelationshipLevel = typeof RELATIONSHIP_LEVELS[number];
 
 export interface KnownEntity {
-  id: string;
-  name: string;
-  role: string;
-  location: string;
-  impression: string; // Dynamic adjective: "Wary", "Infatuated", "Contemptuous"
-  relationship_level: RelationshipLevel;
-  leverage: string; // Specific transactional data
-  ledger: string[]; // List of specific interactions: "Player gave me water", "Player killed my brother"
+    id: string;
+    name: string;
+    role: string;
+    location: string;
+    impression: string;
+    relationship_level: RelationshipLevel;
+    leverage: string;
+    ledger: string[];
 }
 
 export interface NPCInteraction {
-  speaker: string;
-  dialogue: string; // The spoken words
-  subtext: string; // The hidden meaning/intent
-  biological_tells: string; // Visceral indicators: "Pupils dilated", "Sweating"
+    speaker: string;
+    dialogue: string;
+    subtext: string;
+    biological_tells: string;
+}
+
+// --- Threat Seed State Machine (v1.3) ---
+// Enhanced WorldTickEvent with full state tracking to enforce ETA floors,
+// the 3-seed cap, and auto-expiry of threats stuck at ETA ~1.
+
+export type ThreatStatus = 'building' | 'imminent' | 'triggered' | 'expired';
+
+export interface WorldTickEvent {
+    description: string;
+    turns_until_impact?: number;
+    // v1.3 additions — populated and maintained by the engine, not the AI:
+    id?: string;
+    factionSource?: string;
+    turnCreated?: number;
+    minimumEtaFloor?: number;
+    consecutiveTurnsAtEtaOne?: number;
+    requiredLoreCapability?: string;
+    status?: ThreatStatus;
+}
+
+// --- Faction Intelligence (v1.3) ---
+// Tracks what each faction knows about the player and HOW they know it.
+// Prevents NPC omniscience by requiring sourced information chains.
+
+export type FactionConfidenceLevel = 'none' | 'rumor' | 'report' | 'confirmed';
+
+export interface FactionIntelligenceEntry {
+    knownPlayerLocation: string | null;
+    locationConfidenceLevel: FactionConfidenceLevel;
+    lastUpdatedTurn: number;
+    informationSource: string;
+}
+
+export type FactionIntelligence = Record<string, FactionIntelligenceEntry>;
+
+// --- Legal Status (v1.3) ---
+// Tracks active and resolved legal claims against the player.
+// Prevents the same resolved claim from being re-litigated.
+
+export type ClaimValidity = 'active' | 'disputed' | 'invalid' | 'resolved';
+
+export interface LegalClaim {
+    id: string;
+    claimant: string;
+    subject: string;
+    basis: string;
+    validity: ClaimValidity;
+    resolvedBy?: string;
+    resolvedTurn?: number;
+}
+
+export interface LegalStatus {
+    knownClaims: LegalClaim[];
+    playerDocuments: string[];
+}
+
+// --- World Tick Types ---
+
+export interface WorldTickAction {
+    npc_name: string;
+    action: string;
+    player_visible: boolean;
+}
+
+export interface WorldTick {
+    npc_actions: WorldTickAction[];
+    environment_changes: string[];
+    emerging_threats: WorldTickEvent[];
 }
 
 // --- Schema Types (Matches JSON Output) ---
 
 export interface RollRequest {
-  challenge: string;
-  bonus?: number;
-  advantage?: boolean;
-  disadvantage?: boolean;
+    challenge: string;
+    bonus?: number;
+    advantage?: boolean;
+    disadvantage?: boolean;
 }
 
 export interface BargainRequest {
-  description: string;
+    description: string;
 }
 
 export interface LoreItem {
-  id: LoreId;
-  keyword: string;
-  content: string;
-  timestamp: string;
+    id: LoreId;
+    keyword: string;
+    content: string;
+    timestamp: string;
 }
 
 export interface Scenario {
-  title: string;
-  description: string;
-  opening_line: string;
+    title: string;
+    description: string;
+    opening_line: string;
 }
 
 export interface CombatContext {
-  environment: CombatEnvironment;
-  active_threats: ActiveThreat[];
+    environment: CombatEnvironment;
+    active_threats: ActiveThreat[];
 }
 
 export interface CharacterUpdates {
-  added_conditions?: string[];
-  removed_conditions?: string[];
-  added_inventory?: string[];
-  removed_inventory?: string[];
-  trauma_delta?: number; 
-  bio_modifiers?: Partial<BioModifiers>; // New: AI can adjust metabolism
-  relationships?: string[]; 
-  goals?: string[];
-}
-
-// --- World Tick Types (v1.1: Proactive World) ---
-
-export interface WorldTickAction {
-  npc_name: string;
-  action: string;
-  player_visible: boolean;
-}
-
-export interface WorldTickEvent {
-  description: string;
-  turns_until_impact?: number;
-}
-
-export interface WorldTick {
-  npc_actions: WorldTickAction[];
-  environment_changes: string[];
-  emerging_threats: WorldTickEvent[];
+    added_conditions?: string[];
+    removed_conditions?: string[];
+    added_inventory?: string[];
+    removed_inventory?: string[];
+    trauma_delta?: number;
+    bio_modifiers?: Partial<BioModifiers>;
+    relationships?: string[];
+    goals?: string[];
 }
 
 export interface ModelResponseSchema {
-  thought_process: string; // New: Inner monologue for reasoning
-  scene_mode: SceneMode; // New: Explicit state tracking
-  tension_level: number; // New: 0-100 atmosphere meter
-  narrative: string;
-  
-  time_passed_minutes?: number; // CHRONOS: How much time happened?
-  biological_inputs?: BioInputs; // CHRONOS: Did the player eat/sleep?
+    thought_process: string;
+    scene_mode: SceneMode;
+    tension_level: number;
+    narrative: string;
 
-  // Refactored: Uses Deltas now
-  character_updates?: CharacterUpdates;
-  
-  combat_context?: CombatContext; 
-  known_entity_updates?: KnownEntity[]; 
-  npc_interaction?: NPCInteraction;
-  roll_request?: RollRequest;
-  bargain_request?: BargainRequest;
-  hidden_update?: string;
-  new_memory?: { fact: string }; // MEMORY FRAGMENTS: AI can now save permanent history
-  new_lore?: { keyword: string; content: string };
-  biological_event?: boolean; 
-  
-  // v1.1: World Proactivity — REQUIRED every turn
-  world_tick?: WorldTick;
+    time_passed_minutes?: number;
+    biological_inputs?: BioInputs;
+
+    character_updates?: CharacterUpdates;
+
+    combat_context?: CombatContext;
+    known_entity_updates?: KnownEntity[];
+    npc_interaction?: NPCInteraction;
+    roll_request?: RollRequest;
+    bargain_request?: BargainRequest;
+    hidden_update?: string;
+    new_memory?: { fact: string };
+    new_lore?: { keyword: string; content: string };
+    biological_event?: boolean;
+
+    world_tick?: WorldTick;
 }
 
 // --- Application Types ---
 
 export interface DebugLogEntry {
-  timestamp: string;
-  message: string;
-  type: 'info' | 'error' | 'success' | 'warning';
+    timestamp: string;
+    message: string;
+    type: 'info' | 'error' | 'success' | 'warning';
 }
 
 export interface ChatMessage {
-  id: MessageId;
-  role: Role;
-  text: string; // The narrative content
-  timestamp: string;
-  rollRequest?: RollRequest;
-  bargainRequest?: BargainRequest;
-  npcInteraction?: NPCInteraction; // Structured social data
-  isResolved?: boolean;
-  metadata?: Record<string, unknown>; // NO ANY. STRICT RECORD.
+    id: MessageId;
+    role: Role;
+    text: string;
+    timestamp: string;
+    rollRequest?: RollRequest;
+    bargainRequest?: BargainRequest;
+    npcInteraction?: NPCInteraction;
+    isResolved?: boolean;
+    metadata?: Record<string, unknown>;
 }
 
 export interface Character {
-  name: string;
-  gender: string;
-  appearance: string;
-  notableFeatures: string;
-  race: string;
-  backstory: string;
-  setting: string;
-  inventory: string[];
-  relationships: string[]; // Legacy/Quick list
-  conditions: string[];
-  goals: string[];
-  trauma: number; // 0-100 scale of psychological damage
-  bio: BioMonitor; // CHRONOS: Biological state
-  hiddenNotes?: string;
-  /**
-   * Maps condition text → the game totalMinutes at which it was applied.
-   * Used by the timed-condition expiry system to auto-remove conditions
-   * that carry an explicit duration in their name (e.g. "Adrenaline Surge (10 mins)").
-   * Optional for backwards compatibility with saves that predate this field.
-   */
-  conditionTimestamps?: Record<string, number>;
+    name: string;
+    gender: string;
+    appearance: string;
+    notableFeatures: string;
+    race: string;
+    backstory: string;
+    setting: string;
+    inventory: string[];
+    relationships: string[];
+    conditions: string[];
+    goals: string[];
+    trauma: number;
+    bio: BioMonitor;
+    hiddenNotes?: string;
+    conditionTimestamps?: Record<string, number>;
 }
 
 export interface CharacterTemplate {
-  id: TemplateId;
-  name: string;            // User-given name: "My Hucow", "Cyberpunk Medic"
-  timestamp: string;
-  character: Omit<Character, 'bio' | 'trauma' | 'hiddenNotes'>;
-  // We omit runtime fields — templates store only the "creative" data
-  // bio/trauma/hiddenNotes reset fresh each playthrough
+    id: TemplateId;
+    name: string;
+    timestamp: string;
+    character: Omit<Character, 'bio' | 'trauma' | 'hiddenNotes'>;
 }
 
-// Used by the AI generation endpoint
 export interface GeneratedCharacterFields {
-  name: string;
-  gender: string;
-  appearance: string;
-  notableFeatures: string;
-  race: string;
-  backstory: string;
-  setting: string;
-  inventory: string[];
-  relationships: string[];
-  conditions: string[];
-  goals: string[];
+    name: string;
+    gender: string;
+    appearance: string;
+    notableFeatures: string;
+    race: string;
+    backstory: string;
+    setting: string;
+    inventory: string[];
+    relationships: string[];
+    conditions: string[];
+    goals: string[];
 }
 
 export interface MemoryItem {
-  id: MemoryId;
-  fact: string;
-  timestamp: string;
+    id: MemoryId;
+    fact: string;
+    timestamp: string;
 }
 
 export interface RollStatistics {
-  totalRolls: number;
-  criticalSuccesses: number;
-  criticalFailures: number;
-  averageRoll: number;
-  outcomes: Record<RollOutcome, number>;
+    totalRolls: number;
+    criticalSuccesses: number;
+    criticalFailures: number;
+    averageRoll: number;
+    outcomes: Record<RollOutcome, number>;
 }
 
-// High Frequency Updates (Re-renders often)
+// --- High Frequency State ---
 export interface GameHistory {
-  history: ChatMessage[];
-  rollLog: string[];
-  rollStats: RollStatistics;
-  isThinking: boolean;
-  debugLog: DebugLogEntry[];
-  turnCount: number;
-  lastActiveSummary?: string; 
+    history: ChatMessage[];
+    rollLog: string[];
+    rollStats: RollStatistics;
+    isThinking: boolean;
+    debugLog: DebugLogEntry[];
+    turnCount: number;
+    lastActiveSummary?: string;
 }
 
-// Low Frequency Updates (Re-renders rarely)
+// --- Low Frequency State ---
 export interface GameWorld {
-  currentModel: string;
-  memory: MemoryItem[];
-  lore: LoreItem[];
-  visualUrl?: string;
-  generatedImages: string[]; 
-  isGeneratingVisual: boolean;
-  isGeneratingScenarios: boolean;
-  scenarios: Scenario[];
-  failedModels: string[];
-  hiddenRegistry: string;
-  pregnancies: Pregnancy[];
-  environment?: CombatEnvironment; 
-  activeThreats: ActiveThreat[]; 
-  knownEntities: KnownEntity[]; 
-  
-  // State Tracking
-  sceneMode: SceneMode;
-  tensionLevel: number;
-  time: WorldTime; // CHRONOS: Global Clock
-  lastWorldTickTurn: number; // v1.1 patch: tracks last turn with NPC activity
+    currentModel: string;
+    memory: MemoryItem[];
+    lore: LoreItem[];
+    visualUrl?: string;
+    generatedImages: string[];
+    isGeneratingVisual: boolean;
+    isGeneratingScenarios: boolean;
+    scenarios: Scenario[];
+    failedModels: string[];
+    hiddenRegistry: string;
+    pregnancies: Pregnancy[];
+    environment?: CombatEnvironment;
+    activeThreats: ActiveThreat[];
+    knownEntities: KnownEntity[];
+
+    // State Tracking
+    sceneMode: SceneMode;
+    tensionLevel: number;
+    time: WorldTime;
+    lastWorldTickTurn: number;
+
+    // v1.3 — Simulation Integrity Systems
+    turnCount: number;                      // authoritative turn counter (was on GameHistory only)
+    lastBargainTurn: number;               // tracks when last Devil's Bargain was offered
+    factionIntelligence: FactionIntelligence; // NPC omniscience prevention
+    legalStatus: LegalStatus;             // claim resurrection prevention
 }
 
-// Composite for Persistence
+export interface WorldTime {
+    totalMinutes: number;
+    day: number;
+    hour: number;
+    minute: number;
+    display: string;
+}
+
+// --- Composite Types ---
 export interface GameState {
     history: GameHistory;
     world: GameWorld;
 }
 
 export interface GameSave {
-  id: SaveId;
-  name: string;
-  timestamp: string;
-  gameState: GameState;
-  character: Character;
-  thumbnail?: string; 
+    id: SaveId;
+    name: string;
+    timestamp: string;
+    gameState: GameState;
+    character: Character;
+    thumbnail?: string;
 }
 
 export interface SaveMetadata {
@@ -386,8 +412,8 @@ export interface SaveMetadata {
 export type View = 'landing' | 'creator' | 'scenario' | 'game';
 
 export interface ModalProps {
-  show: boolean;
-  onClose: () => void;
-  title: string;
-  children: React.ReactNode;
+    show: boolean;
+    onClose: () => void;
+    title: string;
+    children: React.ReactNode;
 }

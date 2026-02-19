@@ -1,10 +1,17 @@
+// ============================================================================
+// STORE.TS — v1.3
+// v1.3 changes: initialWorld now includes turnCount, lastBargainTurn,
+// factionIntelligence, legalStatus, and emergingThreats to support all
+// simulation integrity systems added in this patch.
+// ============================================================================
+
 import { create } from 'zustand';
-import { 
-    GameHistory, 
-    GameWorld, 
-    Character, 
-    View, 
-    Role, 
+import {
+    GameHistory,
+    GameWorld,
+    Character,
+    View,
+    Role,
     MessageId,
     BioMonitor,
     WorldTime,
@@ -30,9 +37,9 @@ const DEFAULT_TIME: WorldTime = {
 };
 
 export const EMPTY_CHARACTER: Character = {
-  name: "", gender: "", appearance: "", notableFeatures: "", race: "", backstory: "", setting: "",
-  inventory: [], relationships: [], conditions: [], goals: [], trauma: 0,
-  bio: DEFAULT_BIO
+    name: "", gender: "", appearance: "", notableFeatures: "", race: "", backstory: "", setting: "",
+    inventory: [], relationships: [], conditions: [], goals: [], trauma: 0,
+    bio: DEFAULT_BIO
 };
 
 const initialHistory: GameHistory = {
@@ -46,7 +53,8 @@ const initialHistory: GameHistory = {
         criticalFailures: 0,
         averageRoll: 0,
         outcomes: {
-            'CRITICAL FAILURE': 0, 'FAILURE': 0, 'MIXED/COST': 0, 'SUCCESS': 0, 'STRONG SUCCESS': 0, 'CRITICAL SUCCESS': 0
+            'CRITICAL FAILURE': 0, 'FAILURE': 0, 'MIXED/COST': 0,
+            'SUCCESS': 0, 'STRONG SUCCESS': 0, 'CRITICAL SUCCESS': 0
         }
     },
     turnCount: 0
@@ -74,7 +82,19 @@ const initialWorld: GameWorld = {
     sceneMode: 'NARRATIVE',
     tensionLevel: 10,
     time: DEFAULT_TIME,
-    lastWorldTickTurn: 0
+    lastWorldTickTurn: 0,
+
+    // v1.3: Simulation Integrity Systems
+    turnCount: 0,                       // Authoritative turn counter — increments every processTurn()
+    lastBargainTurn: 0,                // Devil's Bargain tracking — resets every time a bargain is offered
+    factionIntelligence: {},           // NPC omniscience prevention — keyed by faction name
+    legalStatus: {                     // Claim resurrection prevention
+        knownClaims: [],
+        playerDocuments: []
+    },
+    // emergingThreats is managed by the threat seed state machine in simulationEngine.ts
+    // It is stored as part of world state but typed via the WorldTickEvent interface
+    emergingThreats: [],
 };
 
 interface UIState {
@@ -115,7 +135,7 @@ interface GameStore {
     gameWorld: GameWorld;
     character: Character;
     preTurnSnapshot: { history: GameHistory; world: GameWorld; character: Character } | null;
-    
+
     // Pending State
     pendingLore: LoreItem[];
 
@@ -127,7 +147,7 @@ interface GameStore {
      * genuinely deteriorates far enough.
      */
     playerRemovedConditions: string[];
-    
+
     // UI State
     ui: UIState;
 
@@ -136,7 +156,7 @@ interface GameStore {
     setGameWorld: (update: GameWorld | ((prev: GameWorld) => GameWorld)) => void;
     setCharacter: (update: Character | ((prev: Character) => Character)) => void;
     setPreTurnSnapshot: (snapshot: { history: GameHistory; world: GameWorld; character: Character } | null) => void;
-    
+
     setPendingLore: (update: LoreItem[] | ((prev: LoreItem[]) => LoreItem[])) => void;
 
     /** Called by the character panel when a player manually removes a condition. */
@@ -165,14 +185,14 @@ export const useGameStore = create<GameStore>((set) => ({
     ui: initialUI,
 
     // Actions
-    setGameHistory: (update) => set((state) => ({ 
-        gameHistory: typeof update === 'function' ? update(state.gameHistory) : update 
+    setGameHistory: (update) => set((state) => ({
+        gameHistory: typeof update === 'function' ? update(state.gameHistory) : update
     })),
-    setGameWorld: (update) => set((state) => ({ 
-        gameWorld: typeof update === 'function' ? update(state.gameWorld) : update 
+    setGameWorld: (update) => set((state) => ({
+        gameWorld: typeof update === 'function' ? update(state.gameWorld) : update
     })),
-    setCharacter: (update) => set((state) => ({ 
-        character: typeof update === 'function' ? update(state.character) : update 
+    setCharacter: (update) => set((state) => ({
+        character: typeof update === 'function' ? update(state.character) : update
     })),
     setPreTurnSnapshot: (preTurnSnapshot) => set({ preTurnSnapshot }),
 
