@@ -98,7 +98,7 @@ const buildCharacterBlock = (character: Character): string => {
     // character creation are separated from short mechanical game-states.
     // Traits go into the CHARACTER TRAITS section (read-only context for the AI).
     // Active conditions go into the CONDITIONS field (the AI may add/remove these).
-    const { active: activeConditions, traits } = partitionConditions(character.conditions);
+    const { active: activeConditions, passive: traits } = partitionConditions(character.conditions);
 
     const traitsSection = traits.length > 0
         ? `\n- **Character Traits (fixed, do NOT add/remove via character_updates):**\n${traits.map(t => `  • ${t}`).join('\n')}`
