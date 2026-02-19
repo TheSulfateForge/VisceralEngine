@@ -130,9 +130,9 @@ const buildWorldPressure = (
     
     // Build NPC goal summary from entities that have ledger entries suggesting active goals
     const activeNPCs = knownEntities
-        .filter(e => e.relationship_level !== 'NEUTRAL' || e.ledger.length > 2)
+        .filter(e => e.relationship_level !== 'NEUTRAL' || (e.ledger?.length ?? 0) > 2)
         .slice(0, 6) // Cap to avoid prompt bloat
-        .map(e => `- ${e.name} [${e.relationship_level}]: "${e.impression}" — Ledger: ${e.ledger.slice(-2).join('; ')}`)
+        .map(e => `- ${e.name} [${e.relationship_level}]: "${e.impression}" — Ledger: ${(e.ledger ?? []).slice(-2).join('; ')}`)
         .join('\n');
 
     // Every 4+ turns of low world activity, increase pressure

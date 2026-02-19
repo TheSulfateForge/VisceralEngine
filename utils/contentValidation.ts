@@ -166,7 +166,7 @@ export const sanitiseAllFields = (response: ModelResponseSchema): FullSanitisati
                 role: scanField(entity.role),
                 impression: scanField(entity.impression),
                 leverage: scanField(entity.leverage),
-                ledger: entity.ledger.map(scanField),
+                ledger: (entity.ledger ?? []).map(scanField),
             };
         });
     }
