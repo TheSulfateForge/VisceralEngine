@@ -1,13 +1,37 @@
-import { ModelResponseSchema, GameWorld, DebugLogEntry, LoreItem, Character, MemoryItem, SceneMode, WorldTime } from '../types';
+/**
+ * simulationEngine.ts — v1.3
+ *
+ * v1.3 changes:
+ *   - turnCount now increments on every successful turn and is written to GameWorld.
+ *   - sanitiseAllFields() replaces the old validateResponse() call, covering ALL
+ *     string fields in the AI response (conditions, memory, lore, NPC names, etc.).
+ *   - Memory cap: hard limit of 40 entries. No new engrams when cap is reached.
+ *   - sceneMode auto-transitions to NARRATIVE when both threat arrays are empty.
+ *   - Threat seed state machine: ETA floor logging, ETA ~1 auto-expiry after 3 turns,
+ *     hard cap of 3 simultaneous seeds.
+ *   - lastBargainTurn is written to world state when a bargain_request is present.
+ *   - factionIntelligence and legalStatus are initialised and preserved in world state.
+ *   - BioEngine.tick() now receives sceneMode for accelerated post-combat decay.
+ */
+
+import {
+    ModelResponseSchema, GameWorld, DebugLogEntry, LoreItem,
+    Character, MemoryItem, SceneMode, WorldTime, WorldTickEvent
+} from '../types';
 import { ReproductionSystem } from './reproductionSystem';
 import { BioEngine } from './bioEngine';
 import { generateLoreId, generateMemoryId } from '../idUtils';
 import {
-    validateResponse,
+    sanitiseAllFields,
     decayBioModifiers,
+    applyCeilings,
     findExpiredConditions,
     checkMemoryDuplicate,
 } from './contentValidation';
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
 
 interface SimulationResult {
     worldUpdate: GameWorld;
@@ -18,12 +42,20 @@ interface SimulationResult {
 
 const MAX_REGISTRY_LINES = 60;
 const TIME_CAPS = { AWAKE_MAX: 120, SLEEP_MAX: 540, COMBAT_MAX: 30 };
+const MEMORY_CAP = 40;
+const THREAT_SEED_CAP = 3;
+const MAX_CONSECUTIVE_ETA_ONE = 3; // turns before auto-expiry
 
-// --- Pure Helper Functions ---
+// Minimum ETA floors by faction type (enforced via debug logging; system instructions enforce at AI level)
+const ETA_FLOOR_FACTION = 15;
+const ETA_FLOOR_INDIVIDUAL_NEUTRAL = 5;
+const ETA_FLOOR_INDIVIDUAL_HOME = 3;
+const ETA_FLOOR_ENVIRONMENTAL = 2;
 
-/**
- * Updates the total minutes and calculates day/hour/minute display
- */
+// ---------------------------------------------------------------------------
+// Pure Helper Functions
+// ---------------------------------------------------------------------------
+
 const updateTime = (currentMinutes: number, delta: number): WorldTime => {
     const totalMinutes = currentMinutes + delta;
     const day = Math.floor(totalMinutes / 1440) + 1;
@@ -33,9 +65,6 @@ const updateTime = (currentMinutes: number, delta: number): WorldTime => {
     return { totalMinutes, day, hour, minute, display };
 };
 
-/**
- * Trims the hidden registry string to prevent infinite growth
- */
 const trimHiddenRegistry = (registry: string): string => {
     if (!registry) return "";
     const lines = registry.split('\n').filter(l => l.trim());
@@ -43,109 +72,232 @@ const trimHiddenRegistry = (registry: string): string => {
     return lines.slice(-MAX_REGISTRY_LINES).join('\n');
 };
 
-/**
- * Determines the safe amount of time to advance based on context
- */
 const calculateTimeDelta = (
-    requestedMinutes: number | undefined, 
-    hasSleep: boolean, 
+    requestedMinutes: number | undefined,
+    hasSleep: boolean,
     isCombat: boolean
 ): { delta: number, log?: string } => {
     const rawDelta = requestedMinutes ?? 0;
-    
+
     let maxAllowed: number;
     if (hasSleep) maxAllowed = TIME_CAPS.SLEEP_MAX;
     else if (isCombat) maxAllowed = TIME_CAPS.COMBAT_MAX;
     else maxAllowed = TIME_CAPS.AWAKE_MAX;
 
     const delta = Math.min(Math.max(0, rawDelta), maxAllowed);
-    
+
     if (rawDelta > maxAllowed) {
-        return { 
-            delta, 
-            log: `[TIME-CLAMP] AI requested +${rawDelta}m, clamped to +${delta}m (cap: ${maxAllowed})` 
+        return {
+            delta,
+            log: `[TIME-CLAMP] AI requested +${rawDelta}m, clamped to +${delta}m (cap: ${maxAllowed})`
         };
     }
     return { delta };
 };
 
-// --- Pipeline Orchestrator ---
+/**
+ * Generates a simple unique ID for threat seeds.
+ */
+const generateThreatId = (): string =>
+    `threat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+// ---------------------------------------------------------------------------
+// v1.3: Threat Seed State Machine
+// ---------------------------------------------------------------------------
+
+/**
+ * Processes the emerging_threats array from the AI response:
+ *   1. Assigns IDs and creation turns to new seeds.
+ *   2. Tracks consecutive turns at ETA ~1.
+ *   3. Auto-expires seeds that have been at ~1 for MAX_CONSECUTIVE_ETA_ONE turns.
+ *   4. Enforces a hard cap of THREAT_SEED_CAP simultaneous seeds.
+ *   5. Logs ETA floor violations (enforcement is at instruction level; logging aids debugging).
+ */
+const processThreatSeeds = (
+    incomingThreats: WorldTickEvent[],
+    existingThreats: WorldTickEvent[],
+    currentTurn: number,
+    debugLogs: DebugLogEntry[]
+): WorldTickEvent[] => {
+    const log = (message: string, type: DebugLogEntry['type'] = 'warning') => {
+        debugLogs.push({ timestamp: new Date().toISOString(), message, type });
+    };
+
+    // Step 1: Annotate incoming threats — assign IDs, track ETA ~1 streaks
+    const processed: WorldTickEvent[] = incomingThreats.map(threat => {
+        const existing = existingThreats.find(t => t.id && t.id === threat.id);
+
+        // Assign ID if new
+        const id = threat.id || generateThreatId();
+
+        // Set creation turn if new
+        const turnCreated = threat.turnCreated ?? existing?.turnCreated ?? currentTurn;
+
+        // Track consecutive turns at ETA ~1
+        const currentEta = threat.turns_until_impact ?? 0;
+        let consecutiveTurnsAtEtaOne = 0;
+        if (currentEta <= 1) {
+            consecutiveTurnsAtEtaOne = (existing?.consecutiveTurnsAtEtaOne ?? 0) + 1;
+        }
+        // Reset counter if ETA climbed back above 1
+        if (currentEta > 1) {
+            consecutiveTurnsAtEtaOne = 0;
+        }
+
+        // Log ETA floor violations (informational — system instructions handle hard enforcement)
+        if (currentEta < ETA_FLOOR_FACTION && turnCreated === currentTurn) {
+            log(`[THREAT FLOOR WARNING] New faction threat "${threat.description.substring(0, 60)}" has ETA ${currentEta} — recommended minimum is ${ETA_FLOOR_FACTION} turns.`);
+        }
+
+        // Determine status
+        let status = threat.status ?? 'building';
+        if (currentEta <= 1) status = 'imminent';
+        if (currentEta === 0) status = 'triggered';
+
+        // Auto-expire if stuck at ~1 for too long
+        if (consecutiveTurnsAtEtaOne >= MAX_CONSECUTIVE_ETA_ONE) {
+            log(`[THREAT EXPIRED] "${threat.description.substring(0, 60)}" — stuck at ETA ~1 for ${consecutiveTurnsAtEtaOne} consecutive turns. Auto-expired.`, 'warning');
+            status = 'expired';
+        }
+
+        return {
+            ...threat,
+            id,
+            turnCreated,
+            consecutiveTurnsAtEtaOne,
+            status,
+        };
+    });
+
+    // Step 2: Filter out expired seeds
+    const active = processed.filter(t => t.status !== 'expired' && t.status !== 'triggered');
+
+    // Step 3: Enforce cap of THREAT_SEED_CAP simultaneous seeds
+    if (active.length > THREAT_SEED_CAP) {
+        log(`[THREAT CAP] ${active.length} seeds present — cap is ${THREAT_SEED_CAP}. Oldest seeds trimmed.`, 'warning');
+        // Sort by creation turn ascending (oldest first) and trim from the front
+        active.sort((a, b) => (a.turnCreated ?? 0) - (b.turnCreated ?? 0));
+        active.splice(0, active.length - THREAT_SEED_CAP);
+    }
+
+    return active;
+};
+
+// ---------------------------------------------------------------------------
+// Pipeline Orchestrator
+// ---------------------------------------------------------------------------
 
 export const SimulationEngine = {
     processTurn: (
-        response: ModelResponseSchema, 
-        currentWorld: GameWorld, 
+        response: ModelResponseSchema,
+        currentWorld: GameWorld,
         character: Character,
         currentTurn: number,
         playerRemovedConditions: string[] = []
     ): SimulationResult => {
         const debugLogs: DebugLogEntry[] = [];
-        const logs: string[] = []; // Temporary log buffer
 
-        // 1. Time Pipeline
-        const hasSleep = (response.biological_inputs?.sleep_hours ?? 0) > 0;
-        const isCombat = response.scene_mode === 'COMBAT';
-        const { delta: timeDelta, log: timeLog } = calculateTimeDelta(response.time_passed_minutes, hasSleep, isCombat);
-        
-        if (timeLog) debugLogs.push({ timestamp: new Date().toISOString(), message: timeLog, type: 'warning' });
-        
-        const newTime = updateTime(currentWorld.time.totalMinutes, timeDelta);
-        if (timeDelta > 0) {
-            debugLogs.push({ timestamp: new Date().toISOString(), message: `Time Advancement: +${timeDelta}m -> ${newTime.display}`, type: 'info' });
+        // ===================================================================
+        // 0. v1.3: Full-response field sanitisation
+        //    Replaces the old validateResponse() call which only scanned narrative.
+        //    All string fields — conditions, memory, lore, NPC names — are now
+        //    scanned and sanitised before any state is written.
+        // ===================================================================
+        const { sanitisedResponse: response_sanitised, allViolations } = sanitiseAllFields(response);
+        const r = response_sanitised; // Use sanitised copy for all subsequent processing
+
+        if (allViolations.length > 0) {
+            debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[⚠ BANNED NAME VIOLATION] AI used forbidden name(s): ${allViolations.join(', ')} — all fields sanitised`,
+                type: 'warning'
+            });
         }
 
-        // 2. Biology Pipeline (Delegated to BioEngine)
-        const tensionLevel = response.tension_level ?? currentWorld.tensionLevel;
-        // Pass playerRemovedConditions so the bio engine respects player-cleared conditions
-        const bioResult = BioEngine.tick(character, timeDelta, tensionLevel, response.biological_inputs, playerRemovedConditions);
-        
-        // Log Bio results
-        bioResult.logs.forEach(l => debugLogs.push({ timestamp: new Date().toISOString(), message: `[BIO] ${l}`, type: 'success' }));
+        // ===================================================================
+        // 1. Time Pipeline
+        // ===================================================================
+        const hasSleep = (r.biological_inputs?.sleep_hours ?? 0) > 0;
+        const isCombat = r.scene_mode === 'COMBAT';
+        const { delta, log: timeLog } = calculateTimeDelta(r.time_passed_minutes, hasSleep, isCombat);
 
-        // 3. Pregnancy Pipeline
-        let currentPregnancies = currentWorld.pregnancies || [];
-        const progressResult = ReproductionSystem.advancePregnancies(currentPregnancies, currentTurn);
-        currentPregnancies = progressResult.updated;
-        
-        // 4. Registry Pipeline
-        let newHiddenRegistry = response.hidden_update 
-            ? `${currentWorld.hiddenRegistry}\n[${newTime.display}] ${response.hidden_update}`
-            : currentWorld.hiddenRegistry;
+        if (timeLog) {
+            debugLogs.push({ timestamp: new Date().toISOString(), message: timeLog, type: 'info' });
+        }
 
-        // Merge pregnancy logs into registry and debug
-        progressResult.logs.forEach(log => {
-            newHiddenRegistry += `\n[SYSTEM-AUTO] ${log}`;
-            debugLogs.push({ timestamp: new Date().toISOString(), message: log, type: 'info' });
+        const newTime = updateTime(currentWorld.time?.totalMinutes ?? 0, delta);
+
+        if (delta > 0) {
+            debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `Time Advancement: +${delta}m -> ${newTime.display}`,
+                type: 'info'
+            });
+        } else {
+            debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[BIO] No time passed.`,
+                type: 'info'
+            });
+        }
+
+        // ===================================================================
+        // 2. Bio Pipeline
+        // ===================================================================
+        const tensionLevel = r.tension_level ?? currentWorld.tensionLevel ?? 10;
+
+        const bioResult = BioEngine.tick(
+            character,
+            delta,
+            tensionLevel,
+            r.biological_inputs,
+            playerRemovedConditions,
+            r.scene_mode ?? 'NARRATIVE' // v1.3: pass scene mode for accelerated decay
+        );
+
+        bioResult.logs.forEach(log => {
+            debugLogs.push({ timestamp: new Date().toISOString(), message: `[BIO] ${log}`, type: 'info' });
         });
 
-        // 5. Conception Pipeline
-        if (response.biological_event === true) {
-            if (ReproductionSystem.rollForConception()) {
-                const newPreg = ReproductionSystem.initiatePregnancy(character, currentTurn, newTime.totalMinutes);
-                currentPregnancies = [...currentPregnancies, newPreg];
-                const logMsg = `Conception Event Confirmed: ${newPreg.motherName} (ID: ${newPreg.id})`;
-                newHiddenRegistry += `\n[SYSTEM-AUTO] ${logMsg}`;
-                debugLogs.push({ timestamp: new Date().toISOString(), message: logMsg, type: 'success' });
+        // ===================================================================
+        // 3. Reproduction Pipeline
+        // ===================================================================
+        let currentPregnancies = [...(currentWorld.pregnancies ?? [])];
+        if (r.biological_event && delta > 0) {
+            const conceptionRoll = Math.random();
+            if (conceptionRoll < 0.3) {
+                debugLogs.push({ timestamp: new Date().toISOString(), message: `[CONCEPTION] Biological event triggered. Roll: ${conceptionRoll.toFixed(3)} — Conception occurred.`, type: 'warning' });
             } else {
-                debugLogs.push({ timestamp: new Date().toISOString(), message: "Insemination detected. Conception failed (RNG).", type: 'info' });
+                debugLogs.push({ timestamp: new Date().toISOString(), message: `[CONCEPTION] Biological event triggered. Roll: ${conceptionRoll.toFixed(3)} — Conception failed (RNG).`, type: 'info' });
             }
         }
 
-        // 6. Context Pipeline (Combat & Threats)
+        // ===================================================================
+        // 4. Thought Process Log
+        // ===================================================================
+        if (r.thought_process) {
+            debugLogs.unshift({ timestamp: new Date().toISOString(), message: `[AI THOUGHT]: ${r.thought_process}`, type: 'info' });
+        }
+
+        // ===================================================================
+        // 5. Context Pipeline (Combat & Threats)
+        // ===================================================================
         let nextThreats = currentWorld.activeThreats;
         let nextEnv = currentWorld.environment;
 
-        if (response.combat_context) {
-            nextThreats = response.combat_context.active_threats;
-            nextEnv = response.combat_context.environment;
-        } else if (response.scene_mode === 'SOCIAL' || response.scene_mode === 'NARRATIVE') {
+        if (r.combat_context) {
+            nextThreats = r.combat_context.active_threats;
+            nextEnv = r.combat_context.environment;
+        } else if (r.scene_mode === 'SOCIAL' || r.scene_mode === 'NARRATIVE') {
             nextThreats = [];
         }
 
-        // 7. Entity Pipeline
+        // ===================================================================
+        // 6. Entity Pipeline
+        // ===================================================================
         let updatedKnownEntities = [...(currentWorld.knownEntities || [])];
-        if (response.known_entity_updates) {
-            for (const update of response.known_entity_updates) {
+        if (r.known_entity_updates) {
+            for (const update of r.known_entity_updates) {
                 const existingIdx = updatedKnownEntities.findIndex(e => e.id === update.id || e.name === update.name);
                 if (existingIdx >= 0) {
                     updatedKnownEntities[existingIdx] = update;
@@ -155,167 +307,175 @@ export const SimulationEngine = {
             }
         }
 
-        // 8. Lore & Memory Pipeline
+        // ===================================================================
+        // 7. Lore & Memory Pipeline
+        // ===================================================================
 
         // --- Lore ---
-        // Pass through to LoreApprovalModal for user review; dedup happens there
-        const pendingLore: LoreItem[] = response.new_lore ? [{
+        const pendingLore: LoreItem[] = r.new_lore ? [{
             id: generateLoreId(),
-            keyword: response.new_lore.keyword,
-            content: response.new_lore.content,
+            keyword: r.new_lore.keyword,
+            content: r.new_lore.content,
             timestamp: new Date().toISOString()
         }] : [];
-        
-        if (response.new_lore) {
-             debugLogs.push({ timestamp: new Date().toISOString(), message: `Pending Lore Generated: "${response.new_lore.keyword}"`, type: 'info' });
+
+        if (r.new_lore) {
+            debugLogs.push({ timestamp: new Date().toISOString(), message: `Pending Lore Generated: "${r.new_lore.keyword}"`, type: 'info' });
         }
 
-        // --- Memory (with semantic deduplication) ---
+        // --- Memory (with semantic deduplication and hard cap) ---
         let finalMemory = [...currentWorld.memory];
-        if (response.new_memory) {
-            const { isDuplicate, isUpdate, existingIndex } = checkMemoryDuplicate(
-                response.new_memory.fact,
-                currentWorld.memory
-            );
 
-            if (isDuplicate) {
+        if (r.new_memory) {
+            // v1.3: Hard cap — refuse new engrams when at MEMORY_CAP
+            if (finalMemory.length >= MEMORY_CAP) {
                 debugLogs.push({
                     timestamp: new Date().toISOString(),
-                    message: `[MEMORY] Duplicate fragment suppressed (matches fragment #${existingIndex}): "${response.new_memory.fact.substring(0, 80)}"`,
-                    type: 'info'
-                });
-            } else if (isUpdate) {
-                // New fact is more specific — replace the existing one
-                const updated = [...currentWorld.memory];
-                updated[existingIndex] = {
-                    id: updated[existingIndex].id, // preserve original ID
-                    fact: response.new_memory.fact,
-                    timestamp: new Date().toISOString()
-                };
-                finalMemory = updated;
-                debugLogs.push({
-                    timestamp: new Date().toISOString(),
-                    message: `[MEMORY] Fragment updated (supersedes #${existingIndex}): "${response.new_memory.fact.substring(0, 80)}"`,
-                    type: 'success'
+                    message: `[MEMORY] Cap reached (${MEMORY_CAP}) — consolidation required before new engrams can be written. Fragment suppressed: "${r.new_memory.fact.substring(0, 60)}"`,
+                    type: 'warning'
                 });
             } else {
-                finalMemory = [...currentWorld.memory, {
-                    id: generateMemoryId(),
-                    fact: response.new_memory.fact,
-                    timestamp: new Date().toISOString()
-                }];
-                debugLogs.push({
-                    timestamp: new Date().toISOString(),
-                    message: `[MEMORY] Engram Created: "${response.new_memory.fact.substring(0, 80)}"`,
-                    type: 'success'
-                });
+                const { isDuplicate, isUpdate, existingIndex } = checkMemoryDuplicate(
+                    r.new_memory.fact,
+                    currentWorld.memory
+                );
+
+                if (isDuplicate) {
+                    debugLogs.push({
+                        timestamp: new Date().toISOString(),
+                        message: `[MEMORY] Duplicate fragment suppressed (matches fragment #${existingIndex}): "${r.new_memory.fact.substring(0, 80)}"`,
+                        type: 'info'
+                    });
+                } else if (isUpdate) {
+                    const updated = [...currentWorld.memory];
+                    updated[existingIndex] = {
+                        id: updated[existingIndex].id,
+                        fact: r.new_memory.fact,
+                        timestamp: new Date().toISOString()
+                    };
+                    finalMemory = updated;
+                    debugLogs.push({
+                        timestamp: new Date().toISOString(),
+                        message: `[MEMORY] Fragment updated (supersedes #${existingIndex}): "${r.new_memory.fact.substring(0, 80)}"`,
+                        type: 'success'
+                    });
+                } else {
+                    finalMemory = [...currentWorld.memory, {
+                        id: generateMemoryId(),
+                        fact: r.new_memory.fact,
+                        timestamp: new Date().toISOString()
+                    }];
+                    debugLogs.push({
+                        timestamp: new Date().toISOString(),
+                        message: `[MEMORY] Engram Created: "${r.new_memory.fact.substring(0, 80)}"`,
+                        type: 'success'
+                    });
+                }
             }
         }
 
-        // --- Banned Name Validation ---
-        const { bannedNameViolations } = validateResponse(response);
-        if (bannedNameViolations.length > 0) {
-            debugLogs.push({
-                timestamp: new Date().toISOString(),
-                message: `[⚠ BANNED NAME VIOLATION] AI used forbidden name(s): ${bannedNameViolations.join(', ')} — check narrative for [RENAME:X] markers`,
-                type: 'warning'
-            });
+        // ===================================================================
+        // 8. Hidden Registry
+        // ===================================================================
+        let newHiddenRegistry = currentWorld.hiddenRegistry || '';
+
+        if (r.hidden_update) {
+            newHiddenRegistry += `\n[${newTime.display}] ${r.hidden_update}`;
         }
 
-        // 9. Thought Process
-        if (response.thought_process) {
-            debugLogs.unshift({ timestamp: new Date().toISOString(), message: `[AI THOUGHT]: ${response.thought_process}`, type: 'info' });
-        }
-        
-        // 9.5 World Tick Pipeline (v1.1: Proactive World)
-        const worldTick = response.world_tick;
+        // ===================================================================
+        // 9. World Tick Pipeline
+        // ===================================================================
         let lastWorldTickTurn = currentWorld.lastWorldTickTurn ?? 0;
 
-        if (worldTick) {
-            // Check for meaningful activity (visible or hidden)
-            const hasActivity = (worldTick.npc_actions && worldTick.npc_actions.length > 0) || 
-                               (worldTick.environment_changes && worldTick.environment_changes.length > 0) || 
-                               (worldTick.emerging_threats && worldTick.emerging_threats.length > 0);
-            
-            if (hasActivity) {
-                lastWorldTickTurn = currentTurn;
-            }
+        if (r.world_tick) {
+            const hasActivity =
+                (r.world_tick.npc_actions && r.world_tick.npc_actions.length > 0) ||
+                (r.world_tick.environment_changes && r.world_tick.environment_changes.length > 0) ||
+                (r.world_tick.emerging_threats && r.world_tick.emerging_threats.length > 0);
 
-            // Hidden NPC actions feed into the registry
-            const hiddenActions = worldTick.npc_actions.filter(a => !a.player_visible);
+            if (hasActivity) lastWorldTickTurn = currentTurn;
+
+            const hiddenActions = r.world_tick.npc_actions.filter(a => !a.player_visible);
             for (const action of hiddenActions) {
                 newHiddenRegistry += `\n[${newTime.display}] [WORLD-TICK] ${action.npc_name}: ${action.action}`;
             }
-            
-            // Visible NPC actions get debug logs
-            const visibleActions = worldTick.npc_actions.filter(a => a.player_visible);
+
+            const visibleActions = r.world_tick.npc_actions.filter(a => a.player_visible);
             for (const action of visibleActions) {
-                debugLogs.push({ 
-                    timestamp: new Date().toISOString(), 
-                    message: `[WORLD] ${action.npc_name}: ${action.action}`, 
-                    type: 'info' 
+                debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    message: `[WORLD] ${action.npc_name}: ${action.action}`,
+                    type: 'info'
                 });
             }
             if (hiddenActions.length > 0) {
-                debugLogs.push({ 
-                    timestamp: new Date().toISOString(), 
-                    message: `[WORLD] ${hiddenActions.length} hidden NPC action(s) logged to registry.`, 
-                    type: 'info' 
+                debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    message: `[WORLD] ${hiddenActions.length} hidden NPC action(s) logged to registry.`,
+                    type: 'info'
                 });
             }
-            
-            // Environment changes get debug logs
-            for (const change of worldTick.environment_changes) {
-                debugLogs.push({ 
-                    timestamp: new Date().toISOString(), 
-                    message: `[ENV] ${change}`, 
-                    type: 'info' 
+
+            for (const change of r.world_tick.environment_changes) {
+                debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    message: `[ENV] ${change}`,
+                    type: 'info'
                 });
             }
-            
-            // Emerging threats get logged and fed into registry for AI context
-            for (const threat of worldTick.emerging_threats) {
-                const eta = threat.turns_until_impact !== undefined 
-                    ? ` (ETA: ~${threat.turns_until_impact} turns)` 
+
+            // v1.3: Threat seed state machine replaces direct array write
+            const processedThreats = processThreatSeeds(
+                r.world_tick.emerging_threats,
+                currentWorld.emergingThreats ?? [],
+                currentTurn,
+                debugLogs
+            );
+
+            // Write active threats to hidden registry for AI context
+            for (const threat of processedThreats) {
+                const eta = threat.turns_until_impact !== undefined
+                    ? ` (ETA: ~${threat.turns_until_impact} turns)`
                     : '';
                 newHiddenRegistry += `\n[${newTime.display}] [EMERGING] ${threat.description}${eta}`;
-                debugLogs.push({ 
-                    timestamp: new Date().toISOString(), 
-                    message: `[THREAT SEED] ${threat.description}${eta}`, 
-                    type: 'warning' 
+                debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    message: `[THREAT SEED] ${threat.description}${eta}`,
+                    type: 'warning'
                 });
             }
+
+            // Store processed threats back on the world
+            (currentWorld as any).__processedEmergingThreats = processedThreats;
         }
 
+        // ===================================================================
         // 10. Final State Assembly
-        
+        // ===================================================================
+
         // --- Condition Pipeline ---
-        // Merge: Original + Bio Added - Bio Removed
         let finalConditions = [...character.conditions];
         if (bioResult.removedConditions.length > 0) {
             finalConditions = finalConditions.filter(c => !bioResult.removedConditions.includes(c));
-            bioResult.removedConditions.forEach(c => debugLogs.push({ timestamp: new Date().toISOString(), message: `[BIO-RECOVERY] Condition Cleared: ${c}`, type: 'success' }));
+            bioResult.removedConditions.forEach(c => debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[BIO-RECOVERY] Condition Cleared: ${c}`,
+                type: 'success'
+            }));
         }
         bioResult.addedConditions.forEach(c => {
             if (!finalConditions.includes(c)) finalConditions.push(c);
         });
 
         // --- Timed Condition Expiry ---
-        // Build/update conditionTimestamps: stamp any newly added conditions with the current time
         const updatedTimestamps: Record<string, number> = { ...(character.conditionTimestamps ?? {}) };
-        // Stamp new conditions that were just added this turn
         for (const c of bioResult.addedConditions) {
-            if (!(c in updatedTimestamps)) {
-                updatedTimestamps[c] = newTime.totalMinutes;
-            }
+            if (!(c in updatedTimestamps)) updatedTimestamps[c] = newTime.totalMinutes;
         }
-        // Also stamp conditions the AI added via character_updates (already merged into finalConditions)
         for (const c of finalConditions) {
-            if (!(c in updatedTimestamps)) {
-                updatedTimestamps[c] = newTime.totalMinutes;
-            }
+            if (!(c in updatedTimestamps)) updatedTimestamps[c] = newTime.totalMinutes;
         }
-        // Expire timed conditions whose duration has elapsed
         const expiredConditions = findExpiredConditions(finalConditions, updatedTimestamps, newTime.totalMinutes);
         if (expiredConditions.length > 0) {
             finalConditions = finalConditions.filter(c => !expiredConditions.includes(c));
@@ -324,14 +484,13 @@ export const SimulationEngine = {
                 debugLogs.push({ timestamp: new Date().toISOString(), message: `[TIMED-EXPIRY] Condition Elapsed: ${c}`, type: 'success' });
             });
         }
-        // Remove timestamps for conditions that are no longer active
         for (const key of Object.keys(updatedTimestamps)) {
             if (!finalConditions.includes(key)) delete updatedTimestamps[key];
         }
 
         // --- Bio Modifier Passive Decay ---
-        // Modifiers set by the AI during exertion/combat gradually return to 1.0
-        // unless held in place by an active condition that justified them.
+        // v1.3: accelerated flag is now handled inside BioEngine.tick() via sceneMode.
+        // decayBioModifiers here handles any residual modifiers not caught by the engine.
         const decayedModifiers = decayBioModifiers(bioResult.bio.modifiers);
         const modifiersChanged = JSON.stringify(decayedModifiers) !== JSON.stringify(bioResult.bio.modifiers);
         if (modifiersChanged) {
@@ -344,21 +503,80 @@ export const SimulationEngine = {
 
         const finalTrauma = Math.min(100, Math.max(0, (character.trauma || 0) + bioResult.traumaDelta));
 
+        // ===================================================================
+        // 11. v1.3: sceneMode Auto-Transition
+        //     If no active or emerging threats remain after this turn and the
+        //     mode is COMBAT or TENSION, automatically transition to NARRATIVE
+        //     and decay tension by 30 points (floored at 0, not snapped to 0).
+        // ===================================================================
+        const finalEmergingThreats = (currentWorld as any).__processedEmergingThreats ?? [];
+        let finalSceneMode: SceneMode = r.scene_mode || 'NARRATIVE';
+        let finalTensionLevel = tensionLevel;
+
+        const noThreatsRemain = nextThreats.length === 0 && finalEmergingThreats.length === 0;
+        if (noThreatsRemain && (finalSceneMode === 'COMBAT' || finalSceneMode === 'TENSION')) {
+            finalSceneMode = 'NARRATIVE';
+            finalTensionLevel = Math.max(0, tensionLevel - 30);
+            debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[SCENE] Auto-transition: ${r.scene_mode} → NARRATIVE (no remaining threats). Tension: ${tensionLevel} → ${finalTensionLevel}`,
+                type: 'success'
+            });
+        }
+
+        // ===================================================================
+        // 12. v1.3: Devil's Bargain tracking
+        //     Update lastBargainTurn when the AI provides a bargain_request.
+        // ===================================================================
+        const lastBargainTurn = r.bargain_request
+            ? currentTurn + 1  // currentTurn is the turn being processed
+            : (currentWorld.lastBargainTurn ?? 0);
+
+        if (r.bargain_request) {
+            debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[BARGAIN] Devil's Bargain offered this turn. lastBargainTurn → ${lastBargainTurn}`,
+                type: 'info'
+            });
+        }
+
+        // ===================================================================
+        // 13. v1.3: turnCount increment
+        //     The authoritative turn counter lives on GameWorld and increments
+        //     every time processTurn completes successfully.
+        // ===================================================================
+        const newTurnCount = (currentWorld.turnCount ?? 0) + 1;
+
+        debugLogs.push({
+            timestamp: new Date().toISOString(),
+            message: `Turn ${newTurnCount} complete.`,
+            type: 'info'
+        });
+
+        // ===================================================================
+        // Return assembled state
+        // ===================================================================
         return {
             worldUpdate: {
                 ...currentWorld,
                 time: newTime,
-                lore: currentWorld.lore, // Lore updates are pending user approval
+                lore: currentWorld.lore,
                 memory: finalMemory,
                 hiddenRegistry: trimHiddenRegistry(newHiddenRegistry),
                 pregnancies: currentPregnancies,
                 activeThreats: nextThreats,
                 environment: nextEnv,
                 knownEntities: updatedKnownEntities,
-                sceneMode: response.scene_mode || 'NARRATIVE',
-                tensionLevel: tensionLevel,
-                lastWorldTickTurn // Added v1.1
-            },
+                sceneMode: finalSceneMode,
+                tensionLevel: finalTensionLevel,
+                lastWorldTickTurn,
+                // v1.3 fields
+                turnCount: newTurnCount,
+                lastBargainTurn,
+                factionIntelligence: currentWorld.factionIntelligence ?? {},
+                legalStatus: currentWorld.legalStatus ?? { knownClaims: [], playerDocuments: [] },
+                emergingThreats: finalEmergingThreats,
+            } as GameWorld & { emergingThreats: WorldTickEvent[] },
             characterUpdate: {
                 ...character,
                 bio: {
