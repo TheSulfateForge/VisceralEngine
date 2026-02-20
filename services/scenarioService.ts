@@ -11,11 +11,11 @@ export class ScenarioService {
     async generateScenarios(character: Character): Promise<Scenario[]> {
         try {
             const prompt = `
-      Generate 3 distinct starting scenarios for a "Hard Reality" roleplaying game based on this character:
+      Generate 3 distinct starting scenarios for a grounded, gritty-but-fair roleplaying game based on this character:
       ${JSON.stringify(character)}
-      1. MUNDANE HOOK: Low stakes, grounded.
-      2. VIOLENT HOOK: Immediate danger/action.
-      3. MATURE HOOK: Social/Ethical complexity.
+      1. MUNDANE HOOK: Low stakes, everyday problem with a subtle complication.
+      2. VIOLENT HOOK: Immediate danger/action with a plausible cause and a clear exit/next step.
+      3. MATURE HOOK: Social/ethical complexity. Adult themes are allowed, including sexual situations.
       Output JSON only.
       `;
 
