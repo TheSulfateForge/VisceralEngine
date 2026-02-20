@@ -1,7 +1,5 @@
 /**
- * contentValidation.ts — v1.3
- *
- * Runtime content validation layer.
+ * contentValidation.ts — v1.4
  *
  * v1.3 changes:
  *   - Banned name scanning now covers ALL string fields in the AI response,
@@ -9,6 +7,15 @@
  *     NPC interaction fields, and world_tick entries are all scanned and
  *     sanitised before being written to state.
  *   - Added sanitiseAllFields() for full-response sanitisation.
+ *
+ * v1.4 changes:
+ *   - containsRenameMarker(): detects unresolved [RENAME:X] placeholders.
+ *   - checkLoreDuplicate(): semantic Jaccard similarity check for lore (threshold 0.60),
+ *     preventing near-duplicate entries like "Silver-Stabilized" vs "Silver-Stilled".
+ *   - sanitiseAllFields() section 5 (new_lore): nulls out lore entries that still
+ *     contain [RENAME:X] markers after sanitisation — they never reach the approval modal.
+ *   - sanitiseAllFields() section 11 (known_entity_updates): filters out entity updates
+ *     whose name still contains a [RENAME:X] marker, preserving the existing registry entry.
  */
 
 import { BANNED_NAMES } from '../constants';
@@ -94,6 +101,9 @@ export const sanitiseAllFields = (response: ModelResponseSchema): FullSanitisati
     }
 
     // 5. new_lore — keyword and content
+    // v1.4: If [RENAME:X] survives sanitisation in either field, null out the lore entirely.
+    // The AI used a banned name it couldn't auto-resolve — better to skip the entry than
+    // write "[RENAME:Thorne]'s Equipment" into canonical lore where it will persist.
     if (r.new_lore) {
         const { result: kw, violations: kviol } = sanitiseBannedNames(r.new_lore.keyword);
         r.new_lore.keyword = kw;
@@ -102,15 +112,20 @@ export const sanitiseAllFields = (response: ModelResponseSchema): FullSanitisati
         const { result: ct, violations: cviol } = sanitiseBannedNames(r.new_lore.content);
         r.new_lore.content = ct;
         track(cviol);
+
+        if (containsRenameMarker(r.new_lore.keyword) || containsRenameMarker(r.new_lore.content)) {
+            r.new_lore = null;
+        }
     }
 
     // 6. npc_interaction — speaker, dialogue, subtext, biological_tells
     if (r.npc_interaction) {
         const fields: Array<keyof typeof r.npc_interaction> = ['speaker', 'dialogue', 'subtext', 'biological_tells'];
+        const interaction = r.npc_interaction as unknown as Record<string, unknown>;
         for (const field of fields) {
             if (typeof r.npc_interaction[field] === 'string') {
                 const { result, violations } = sanitiseBannedNames(r.npc_interaction[field] as string);
-                (r.npc_interaction as Record<string, string>)[field] = result;
+                interaction[field] = result;
                 track(violations);
             }
         }
@@ -153,7 +168,18 @@ export const sanitiseAllFields = (response: ModelResponseSchema): FullSanitisati
     }
 
     // 11. known_entity_updates — name, role, impression, leverage, ledger entries
+    // v1.4: Filter out any entity update whose name still contains a [RENAME:X] marker.
+    // The AI failed to resolve the banned name — writing "Thor-6" into the registry
+    // is worse than preserving the old entry until a clean name arrives next turn.
     if (r.known_entity_updates) {
+        r.known_entity_updates = r.known_entity_updates.filter(entity => {
+            if (containsRenameMarker(entity.name)) {
+                track([`RENAME_MARKER_IN_ENTITY:${entity.name}`]);
+                return false;
+            }
+            return true;
+        });
+
         r.known_entity_updates = r.known_entity_updates.map(entity => {
             const scanField = (val: string): string => {
                 const { result, violations } = sanitiseBannedNames(val);
@@ -184,6 +210,7 @@ const STOP_WORDS = new Set([
     'that','this','it','he','she','they','we','i','you','be','been','being',
 ]);
 const SIMILARITY_THRESHOLD = 0.65;
+const LORE_SIMILARITY_THRESHOLD = 0.60;
 
 const significantWords = (text: string): Set<string> => {
     return new Set(
@@ -212,6 +239,56 @@ export const checkMemoryDuplicate = (
 
         if (similarity >= SIMILARITY_THRESHOLD) {
             const isUpdate = newFact.length > existingMemory[i].fact.length;
+            return { isDuplicate: !isUpdate, isUpdate, existingIndex: i };
+        }
+    }
+
+    return { isDuplicate: false, isUpdate: false, existingIndex: -1 };
+};
+
+// ---------------------------------------------------------------------------
+// Lore deduplication helpers
+// ---------------------------------------------------------------------------
+
+export const findExistingLore = (keyword: string, lore: LoreItem[]): LoreItem | undefined => {
+    return lore.find(l => l.keyword.toLowerCase() === keyword.toLowerCase());
+};
+
+/**
+ * v1.4: Detects unresolved [RENAME:X] placeholders in any string.
+ * Used to guard lore entries and entity names from being written to state
+ * with broken placeholder names.
+ */
+export const containsRenameMarker = (text: string): boolean =>
+    /\[RENAME:[^\]]+\]/i.test(text);
+
+/**
+ * v1.4: Semantic duplicate detector for lore entries.
+ * Uses the same Jaccard / significant-word algorithm as checkMemoryDuplicate,
+ * but at a slightly lower threshold (0.60 vs 0.65) since lore keywords are shorter.
+ * Combines keyword + content for a richer signal.
+ *
+ * Returns:
+ *   isDuplicate: true  → suppress the new entry entirely
+ *   isUpdate:    true  → new entry is substantially longer; offer as a replacement
+ *   existingIndex      → index of the matching existing entry
+ */
+export const checkLoreDuplicate = (
+    newKeyword: string,
+    newContent: string,
+    existingLore: LoreItem[]
+): { isDuplicate: boolean; isUpdate: boolean; existingIndex: number } => {
+    const newText = `${newKeyword} ${newContent}`;
+    const newWords = significantWords(newText);
+
+    for (let i = 0; i < existingLore.length; i++) {
+        const existingText = `${existingLore[i].keyword} ${existingLore[i].content}`;
+        const existingWords = significantWords(existingText);
+        const similarity = jaccardSimilarity(newWords, existingWords);
+
+        if (similarity >= LORE_SIMILARITY_THRESHOLD) {
+            // isUpdate = true when the new entry is substantially longer (an expansion)
+            const isUpdate = newContent.length > existingLore[i].content.length * 1.25;
             return { isDuplicate: !isUpdate, isUpdate, existingIndex: i };
         }
     }
@@ -303,14 +380,6 @@ export const findExpiredConditions = (
         if (appliedAt === undefined) return false;
         return (currentMinutes - appliedAt) >= duration;
     });
-};
-
-// ---------------------------------------------------------------------------
-// Lore deduplication helpers
-// ---------------------------------------------------------------------------
-
-export const findExistingLore = (keyword: string, lore: LoreItem[]): LoreItem | undefined => {
-    return lore.find(l => l.keyword.toLowerCase() === keyword.toLowerCase());
 };
 
 // ---------------------------------------------------------------------------

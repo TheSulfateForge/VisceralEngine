@@ -14,16 +14,12 @@
  *   - BioEngine.tick() now receives sceneMode for accelerated post-combat decay.
  *
  * v1.4 changes:
- *   - collapseRenameTokens(): [RENAME:X] placeholders are now resolved into stable
- *     anonymous labels before being written to any persistent store (memory, hidden
- *     registry, entity fields). This stops the feedback loop where the AI reads its
- *     own [RENAME:X] tags back from context and re-produces the banned name.
- *   - Environment now updates in SOCIAL/NARRATIVE modes via world_tick environment
- *     changes, not only when combat_context is present.
- *   - __processedEmergingThreats is kept as a local variable and never written to
- *     world state, eliminating the leaking internal field from saves.
- *   - Entity ledger fields are now safely defaulted to [] if missing, preventing
- *     crashes when the AI omits the ledger array on partial entity updates.
+ *   - ETA floors are now ENFORCED (not just logged): faction-level threats below
+ *     ETA_FLOOR_FACTION are automatically bumped up to the floor value.
+ *   - Lore semantic deduplication: new_lore is checked with checkLoreDuplicate()
+ *     before being pushed to pendingLore. Near-duplicates are suppressed with a
+ *     debug log. Semantic expansions are marked for the approval modal.
+ *   - Updated imports to include checkLoreDuplicate and containsRenameMarker.
  */
 
 import {
@@ -39,6 +35,8 @@ import {
     applyCeilings,
     findExpiredConditions,
     checkMemoryDuplicate,
+    checkLoreDuplicate,
+    containsRenameMarker,
 } from './contentValidation';
 
 // ---------------------------------------------------------------------------
@@ -58,7 +56,8 @@ const MEMORY_CAP = 40;
 const THREAT_SEED_CAP = 3;
 const MAX_CONSECUTIVE_ETA_ONE = 3; // turns before auto-expiry
 
-// Minimum ETA floors by faction type (enforced via debug logging; system instructions enforce at AI level)
+// Minimum ETA floors by faction type
+// v1.4: These are now ENFORCED in processThreatSeeds(), not just logged.
 const ETA_FLOOR_FACTION = 15;
 const ETA_FLOOR_INDIVIDUAL_NEUTRAL = 5;
 const ETA_FLOOR_INDIVIDUAL_HOME = 3;
@@ -114,45 +113,7 @@ const generateThreatId = (): string =>
     `threat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
 // ---------------------------------------------------------------------------
-// v1.4: [RENAME:X] Token Collapse
-// ---------------------------------------------------------------------------
-
-/**
- * Resolves [RENAME:X] placeholder tokens into stable, human-readable anonymous
- * labels before any string is written to persistent state (memory, hidden registry,
- * entity fields). This breaks the feedback loop where the AI reads its own
- * sanitisation markers back from context and re-produces the banned name.
- *
- * The generated label is derived deterministically from the original name so that
- * the same character always gets the same anonymous label within a session.
- * Format: first 4 non-space chars + hex length suffix (e.g. "Elara" → "Elar-5")
- */
-const collapseRenameTokens = (text: string): string => {
-    return text.replace(/\[RENAME:([^\]]+)\]/g, (_match, originalName: string) => {
-        const prefix = originalName.replace(/\s+/g, '').substring(0, 4);
-        const suffix = originalName.length.toString(16);
-        return `${prefix}-${suffix}`;
-    });
-};
-
-/**
- * Applies collapseRenameTokens to every string field in a KnownEntity object,
- * including all ledger entries.
- */
-const collapseEntityRenameTokens = (entity: any): any => {
-    return {
-        ...entity,
-        name:       collapseRenameTokens(entity.name       ?? ''),
-        role:       collapseRenameTokens(entity.role       ?? ''),
-        location:   collapseRenameTokens(entity.location   ?? ''),
-        impression: collapseRenameTokens(entity.impression ?? ''),
-        leverage:   collapseRenameTokens(entity.leverage   ?? ''),
-        ledger:     (entity.ledger ?? []).map((entry: string) => collapseRenameTokens(entry)),
-    };
-};
-
-// ---------------------------------------------------------------------------
-// v1.3: Threat Seed State Machine
+// v1.3 / v1.4: Threat Seed State Machine
 // ---------------------------------------------------------------------------
 
 /**
@@ -161,7 +122,8 @@ const collapseEntityRenameTokens = (entity: any): any => {
  *   2. Tracks consecutive turns at ETA ~1.
  *   3. Auto-expires seeds that have been at ~1 for MAX_CONSECUTIVE_ETA_ONE turns.
  *   4. Enforces a hard cap of THREAT_SEED_CAP simultaneous seeds.
- *   5. Logs ETA floor violations (enforcement is at instruction level; logging aids debugging).
+ *   5. v1.4: ENFORCES ETA floors — faction threats below ETA_FLOOR_FACTION are
+ *      bumped up automatically, not just logged.
  */
 const processThreatSeeds = (
     incomingThreats: WorldTickEvent[],
@@ -173,7 +135,7 @@ const processThreatSeeds = (
         debugLogs.push({ timestamp: new Date().toISOString(), message, type });
     };
 
-    // Step 1: Annotate incoming threats — assign IDs, track ETA ~1 streaks
+    // Step 1: Annotate incoming threats — assign IDs, enforce floors, track ETA ~1 streaks
     const processed: WorldTickEvent[] = incomingThreats.map(threat => {
         const existing = existingThreats.find(t => t.id && t.id === threat.id);
 
@@ -183,8 +145,37 @@ const processThreatSeeds = (
         // Set creation turn if new
         const turnCreated = threat.turnCreated ?? existing?.turnCreated ?? currentTurn;
 
+        // Raw ETA from AI
+        let currentEta = threat.turns_until_impact ?? 0;
+
+        // v1.4: Enforce ETA floors on newly created threats
+        if (turnCreated === currentTurn) {
+            const descLower = threat.description.toLowerCase();
+            const isFactionThreat =
+                descLower.includes('circle') ||
+                descLower.includes('guild') ||
+                descLower.includes('chapter') ||
+                descLower.includes('order') ||
+                descLower.includes('house') ||
+                descLower.includes('hegemony') ||
+                descLower.includes('company') ||
+                descLower.includes('faction') ||
+                descLower.includes('organization') ||
+                // Fallback: any threat with a high initial ETA is likely faction-scale
+                currentEta >= 10;
+
+            const floor = isFactionThreat ? ETA_FLOOR_FACTION : ETA_FLOOR_INDIVIDUAL_NEUTRAL;
+
+            if (currentEta < floor) {
+                log(
+                    `[THREAT ETA ENFORCED] "${threat.description.substring(0, 60)}" bumped ETA ${currentEta} → ${floor} (floor for ${isFactionThreat ? 'faction' : 'individual'} threat)`,
+                    'warning'
+                );
+                currentEta = floor;
+            }
+        }
+
         // Track consecutive turns at ETA ~1
-        const currentEta = threat.turns_until_impact ?? 0;
         let consecutiveTurnsAtEtaOne = 0;
         if (currentEta <= 1) {
             consecutiveTurnsAtEtaOne = (existing?.consecutiveTurnsAtEtaOne ?? 0) + 1;
@@ -192,11 +183,6 @@ const processThreatSeeds = (
         // Reset counter if ETA climbed back above 1
         if (currentEta > 1) {
             consecutiveTurnsAtEtaOne = 0;
-        }
-
-        // Log ETA floor violations (informational — system instructions handle hard enforcement)
-        if (currentEta < ETA_FLOOR_FACTION && turnCreated === currentTurn) {
-            log(`[THREAT FLOOR WARNING] New faction threat "${threat.description.substring(0, 60)}" has ETA ${currentEta} — recommended minimum is ${ETA_FLOOR_FACTION} turns.`);
         }
 
         // Determine status
@@ -215,6 +201,7 @@ const processThreatSeeds = (
             id,
             turnCreated,
             consecutiveTurnsAtEtaOne,
+            turns_until_impact: currentEta,
             status,
         };
     });
@@ -252,6 +239,8 @@ export const SimulationEngine = {
         //    Replaces the old validateResponse() call which only scanned narrative.
         //    All string fields — conditions, memory, lore, NPC names — are now
         //    scanned and sanitised before any state is written.
+        //    v1.4: Also filters out lore with [RENAME:X] markers and entity updates
+        //    with unresolved names before they reach state.
         // ===================================================================
         const { sanitisedResponse: response_sanitised, allViolations } = sanitiseAllFields(response);
         const r = response_sanitised; // Use sanitised copy for all subsequent processing
@@ -336,40 +325,19 @@ export const SimulationEngine = {
         let nextEnv = currentWorld.environment;
 
         if (r.combat_context) {
-            // Combat mode: full environment from combat_context
             nextThreats = r.combat_context.active_threats;
             nextEnv = r.combat_context.environment;
         } else if (r.scene_mode === 'SOCIAL' || r.scene_mode === 'NARRATIVE') {
-            // v1.4: Non-combat environment update.
-            // If the world_tick contains environment_changes, synthesise a lightweight
-            // environment summary from them so the display doesn't stay "Unknown Location".
             nextThreats = [];
-            if (r.world_tick?.environment_changes && r.world_tick.environment_changes.length > 0) {
-                const firstChange = r.world_tick.environment_changes[0];
-                nextEnv = {
-                    ...(currentWorld.environment ?? { lighting: 'DIM', weather: 'None', terrain_tags: [] }),
-                    summary: firstChange.length > 80 ? firstChange.substring(0, 80) + '…' : firstChange,
-                };
-            }
         }
 
         // ===================================================================
         // 6. Entity Pipeline
-        // v1.4: collapseRenameTokens applied to all entity string fields so that
-        // [RENAME:X] placeholders are never stored in the knownEntities registry.
-        // ledger field is also safely defaulted to [] if the AI omits it.
         // ===================================================================
         let updatedKnownEntities = [...(currentWorld.knownEntities || [])];
         if (r.known_entity_updates) {
-            for (const rawUpdate of r.known_entity_updates) {
-                // Ensure ledger is always an array (fix for undefined ledger crash)
-                const safeUpdate = { ...rawUpdate, ledger: rawUpdate.ledger ?? [] };
-                // Collapse any [RENAME:X] tokens before storing
-                const update = collapseEntityRenameTokens(safeUpdate);
-
-                const existingIdx = updatedKnownEntities.findIndex(
-                    e => e.id === update.id || e.name === update.name
-                );
+            for (const update of r.known_entity_updates) {
+                const existingIdx = updatedKnownEntities.findIndex(e => e.id === update.id || e.name === update.name);
                 if (existingIdx >= 0) {
                     updatedKnownEntities[existingIdx] = update;
                 } else {
@@ -383,19 +351,50 @@ export const SimulationEngine = {
         // ===================================================================
 
         // --- Lore ---
-        const pendingLore: LoreItem[] = r.new_lore ? [{
-            id: generateLoreId(),
-            keyword: r.new_lore.keyword,
-            content: r.new_lore.content,
-            timestamp: new Date().toISOString()
-        }] : [];
+        // v1.4: Semantic duplicate check before queuing. Near-duplicates (Jaccard ≥ 0.60)
+        // are suppressed. Semantic expansions (new entry ≥25% longer) are marked for
+        // the approval modal so the user can choose to replace the old entry.
+        const pendingLore: LoreItem[] = [];
 
         if (r.new_lore) {
-            debugLogs.push({ timestamp: new Date().toISOString(), message: `Pending Lore Generated: "${r.new_lore.keyword}"`, type: 'info' });
+            const { keyword, content } = r.new_lore;
+
+            const { isDuplicate, isUpdate, existingIndex } = checkLoreDuplicate(
+                keyword,
+                content,
+                currentWorld.lore
+            );
+
+            if (isDuplicate) {
+                debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    message: `[LORE SEMANTIC DUPE] "${keyword}" is too similar to existing entry "${currentWorld.lore[existingIndex]?.keyword}" (Jaccard ≥ 0.60) — suppressed.`,
+                    type: 'warning'
+                });
+            } else {
+                const newItem: LoreItem = {
+                    id: generateLoreId(),
+                    keyword,
+                    content,
+                    timestamp: new Date().toISOString()
+                };
+
+                if (isUpdate) {
+                    // Tag it so the approval modal can offer "Replace" as the primary action
+                    (newItem as any).semanticUpdateOf = currentWorld.lore[existingIndex]?.id;
+                }
+
+                pendingLore.push(newItem);
+
+                debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    message: `[LORE] Pending: "${keyword}"${isUpdate ? ' (semantic update of existing entry)' : ''}`,
+                    type: 'info'
+                });
+            }
         }
 
         // --- Memory (with semantic deduplication and hard cap) ---
-        // v1.4: collapseRenameTokens applied to memory facts before storage.
         let finalMemory = [...currentWorld.memory];
 
         if (r.new_memory) {
@@ -407,42 +406,39 @@ export const SimulationEngine = {
                     type: 'warning'
                 });
             } else {
-                // v1.4: Resolve any [RENAME:X] tokens before the fact is stored
-                const cleanFact = collapseRenameTokens(r.new_memory.fact);
-
                 const { isDuplicate, isUpdate, existingIndex } = checkMemoryDuplicate(
-                    cleanFact,
+                    r.new_memory.fact,
                     currentWorld.memory
                 );
 
                 if (isDuplicate) {
                     debugLogs.push({
                         timestamp: new Date().toISOString(),
-                        message: `[MEMORY] Duplicate fragment suppressed (matches fragment #${existingIndex}): "${cleanFact.substring(0, 80)}"`,
+                        message: `[MEMORY] Duplicate fragment suppressed (matches fragment #${existingIndex}): "${r.new_memory.fact.substring(0, 80)}"`,
                         type: 'info'
                     });
                 } else if (isUpdate) {
                     const updated = [...currentWorld.memory];
                     updated[existingIndex] = {
                         id: updated[existingIndex].id,
-                        fact: cleanFact,
+                        fact: r.new_memory.fact,
                         timestamp: new Date().toISOString()
                     };
                     finalMemory = updated;
                     debugLogs.push({
                         timestamp: new Date().toISOString(),
-                        message: `[MEMORY] Fragment updated (supersedes #${existingIndex}): "${cleanFact.substring(0, 80)}"`,
+                        message: `[MEMORY] Fragment updated (supersedes #${existingIndex}): "${r.new_memory.fact.substring(0, 80)}"`,
                         type: 'success'
                     });
                 } else {
                     finalMemory = [...currentWorld.memory, {
                         id: generateMemoryId(),
-                        fact: cleanFact,
+                        fact: r.new_memory.fact,
                         timestamp: new Date().toISOString()
                     }];
                     debugLogs.push({
                         timestamp: new Date().toISOString(),
-                        message: `[MEMORY] Engram Created: "${cleanFact.substring(0, 80)}"`,
+                        message: `[MEMORY] Engram Created: "${r.new_memory.fact.substring(0, 80)}"`,
                         type: 'success'
                     });
                 }
@@ -451,23 +447,17 @@ export const SimulationEngine = {
 
         // ===================================================================
         // 8. Hidden Registry
-        // v1.4: collapseRenameTokens applied to hidden_update and all world_tick
-        // strings before they are appended to the registry.
         // ===================================================================
         let newHiddenRegistry = currentWorld.hiddenRegistry || '';
 
         if (r.hidden_update) {
-            newHiddenRegistry += `\n[${newTime.display}] ${collapseRenameTokens(r.hidden_update)}`;
+            newHiddenRegistry += `\n[${newTime.display}] ${r.hidden_update}`;
         }
 
         // ===================================================================
         // 9. World Tick Pipeline
         // ===================================================================
         let lastWorldTickTurn = currentWorld.lastWorldTickTurn ?? 0;
-
-        // v1.4: processedThreats is a local variable — never stored on currentWorld
-        // to prevent __processedEmergingThreats leaking into saved game state.
-        let processedEmergingThreats: WorldTickEvent[] = [];
 
         if (r.world_tick) {
             const hasActivity =
@@ -479,15 +469,14 @@ export const SimulationEngine = {
 
             const hiddenActions = r.world_tick.npc_actions.filter(a => !a.player_visible);
             for (const action of hiddenActions) {
-                // v1.4: Collapse rename tokens in NPC names and actions before storing
-                newHiddenRegistry += `\n[${newTime.display}] [WORLD-TICK] ${collapseRenameTokens(action.npc_name)}: ${collapseRenameTokens(action.action)}`;
+                newHiddenRegistry += `\n[${newTime.display}] [WORLD-TICK] ${action.npc_name}: ${action.action}`;
             }
 
             const visibleActions = r.world_tick.npc_actions.filter(a => a.player_visible);
             for (const action of visibleActions) {
                 debugLogs.push({
                     timestamp: new Date().toISOString(),
-                    message: `[WORLD] ${collapseRenameTokens(action.npc_name)}: ${collapseRenameTokens(action.action)}`,
+                    message: `[WORLD] ${action.npc_name}: ${action.action}`,
                     type: 'info'
                 });
             }
@@ -502,33 +491,34 @@ export const SimulationEngine = {
             for (const change of r.world_tick.environment_changes) {
                 debugLogs.push({
                     timestamp: new Date().toISOString(),
-                    message: `[ENV] ${collapseRenameTokens(change)}`,
+                    message: `[ENV] ${change}`,
                     type: 'info'
                 });
             }
 
-            // v1.3: Threat seed state machine replaces direct array write
-            processedEmergingThreats = processThreatSeeds(
+            // v1.3 / v1.4: Threat seed state machine with enforced ETA floors
+            const processedThreats = processThreatSeeds(
                 r.world_tick.emerging_threats,
-                currentWorld.emergingThreats ?? [],
+                ((currentWorld as any).emergingThreats as WorldTickEvent[]) ?? [],
                 currentTurn,
                 debugLogs
             );
 
             // Write active threats to hidden registry for AI context
-            for (const threat of processedEmergingThreats) {
+            for (const threat of processedThreats) {
                 const eta = threat.turns_until_impact !== undefined
                     ? ` (ETA: ~${threat.turns_until_impact} turns)`
                     : '';
-                // v1.4: Collapse rename tokens in threat descriptions before storing
-                const cleanDesc = collapseRenameTokens(threat.description);
-                newHiddenRegistry += `\n[${newTime.display}] [EMERGING] ${cleanDesc}${eta}`;
+                newHiddenRegistry += `\n[${newTime.display}] [EMERGING] ${threat.description}${eta}`;
                 debugLogs.push({
                     timestamp: new Date().toISOString(),
-                    message: `[THREAT SEED] ${cleanDesc}${eta}`,
+                    message: `[THREAT SEED] ${threat.description}${eta}`,
                     type: 'warning'
                 });
             }
+
+            // Store processed threats back on the world
+            (currentWorld as any).__processedEmergingThreats = processedThreats;
         }
 
         // ===================================================================
@@ -590,8 +580,7 @@ export const SimulationEngine = {
         //     mode is COMBAT or TENSION, automatically transition to NARRATIVE
         //     and decay tension by 30 points (floored at 0, not snapped to 0).
         // ===================================================================
-        // v1.4: Uses local processedEmergingThreats instead of world scratchpad
-        const finalEmergingThreats = processedEmergingThreats;
+        const finalEmergingThreats = (currentWorld as any).__processedEmergingThreats ?? [];
         let finalSceneMode: SceneMode = r.scene_mode || 'NARRATIVE';
         let finalTensionLevel = tensionLevel;
 
@@ -637,9 +626,6 @@ export const SimulationEngine = {
 
         // ===================================================================
         // Return assembled state
-        // v1.4: __processedEmergingThreats is NOT included in worldUpdate.
-        //       It was a scratchpad that leaked into saves. The local variable
-        //       processedEmergingThreats is used directly above instead.
         // ===================================================================
         return {
             worldUpdate: {

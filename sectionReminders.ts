@@ -1,5 +1,6 @@
 // ============================================================================
-// SECTIONREMINDERS.TS — v1.3
+// SECTIONREMINDERS.TS — v1.4
+//
 // v1.3 changes:
 //   - Added BARGAIN_CHECK reminder: fires when Devil's Bargain clock is overdue.
 //     getSectionReminder() now accepts lastBargainTurn and currentTurn to
@@ -10,6 +11,14 @@
 //   - Added GOAL_LIFECYCLE reminder: fires periodically to force stale goal review.
 //   - Added ENTITY_DENSITY reminder: fires to remind the AI to populate the
 //     entity registry when density is low for the current turn count.
+//
+// v1.4 changes:
+//   - THREAT_SEED_INTEGRITY updated: adds mandatory information chain declaration,
+//     travel companion containment check, and threat proportionality requirement.
+//   - New WORLD_NORMALCY reminder: fires every 8 turns to prevent the engine from
+//     treating all NPCs as adversarial; reinforces the 70/20/10 population baseline.
+//   - getSectionReminder(): WORLD_NORMALCY added to rotation at priority 5.5
+//     (between NARRATIVE_INTEGRITY and THREAT_SEED_INTEGRITY).
 // ============================================================================
 
 import { SceneMode } from './types';
@@ -18,7 +27,7 @@ import { SceneMode } from './types';
 const REMINDERS = {
     VOCABULARY: `[SYSTEM REMINDER: FORBIDDEN VOCABULARY]
 CRITICAL CHECK. Scan your intended output:
-1. Are you using BANNED NAMES? (Elara, Kaela, Lyra, Kael, Vex, Thorne...) -> REPLACE.
+1. Are you using BANNED NAMES? (Elara, Kaela, Lyra, Kael, Vex, Thorne...) -> REPLACE with a completely original name. No near-homophones. No numbered suffixes.
 2. Are you using EUPHEMISMS? (Member, core, folds, flower, heat, sex...) -> USE ANATOMICAL TERMS.
 3. Are you using CLICHÉS? (Heart pounded, shiver down spine, released breath...) -> BE SPECIFIC.`,
 
@@ -65,6 +74,7 @@ CONDITIONS: Are you adding conditions to the character?
 
 NEW LORE: Are you proposing new_lore?
 → Does it document something discovered THIS TURN, or does it retroactively justify something you already wrote?
+→ Is it a semantic variation of an existing lore entry (similar meaning, different keyword)? If so, skip it.
 → Retroactive lore that worsens the player's position (new enemy capabilities, factions, etc.) is a SIMULATION FAILURE.
 
 THREAT SCALE: Are emerging threats proportional to the established faction's known resources?
@@ -89,26 +99,33 @@ This is not optional. The bargain_request field must be populated.
 After offering the bargain (accepted or not), the clock resets.
 Bargain costs must be SPECIFIC, PERMANENT, and a genuine trade-off. Never vague.`,
 
-    // v1.3: Threat seed integrity — reinforces all four threat seed protocol rules
+    // v1.4: Threat seed integrity — updated with information chain, companion containment, proportionality
     THREAT_SEED_INTEGRITY: `[SYSTEM REMINDER: THREAT SEED PROTOCOL — INTEGRITY CHECK]
-Before writing or updating any emerging_threats this turn, verify:
+Before writing or updating any emerging_threats this turn, verify ALL of the following:
 
-ETA FLOORS: Is any new faction-level threat (guild, mercenary company, noble house) at ETA < 15?
-→ That is below the minimum floor. Adjust upward or it is a simulation failure.
+ETA FLOORS:
+→ New faction-level threat (guild, chapter, company, noble house): ETA must be ≥ 15. The engine enforces this — ETAs below floor are auto-raised.
+→ New individual threat (neutral NPC not in their home territory): ETA must be ≥ 5.
 
-ETA ~1 DURATION: Has any threat seed been at ETA ~1 for 2+ consecutive turns?
-→ It must TRIGGER this turn or be REMOVED with a specific in-world reason. Not "still imminent."
+ETA ~1 DURATION:
+→ Any threat at ETA ~1 for 2+ consecutive turns MUST trigger this turn or be removed with a specific in-world reason. Not "still imminent."
 
-SEED CAP: Are there more than 3 threat seeds in emerging_threats?
-→ Resolve or expire the oldest before adding new ones.
+SEED CAP:
+→ More than 3 seeds? Resolve or expire the oldest before adding new ones.
 
-CAPABILITY PRE-EXISTENCE TEST: Does this threat depend on a faction capability not yet in lore?
-→ If you cannot point to an existing lore entry that establishes this capability, the ETA floor DOUBLES.
-→ Retroactive capability invention (revealing a capability at the exact moment it's needed) is a simulation failure.
+CAPABILITY PRE-EXISTENCE:
+→ Does this threat require a faction capability not yet in lore? If so, ETA floor DOUBLES.
 
-NPC INFORMATION CHECK: Does this threat require an NPC to know something about the player?
-→ State in your thought_process HOW that NPC obtained that information and when.
-→ If you cannot, the NPC does not have that information yet. Adjust the ETA accordingly.`,
+INFORMATION CHAIN (MANDATORY — state this in thought_process before seeding):
+→ "[THREAT CHAIN] <Faction> learned about <event> because: Step 1: [observer + when]. Step 2: [communication channel + delay]. Step 3: [faction receipt + delay]. Total ETA floor: [sum of delays in turns]."
+→ If the NPC is TRAVELING WITH the player: they cannot have warned anyone unless a communication action was shown in narrative.
+→ If the NPC is DETAINED: they cannot warn anyone at all.
+→ If you cannot name the observer and channel using pre-established entities, the threat is FORBIDDEN.
+
+PROPORTIONALITY:
+→ Is this a "Severe" threat (faction mobilization, hit order, wanted status)? Did the player's action genuinely warrant that?
+→ Default scale: most conflicts → Minor or Moderate complication. Severe is for major, deliberate antagonism of powerful factions.
+→ Not every interaction produces a threat. Most produce nothing. Let the world breathe.`,
 
     // v1.3: Goal lifecycle — forces stale goal review
     GOAL_LIFECYCLE: `[SYSTEM REMINDER: GOAL LIFECYCLE — STALE GOAL AUDIT]
@@ -137,6 +154,23 @@ If turn < 60 and entity count < 15: You must add at least one new entity this tu
 CREATION OBLIGATION: Any NPC who speaks dialogue, takes an autonomous action, or is named in narrative this turn — if they are not already in the entity registry — must be added to known_entity_updates before this turn ends. Entity entries require: name, role, location, impression, relationship_level, leverage, and at least one goal in their ledger.
 
 The inn has a staff. The city has a guard captain. The market has vendors. Populate them.`,
+
+    // v1.4: Population normalcy — fires to prevent treating all NPCs as adversarial
+    WORLD_NORMALCY: `[SYSTEM REMINDER: POPULATION BASELINE — THE WORLD IS MOSTLY NORMAL]
+Before writing any NPC encounter or world_tick NPC action, apply the population baseline:
+
+70% of people are ordinary civilians: travelers, merchants, farmers, guards doing their jobs.
+20% have minor complications (gruff, suspicious, opportunistic, frightened of strangers).
+10% have agendas directly relevant to the player.
+
+START from the 70% when generating an encounter. Elevate only if established context warrants it.
+
+Ask yourself before each NPC introduction:
+→ Is this person a spy, operative, or faction agent? Is there a lore entry or hidden_update that establishes this? If not, they are not.
+→ Is this person hostile on first contact? Does the player have a known reputation, contraband, or visible threat signal that would cause this? If not, they are not.
+→ Am I about to seed a threat from this ordinary interaction? Could I justify the information chain if challenged? If not, do not seed a threat.
+
+The world's drama comes FROM ordinary life, not as a replacement for it.`,
 };
 
 /**
@@ -144,6 +178,9 @@ The inn has a staff. The city has a guard captain. The market has vendors. Popul
  *
  * v1.3: Now accepts lastBargainTurn and currentTurnCount to drive the mandatory
  * Devil's Bargain clock. Also routes to new v1.3 reminders by turn schedule.
+ *
+ * v1.4: Added WORLD_NORMALCY at priority 5.5 (fires every 8 turns, offset by 4
+ * to interleave with NARRATIVE_INTEGRITY). Updated THREAT_SEED_INTEGRITY to v1.4.
  */
 export const getSectionReminder = (
     turnCount: number,
@@ -173,10 +210,14 @@ export const getSectionReminder = (
     // Priority 4: Narrative Integrity (Every 5 turns)
     if (turnCount % 5 === 0) return REMINDERS.NARRATIVE_INTEGRITY;
 
-    // Priority 5: Threat Seed Integrity (v1.3 — Every 6 turns during TENSION/COMBAT,
+    // Priority 5: Threat Seed Integrity (v1.4 — Every 6 turns during TENSION/COMBAT,
     // every 10 turns otherwise)
     if ((mode === 'TENSION' || mode === 'COMBAT') && turnCount % 6 === 0) return REMINDERS.THREAT_SEED_INTEGRITY;
     if (turnCount % 10 === 0) return REMINDERS.THREAT_SEED_INTEGRITY;
+
+    // Priority 5.5: World Normalcy (v1.4 — Every 8 turns, offset by 4)
+    // Fires between NARRATIVE_INTEGRITY and FIDELITY checks to keep population baseline fresh.
+    if ((turnCount - 4) % 8 === 0 && turnCount >= 4) return REMINDERS.WORLD_NORMALCY;
 
     // Priority 6: Simulation Fidelity (Every 6 turns, offset from threat check)
     if (turnCount % 6 === 1) return REMINDERS.FIDELITY;
