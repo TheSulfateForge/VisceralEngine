@@ -5,6 +5,7 @@
 import React, { useState } from 'react';
 import { useGameStore } from '../../store';
 import { Scenario } from '../../types';
+import { useGeminiClient } from '../../hooks/useGeminiClient';
 
 // Scenario-specific display config
 const SCENARIO_META = [
@@ -42,13 +43,9 @@ const SCENARIO_META = [
     },
 ];
 
-interface Props {
-    handleSend: (msg: string) => void;
-    setUI: (update: { view: string }) => void;
-}
-
-export const ScenarioSelectionView: React.FC<Props> = ({ handleSend, setUI }) => {
-    const { gameWorld } = useGameStore();
+export const ScenarioSelectionView: React.FC = () => {
+    const { gameWorld, setUI } = useGameStore();
+    const { handleSend } = useGeminiClient();
     const [customEntry, setCustomEntry] = useState('');
 
     const scenarios: Scenario[] = gameWorld?.scenarios ? gameWorld.scenarios : [];
@@ -152,20 +149,33 @@ export const ScenarioSelectionView: React.FC<Props> = ({ handleSend, setUI }) =>
                 </div>
 
                 {/* ── Custom Entry ── */}
-                <div className="border border-gray-900 p-6 space-y-4">
-                    <p className="text-xs font-mono text-gray-600 uppercase tracking-widest">Custom Entry Point</p>
-                    <textarea
-                        value={customEntry}
-                        onChange={e => setCustomEntry(e.target.value)}
-                        placeholder="Describe your own starting situation..."
-                        className="w-full bg-black border border-gray-800 text-gray-300 p-4 text-sm font-light resize-none h-24 focus:outline-none focus:border-red-900 placeholder-gray-700"
-                    />
-                    <button
-                        onClick={handleCustomStart}
-                        disabled={!customEntry.trim()}
-                        className="px-6 py-2 border border-gray-800 text-gray-400 text-xs font-mono uppercase tracking-widest hover:border-red-900 hover:text-red-400 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
-                    >
-                        Initialize Custom Entry
+                <div className="pt-12 border-t border-gray-900/50">
+                    <div className="max-w-3xl mx-auto space-y-6">
+                        <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest block text-center">Or Initialize Manual Entry</label>
+                        <div className="relative group">
+                            <textarea
+                                value={customEntry}
+                                onChange={e => setCustomEntry(e.target.value)}
+                                placeholder="I wake up in the gutter, rain soaking through my coat..."
+                                className="w-full bg-[#080808] border border-gray-900 p-6 text-lg text-gray-300 focus:border-red-900 outline-none min-h-[150px] transition-colors resize-none"
+                            />
+                            <div className="absolute bottom-4 right-4">
+                                <button
+                                    onClick={handleCustomStart}
+                                    disabled={!customEntry.trim()}
+                                    className={`px-8 py-3 text-xs font-bold uppercase tracking-widest transition-all ${!customEntry.trim() ? 'bg-gray-900 text-gray-600 cursor-not-allowed' : 'bg-red-900 text-white hover:bg-red-700'}`}
+                                >
+                                    Begin Simulation
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* ── Back navigation ── */}
+                <div className="text-center pt-8">
+                    <button onClick={() => setUI({ view: 'creator' })} className="text-[10px] text-gray-500 hover:text-red-500 uppercase tracking-widest transition-colors">
+                        ← Return to Character Matrix
                     </button>
                 </div>
             </div>
