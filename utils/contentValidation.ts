@@ -212,7 +212,7 @@ const STOP_WORDS = new Set([
 const SIMILARITY_THRESHOLD = 0.65;
 const LORE_SIMILARITY_THRESHOLD = 0.60;
 
-const significantWords = (text: string): Set<string> => {
+export const significantWords = (text: string): Set<string> => {
     return new Set(
         text.toLowerCase()
             .replace(/[^a-z0-9 ]/g, '')
@@ -221,7 +221,7 @@ const significantWords = (text: string): Set<string> => {
     );
 };
 
-const jaccardSimilarity = (a: Set<string>, b: Set<string>): number => {
+export const jaccardSimilarity = (a: Set<string>, b: Set<string>): number => {
     const intersection = new Set([...a].filter(w => b.has(w)));
     const union = new Set([...a, ...b]);
     return union.size === 0 ? 0 : intersection.size / union.size;
@@ -294,6 +294,26 @@ export const checkLoreDuplicate = (
     }
 
     return { isDuplicate: false, isUpdate: false, existingIndex: -1 };
+};
+
+// ---------------------------------------------------------------------------
+// Condition semantic deduplication (v1.5)
+// ---------------------------------------------------------------------------
+
+const CONDITION_SIMILARITY_THRESHOLD = 0.55; // Lower than memory — conditions are short
+
+export const checkConditionDuplicate = (
+    newCondition: string,
+    existingConditions: string[]
+): { isDuplicate: boolean; existingIndex: number } => {
+    const newWords = significantWords(newCondition);
+    for (let i = 0; i < existingConditions.length; i++) {
+        const sim = jaccardSimilarity(newWords, significantWords(existingConditions[i]));
+        if (sim >= CONDITION_SIMILARITY_THRESHOLD) {
+            return { isDuplicate: true, existingIndex: i };
+        }
+    }
+    return { isDuplicate: false, existingIndex: -1 };
 };
 
 // ---------------------------------------------------------------------------

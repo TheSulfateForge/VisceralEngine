@@ -232,7 +232,10 @@ export const constructGeminiPrompt = (
   // 5. Section Reminders
   const sectionRefresh = getSectionReminder(
     gameHistory.turnCount,
-    currentMode as SceneMode
+    currentMode as SceneMode,
+    gameWorld.lastBargainTurn,
+    gameHistory.turnCount,
+    character.conditions.length
   );
   
   // 6. World Pressure (v1.1)

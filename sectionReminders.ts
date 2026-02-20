@@ -170,7 +170,34 @@ Ask yourself before each NPC introduction:
 → Is this person hostile on first contact? Does the player have a known reputation, contraband, or visible threat signal that would cause this? If not, they are not.
 → Am I about to seed a threat from this ordinary interaction? Could I justify the information chain if challenged? If not, do not seed a threat.
 
+DETAINED NPC REVIEW:
+Check hidden_update: are any NPCs currently imprisoned or incapacitated?
+→ Any conditions tied to their active pursuit of the player should be removed or marked invalid.
+→ Their world_tick actions are limited to what they can physically do from confinement.
+→ Any intelligence they pass requires an explicit bribery/messenger action with a 5-turn delay.
+
 The world's drama comes FROM ordinary life, not as a replacement for it.`,
+
+    // v1.5: Condition Audit — mandatory prune
+    CONDITION_AUDIT: `[SYSTEM REMINDER: CONDITION AUDIT — MANDATORY PRUNE]
+The character's conditions list is growing. Before adding ANY new condition this turn:
+
+Step 1 — SCAN for TRANSIENT conditions to remove:
+  Emotional states (Catharsis, Resolute, Focused...) that have no ongoing cause → REMOVE
+  Physical states from completed events (Rested, Cleaned, Well-Fed, Numbed...) → REMOVE if >8 hours ago
+  Tactical states from resolved situations (Tactical Advantage, Battle-Hardened Focus...) → REMOVE
+
+Step 2 — SCAN for LOCATION-BOUND conditions to remove:
+  Any condition naming a location the character has since left → REMOVE
+
+Step 3 — SCAN for NPC-BOUND conditions to remove:
+  Any condition naming an NPC who is now detained, dead, or absent → REMOVE
+
+Step 4 — SCAN for DUPLICATES to remove:
+  Any condition that is a less-specific or earlier version of another → REMOVE the old one
+  "Proprietary Pride" AND "Proprietary Mastery" → keep only the most recent
+
+Then add new conditions. Replacements must remove the old version simultaneously.`,
 };
 
 /**
@@ -186,8 +213,14 @@ export const getSectionReminder = (
     turnCount: number,
     mode: SceneMode,
     lastBargainTurn: number = 0,
-    currentTurnCount: number = 0
+    currentTurnCount: number = 0,
+    conditionsCount: number = 0
 ): string | null => {
+    // v1.5: Mandatory Condition Audit — Highest Priority if conditions > 30
+    if (conditionsCount > 30) {
+        return REMINDERS.CONDITION_AUDIT;
+    }
+
     // Do not fire on very early turns where system prompt is fresh
     if (turnCount < 3) return null;
 
@@ -207,8 +240,9 @@ export const getSectionReminder = (
     // Priority 3: Combat Tactics (Combat Mode Only, every 3 turns)
     if (mode === 'COMBAT' && turnCount % 3 === 0) return REMINDERS.COMBAT;
 
-    // Priority 4: Narrative Integrity (Every 5 turns)
-    if (turnCount % 5 === 0) return REMINDERS.NARRATIVE_INTEGRITY;
+    // Priority 4: Condition Audit (v1.5 — Every 5 turns)
+    // Replaces Narrative Integrity slot to ensure regular pruning
+    if (turnCount % 5 === 0) return REMINDERS.CONDITION_AUDIT;
 
     // Priority 5: Threat Seed Integrity (v1.4 — Every 6 turns during TENSION/COMBAT,
     // every 10 turns otherwise)

@@ -37,6 +37,9 @@ import {
     checkMemoryDuplicate,
     checkLoreDuplicate,
     containsRenameMarker,
+    checkConditionDuplicate,
+    significantWords,
+    jaccardSimilarity,
 } from './contentValidation';
 
 // ---------------------------------------------------------------------------
@@ -137,10 +140,22 @@ const processThreatSeeds = (
 
     // Step 1: Annotate incoming threats — assign IDs, enforce floors, track ETA ~1 streaks
     const processed: WorldTickEvent[] = incomingThreats.map(threat => {
-        const existing = existingThreats.find(t => t.id && t.id === threat.id);
+        let existing = existingThreats.find(t => t.id && t.id === threat.id);
+
+        // v1.5: Enhanced re-submission detection
+        // If ID is missing, check for semantic duplicate in existing threats
+        if (!threat.id && !existing) {
+             existing = existingThreats.find(t => {
+                const sim = jaccardSimilarity(
+                    significantWords(threat.description),
+                    significantWords(t.description)
+                );
+                return sim >= 0.60;
+            });
+        }
 
         // Assign ID if new
-        const id = threat.id || generateThreatId();
+        const id = threat.id || existing?.id || generateThreatId();
 
         // Set creation turn if new
         const turnCreated = threat.turnCreated ?? existing?.turnCreated ?? currentTurn;
@@ -535,9 +550,35 @@ export const SimulationEngine = {
                 type: 'success'
             }));
         }
-        bioResult.addedConditions.forEach(c => {
-            if (!finalConditions.includes(c)) finalConditions.push(c);
-        });
+
+        // v1.5: Hard Condition Cap
+        const MAX_CONDITIONS = 40;
+        if (finalConditions.length >= MAX_CONDITIONS && bioResult.addedConditions.length > 0) {
+            debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[CONDITION CAP] ${finalConditions.length}/${MAX_CONDITIONS} — new conditions BLOCKED until pruning occurs.`,
+                type: 'warning'
+            });
+            // Skip addedConditions entirely this turn
+        } else {
+            // v1.5: Semantic Deduplication for Added Conditions
+            bioResult.addedConditions.forEach(c => {
+                // Exact match check
+                if (finalConditions.includes(c)) return;
+
+                // Semantic match check
+                const { isDuplicate, existingIndex } = checkConditionDuplicate(c, finalConditions);
+                if (isDuplicate) {
+                    debugLogs.push({
+                        timestamp: new Date().toISOString(),
+                        message: `[CONDITION DUPE] "${c}" suppressed (matches "${finalConditions[existingIndex]}")`,
+                        type: 'info'
+                    });
+                } else {
+                    finalConditions.push(c);
+                }
+            });
+        }
 
         // --- Timed Condition Expiry ---
         const updatedTimestamps: Record<string, number> = { ...(character.conditionTimestamps ?? {}) };
@@ -623,6 +664,16 @@ export const SimulationEngine = {
             message: `Turn ${newTurnCount} complete.`,
             type: 'info'
         });
+
+        // v1.5: Staleness Warnings
+        if (newTurnCount > 15 && newTurnCount % 10 === 0) {
+            if (!currentWorld.factionIntelligence || Object.keys(currentWorld.factionIntelligence).length === 0) {
+                debugLogs.push({ timestamp: new Date().toISOString(), message: '[FACTION INTEL] factionIntelligence is empty after turn 15 — AI is not tracking faction awareness.', type: 'warning' });
+            }
+            if (!currentWorld.legalStatus?.knownClaims?.length && !currentWorld.legalStatus?.playerDocuments?.length) {
+                debugLogs.push({ timestamp: new Date().toISOString(), message: '[LEGAL STATUS] legalStatus is empty — AI is not recording claims or documents.', type: 'warning' });
+            }
+        }
 
         // ===================================================================
         // Return assembled state

@@ -105,7 +105,8 @@ export const useGeminiClient = () => {
             preCallState.gameHistory.turnCount,
             preCallState.gameWorld.sceneMode,
             preCallState.gameWorld.lastBargainTurn ?? 0,
-            preCallState.gameWorld.turnCount ?? 0
+            preCallState.gameWorld.turnCount ?? 0,
+            preCallState.character.conditions.length
         );
         let requestLogs = [...preCallState.gameHistory.debugLog];
         
