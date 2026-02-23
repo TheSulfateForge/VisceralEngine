@@ -36,6 +36,7 @@ import {
     findExpiredConditions,
     checkMemoryDuplicate,
     checkLoreDuplicate,
+    findExistingLore,
     containsRenameMarker,
     checkConditionDuplicate,
     significantWords,
@@ -369,50 +370,87 @@ export const SimulationEngine = {
         // v1.4: Semantic duplicate check before queuing. Near-duplicates (Jaccard ≥ 0.60)
         // are suppressed. Semantic expansions (new entry ≥25% longer) are marked for
         // the approval modal so the user can choose to replace the old entry.
-        const pendingLore: LoreItem[] = [];
+const pendingLore: LoreItem[] = [];
 
         if (r.new_lore) {
             const { keyword, content } = r.new_lore;
 
-            const { isDuplicate, isUpdate, existingIndex } = checkLoreDuplicate(
-                keyword,
-                content,
-                currentWorld.lore
-            );
+            // FIX 7: Exact-keyword check runs BEFORE semantic Jaccard check.
+            // Two entries with the same keyword are always a conflict regardless of
+            // content similarity — catches contradictory entries like duplicate
+            // "Tharnic Ledger Secrets" that slip past the similarity threshold.
+            const exactMatch = findExistingLore(keyword, currentWorld.lore);
 
-            if (isDuplicate) {
+            if (exactMatch) {
+                const isLonger = content.length > exactMatch.content.length;
                 debugLogs.push({
                     timestamp: new Date().toISOString(),
-                    message: `[LORE SEMANTIC DUPE] "${keyword}" is too similar to existing entry "${currentWorld.lore[existingIndex]?.keyword}" (Jaccard ≥ 0.60) — suppressed.`,
+                    message: `[LORE-EXACT-DUPLICATE] Keyword "${keyword}" already exists in canonical lore. ${isLonger ? 'Content is longer — flagging as expansion candidate.' : 'Content is shorter/equal — suppressing.'}`,
                     type: 'warning'
                 });
+
+                if (isLonger) {
+                    const expansionItem: LoreItem = {
+                        id: generateLoreId(),
+                        keyword,
+                        content,
+                        timestamp: new Date().toISOString(),
+                    };
+                    (expansionItem as any).semanticUpdateOf = exactMatch.id;
+                    pendingLore.push(expansionItem);
+                }
+                // Shorter or equal — suppress entirely, no push.
+
             } else {
-                const newItem: LoreItem = {
-                    id: generateLoreId(),
+                // No exact keyword match — run semantic Jaccard dedup.
+                const { isDuplicate, isUpdate, existingIndex } = checkLoreDuplicate(
                     keyword,
                     content,
-                    timestamp: new Date().toISOString()
-                };
+                    currentWorld.lore
+                );
 
-                if (isUpdate) {
-                    // Tag it so the approval modal can offer "Replace" as the primary action
-                    (newItem as any).semanticUpdateOf = currentWorld.lore[existingIndex]?.id;
+                if (isDuplicate) {
+                    debugLogs.push({
+                        timestamp: new Date().toISOString(),
+                        message: `[LORE SEMANTIC DUPE] "${keyword}" is too similar to existing entry "${currentWorld.lore[existingIndex]?.keyword}" (Jaccard ≥ threshold) — suppressed.`,
+                        type: 'warning'
+                    });
+                } else {
+                    const newItem: LoreItem = {
+                        id: generateLoreId(),
+                        keyword,
+                        content,
+                        timestamp: new Date().toISOString()
+                    };
+
+                    if (isUpdate) {
+                        (newItem as any).semanticUpdateOf = currentWorld.lore[existingIndex]?.id;
+                    }
+
+                    pendingLore.push(newItem);
+
+                    debugLogs.push({
+                        timestamp: new Date().toISOString(),
+                        message: `[LORE] Pending: "${keyword}"${isUpdate ? ' (semantic update of existing entry)' : ''}`,
+                        type: 'info'
+                    });
                 }
-
-                pendingLore.push(newItem);
-
-                debugLogs.push({
-                    timestamp: new Date().toISOString(),
-                    message: `[LORE] Pending: "${keyword}"${isUpdate ? ' (semantic update of existing entry)' : ''}`,
-                    type: 'info'
-                });
-            }
-        }
+            } // end else (no exact keyword match)
+        } // end if (r.new_lore)
 
         // --- Memory (with semantic deduplication and hard cap) ---
         let finalMemory = [...currentWorld.memory];
 
         if (r.new_memory) {
+            // FIX 5: Diagnostic log — confirms the memory pipeline is reached.
+            // If this log never appears in the debug panel, the AI is not providing
+            // new_memory in its responses, not a write path bug.
+            debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[MEMORY-WRITE-ATTEMPT] AI provided new_memory: "${r.new_memory.fact?.substring(0, 80) ?? '(empty fact)'}"`,
+                type: 'info'
+            });
+
             // v1.3: Hard cap — refuse new engrams when at MEMORY_CAP
             if (finalMemory.length >= MEMORY_CAP) {
                 debugLogs.push({
@@ -472,6 +510,22 @@ export const SimulationEngine = {
         // ===================================================================
         // 9. World Tick Pipeline
         // ===================================================================
+
+        // FIX 9: World tick mandatory validation.
+        // An empty or absent world_tick.npc_actions violates the WORLD TICK IS MANDATORY rule.
+        // Log it as an error so it surfaces clearly in the debug panel.
+        if (!r.world_tick?.npc_actions || r.world_tick.npc_actions.length === 0) {
+            debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[WORLD-TICK-VIOLATION] AI response has no world_tick.npc_actions. WORLD TICK IS MANDATORY. The WORLD_PULSE reminder should be firing to correct this.`,
+                type: 'error'
+            });
+            // Ensure world_tick has a valid structure so downstream processing doesn't throw.
+            if (!r.world_tick) {
+                (r as any).world_tick = { npc_actions: [], environment_changes: [], emerging_threats: [] };
+            }
+        }
+
         let lastWorldTickTurn = currentWorld.lastWorldTickTurn ?? 0;
 
         if (r.world_tick) {
@@ -615,13 +669,15 @@ export const SimulationEngine = {
 
         const finalTrauma = Math.min(100, Math.max(0, (character.trauma || 0) + bioResult.traumaDelta));
 
-        // ===================================================================
-        // 11. v1.3: sceneMode Auto-Transition
-        //     If no active or emerging threats remain after this turn and the
-        //     mode is COMBAT or TENSION, automatically transition to NARRATIVE
-        //     and decay tension by 30 points (floored at 0, not snapped to 0).
-        // ===================================================================
-        const finalEmergingThreats = (currentWorld as any).__processedEmergingThreats ?? [];
+        // FIX 4: Use post-processing emerging threats. The __processedEmergingThreats
+        // property is only set during section 9 if the AI provided world_tick data.
+        // Fall back to currentWorld.emergingThreats (the saved state from the prior turn)
+        // so the check is never undefined when world_tick is empty.
+        const finalEmergingThreats: WorldTickEvent[] =
+            (currentWorld as any).__processedEmergingThreats
+            ?? (currentWorld as any).emergingThreats
+            ?? [];
+
         let finalSceneMode: SceneMode = r.scene_mode || 'NARRATIVE';
         let finalTensionLevel = tensionLevel;
 
@@ -631,24 +687,41 @@ export const SimulationEngine = {
             finalTensionLevel = Math.max(0, tensionLevel - 30);
             debugLogs.push({
                 timestamp: new Date().toISOString(),
-                message: `[SCENE] Auto-transition: ${r.scene_mode} → NARRATIVE (no remaining threats). Tension: ${tensionLevel} → ${finalTensionLevel}`,
+                message: `[SCENE] Auto-transition: ${r.scene_mode} → NARRATIVE (no remaining threats). activeThreats=${nextThreats.length}, emergingThreats=${finalEmergingThreats.length}. Tension: ${tensionLevel} → ${finalTensionLevel}`,
                 type: 'success'
             });
         }
 
         // ===================================================================
-        // 12. v1.3: Devil's Bargain tracking
+        // 12. v1.3 / v1.5: Devil's Bargain tracking
         //     Update lastBargainTurn when the AI provides a bargain_request.
+        //     v1.5 FIX 2: Use r.bargain_request?.offer (non-empty string) as the
+        //     detection signal rather than truthy object check. The AI sometimes
+        //     returns an empty bargain_request object without populating .offer,
+        //     which was resetting the clock without actually offering a bargain.
+        //     Also added a warning log when the clock is overdue and no bargain
+        //     was provided, for visibility in the debug panel.
         // ===================================================================
-        const lastBargainTurn = r.bargain_request
+        const bargainProvided = !!(r.bargain_request?.description?.trim());
+        const lastBargainTurn = bargainProvided
             ? currentTurn + 1  // currentTurn is the turn being processed
             : (currentWorld.lastBargainTurn ?? 0);
 
-        if (r.bargain_request) {
+        if (bargainProvided) {
             debugLogs.push({
                 timestamp: new Date().toISOString(),
-                message: `[BARGAIN] Devil's Bargain offered this turn. lastBargainTurn → ${lastBargainTurn}`,
+                message: `[BARGAIN-ACCEPTED] Devil's Bargain offered this turn. lastBargainTurn → ${lastBargainTurn}. Description: "${r.bargain_request!.description.substring(0, 80)}"`,
                 type: 'info'
+            });
+        }
+
+        // FIX 2: Warn when clock is overdue and no bargain was provided this turn.
+        const turnsSinceLastBargain = currentTurn - (currentWorld.lastBargainTurn ?? 0);
+        if (turnsSinceLastBargain >= 25 && !bargainProvided) {
+            debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[BARGAIN-OVERDUE] Clock at ${turnsSinceLastBargain} turns since last offer (threshold: 25). AI did not include bargain_request.offer this turn. BARGAIN_CHECK reminder should be firing.`,
+                type: 'warning'
             });
         }
 
@@ -672,6 +745,20 @@ export const SimulationEngine = {
             }
             if (!currentWorld.legalStatus?.knownClaims?.length && !currentWorld.legalStatus?.playerDocuments?.length) {
                 debugLogs.push({ timestamp: new Date().toISOString(), message: '[LEGAL STATUS] legalStatus is empty — AI is not recording claims or documents.', type: 'warning' });
+            }
+        }
+
+        // FIX 6: Entity density violation — log as 'error' so it stands out in the debug panel.
+        // Mirrors the ENTITY_DENSITY_REQUIREMENTS table in sectionReminders.ts.
+        const entityDensityRequirements: [number, number][] = [[10, 5], [30, 10], [60, 15]];
+        const currentEntityCount = updatedKnownEntities.length;
+        for (const [turnThreshold, entityMin] of entityDensityRequirements) {
+            if (newTurnCount >= turnThreshold && currentEntityCount < entityMin) {
+                debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    message: `[ENTITY-DENSITY-VIOLATION] Turn ${newTurnCount}: ${currentEntityCount}/${entityMin} required entities (threshold at turn ${turnThreshold}). Obligation has been unmet since turn ${turnThreshold}.`,
+                    type: 'error'
+                });
             }
         }
 

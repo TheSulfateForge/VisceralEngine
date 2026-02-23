@@ -230,12 +230,15 @@ export const constructGeminiPrompt = (
   const characterBlock = buildCharacterBlock(character);
 
   // 5. Section Reminders
+  // v1.5: Pass entityCount and goalCount for FIX 6 (entity density) and FIX 11 (goal staleness).
   const sectionRefresh = getSectionReminder(
     gameHistory.turnCount,
     currentMode as SceneMode,
     gameWorld.lastBargainTurn,
     gameHistory.turnCount,
-    character.conditions.length
+    character.conditions.length,
+    (gameWorld.knownEntities ?? []).length,           // FIX 6: entity density
+    (character.goals ?? []).length                     // FIX 11: goal staleness
   );
   
   // 6. World Pressure (v1.1)

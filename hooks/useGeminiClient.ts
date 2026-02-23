@@ -101,12 +101,15 @@ export const useGeminiClient = () => {
         const { prompt: contextPrompt, ragDebug } = constructGeminiPrompt(preCallState.gameHistory, preCallState.gameWorld, preCallState.character, text, playerRemovedConditions);
         
         // Debug Log the injected reminder if active
+        // v1.5: Pass entityCount and goalCount to match updated signature.
         const activeReminder = getSectionReminder(
             preCallState.gameHistory.turnCount,
             preCallState.gameWorld.sceneMode,
             preCallState.gameWorld.lastBargainTurn ?? 0,
             preCallState.gameWorld.turnCount ?? 0,
-            preCallState.character.conditions.length
+            preCallState.character.conditions.length,
+            (preCallState.gameWorld.knownEntities ?? []).length,   // FIX 6
+            (preCallState.character.goals ?? []).length             // FIX 11
         );
         let requestLogs = [...preCallState.gameHistory.debugLog];
         

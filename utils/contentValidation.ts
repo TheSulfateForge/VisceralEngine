@@ -1,5 +1,5 @@
 /**
- * contentValidation.ts — v1.4
+ * contentValidation.ts — v1.5
  *
  * v1.3 changes:
  *   - Banned name scanning now covers ALL string fields in the AI response,
@@ -16,6 +16,20 @@
  *     contain [RENAME:X] markers after sanitisation — they never reach the approval modal.
  *   - sanitiseAllFields() section 11 (known_entity_updates): filters out entity updates
  *     whose name still contains a [RENAME:X] marker, preserving the existing registry entry.
+ *
+ * v1.5 changes:
+ *   - FIX 1: sanitiseBannedNames() now guards against double-wrapping. If the input
+ *     string already contains a [RENAME:X] marker, it is returned unchanged. This
+ *     prevents the nested [RENAME:[RENAME:X]] bug when the AI re-submits a previously
+ *     flagged entity name.
+ *   - FIX 3b: findExpiredConditions() now handles named transient condition prefixes
+ *     (Adrenaline, Ambrosia Afterglow, Magical Overclock, etc.) that lack an explicit
+ *     (Xmins) duration stamp. These auto-expire after TRANSIENT_EXPIRY_MINUTES of
+ *     in-game time from when they were first applied.
+ *   - FIX 8: checkLoreDuplicate() now applies a stricter shared-prefix threshold (0.40)
+ *     when two lore entries begin with the same topic prefix (e.g., both "Tharnic ...").
+ *     This catches near-duplicates within the same faction/topic cluster that would
+ *     otherwise slip through the standard 0.60 threshold.
  */
 
 import { BANNED_NAMES } from '../constants';
@@ -32,7 +46,20 @@ export const findBannedNames = (text: string): string[] => {
     });
 };
 
+/**
+ * Replaces banned names in text with [RENAME:X] markers.
+ *
+ * v1.5 FIX 1: If the input already contains a [RENAME:X] marker, return it unchanged.
+ * Re-scanning a previously-flagged string wraps the placeholder's own content,
+ * producing nested tokens like [RENAME:[RENAME:Kaelith]]. The guard breaks that loop.
+ */
 export const sanitiseBannedNames = (text: string): { result: string; violations: string[] } => {
+    // FIX 1: Early-return guard — do not re-process strings that already have a marker.
+    // This prevents [RENAME:X] from being scanned again and producing [RENAME:[RENAME:X]].
+    if (/\[RENAME:[^\]]+\]/i.test(text)) {
+        return { result: text, violations: [] };
+    }
+
     const violations: string[] = [];
     let result = text;
 
@@ -211,6 +238,8 @@ const STOP_WORDS = new Set([
 ]);
 const SIMILARITY_THRESHOLD = 0.65;
 const LORE_SIMILARITY_THRESHOLD = 0.60;
+// v1.5 FIX 8: Tighter threshold applied when two lore entries share a topic prefix.
+const LORE_SHARED_PREFIX_THRESHOLD = 0.40;
 
 export const significantWords = (text: string): Set<string> => {
     return new Set(
@@ -263,10 +292,15 @@ export const containsRenameMarker = (text: string): boolean =>
     /\[RENAME:[^\]]+\]/i.test(text);
 
 /**
- * v1.4: Semantic duplicate detector for lore entries.
+ * v1.4 / v1.5: Semantic duplicate detector for lore entries.
  * Uses the same Jaccard / significant-word algorithm as checkMemoryDuplicate,
  * but at a slightly lower threshold (0.60 vs 0.65) since lore keywords are shorter.
  * Combines keyword + content for a richer signal.
+ *
+ * v1.5 FIX 8: When both the new entry and an existing entry share the same leading
+ * keyword prefix (e.g., both start with "Tharnic"), a stricter threshold of 0.40
+ * is applied. This catches intra-topic near-duplicates (like multiple "Tharnic Security"
+ * variants) that would slip past the standard 0.60 threshold.
  *
  * Returns:
  *   isDuplicate: true  → suppress the new entry entirely
@@ -280,13 +314,22 @@ export const checkLoreDuplicate = (
 ): { isDuplicate: boolean; isUpdate: boolean; existingIndex: number } => {
     const newText = `${newKeyword} ${newContent}`;
     const newWords = significantWords(newText);
+    // Extract the first word of the keyword as the topic prefix (e.g., "Tharnic" from "Tharnic Security")
+    const newPrefix = newKeyword.trim().split(/\s+/)[0].toLowerCase();
 
     for (let i = 0; i < existingLore.length; i++) {
         const existingText = `${existingLore[i].keyword} ${existingLore[i].content}`;
         const existingWords = significantWords(existingText);
+        const existingPrefix = existingLore[i].keyword.trim().split(/\s+/)[0].toLowerCase();
+
+        // FIX 8: Use stricter threshold when both entries share a meaningful topic prefix.
+        // Minimum prefix length of 4 prevents short prefixes like "The" or "A" from triggering.
+        const sharedPrefix = newPrefix === existingPrefix && newPrefix.length >= 4;
+        const threshold = sharedPrefix ? LORE_SHARED_PREFIX_THRESHOLD : LORE_SIMILARITY_THRESHOLD;
+
         const similarity = jaccardSimilarity(newWords, existingWords);
 
-        if (similarity >= LORE_SIMILARITY_THRESHOLD) {
+        if (similarity >= threshold) {
             // isUpdate = true when the new entry is substantially longer (an expansion)
             const isUpdate = newContent.length > existingLore[i].content.length * 1.25;
             return { isDuplicate: !isUpdate, isUpdate, existingIndex: i };
@@ -331,74 +374,69 @@ export const validateConditions = (conditions: string[]): string[] => {
 };
 
 // ---------------------------------------------------------------------------
-// Bio modifier decay
-// ---------------------------------------------------------------------------
-
-const DECAY_RATE = 0.05;
-
-export const decayBioModifiers = (
-    modifiers: { calories: number; hydration: number; stamina: number; lactation: number },
-    accelerated = false
-): typeof modifiers => {
-    const rate = accelerated ? DECAY_RATE * 3 : DECAY_RATE;
-    const decay = (val: number): number => {
-        if (val === 0) return 0; // Zero disables the system — don't decay
-        if (val > 1.0) return Math.max(1.0, val - rate);
-        if (val < 1.0) return Math.min(1.0, val + rate);
-        return val;
-    };
-    return {
-        calories: decay(modifiers.calories),
-        hydration: decay(modifiers.hydration),
-        stamina: decay(modifiers.stamina),
-        lactation: decay(modifiers.lactation),
-    };
-};
-
-// ---------------------------------------------------------------------------
-// Bio modifier ceiling enforcement (v1.3)
-// ---------------------------------------------------------------------------
-
-export const BIO_MODIFIER_CEILING: Record<string, number> = {
-    calories: 2.0,
-    hydration: 2.0,
-    stamina: 1.5,
-    lactation: 3.0,
-};
-
-/**
- * Applies ceiling caps to bio modifiers before they are written to state.
- * The AI cannot push a modifier above its ceiling regardless of what value it provides.
- */
-export const applyCeilings = (
-    modifiers: { calories: number; hydration: number; stamina: number; lactation: number }
-): typeof modifiers => {
-    return {
-        calories:  Math.min(modifiers.calories,  BIO_MODIFIER_CEILING.calories),
-        hydration: Math.min(modifiers.hydration, BIO_MODIFIER_CEILING.hydration),
-        stamina:   Math.min(modifiers.stamina,   BIO_MODIFIER_CEILING.stamina),
-        lactation: Math.min(modifiers.lactation, BIO_MODIFIER_CEILING.lactation),
-    };
-};
-
-// ---------------------------------------------------------------------------
 // Timed condition expiry
 // ---------------------------------------------------------------------------
 
 const DURATION_PATTERN = /\((\d+)\s*mins?\)/i;
 
+/**
+ * Named transient condition prefixes — these auto-expire after TRANSIENT_EXPIRY_MINUTES
+ * of in-game time even if they lack an explicit (Xmins) duration stamp.
+ *
+ * v1.5 FIX 3b: Catches conditions like "Adrenaline Surge", "Adrenaline High",
+ * "Ambrosia Afterglow", "Magical Overclock" that accumulate and never expire because
+ * they weren't given a duration suffix when originally added.
+ */
+const TRANSIENT_PREFIXES = [
+    'Adrenaline',
+    'Ambrosia Afterglow',
+    'Magical Overclock',
+    'Soot-Stained',
+    'Numbed',
+    'Catharsis',
+    'Focused',
+    'Tactical Advantage',
+    'Rested',
+    'Well-Fed',
+];
+
+/** In-game minutes after which a named transient auto-expires. */
+const TRANSIENT_EXPIRY_MINUTES = 60;
+
+/**
+ * Returns conditions that should be removed this turn due to elapsed time.
+ *
+ * Two removal paths:
+ *  1. Explicit duration: condition contains "(Xmins)" pattern → expires when duration elapsed.
+ *  2. Named transient prefix: condition starts with a known transient keyword →
+ *     expires after TRANSIENT_EXPIRY_MINUTES of in-game time from when it was applied.
+ *
+ * Both paths use conditionTimestamps (in totalMinutes) for the elapsed-time comparison.
+ */
 export const findExpiredConditions = (
     conditions: string[],
     timestamps: Record<string, number>,
     currentMinutes: number
 ): string[] => {
     return conditions.filter(condition => {
+        // Path 1: explicit (Xmins) duration stamp
         const match = DURATION_PATTERN.exec(condition);
-        if (!match) return false;
-        const duration = parseInt(match[1], 10);
-        const appliedAt = timestamps[condition];
-        if (appliedAt === undefined) return false;
-        return (currentMinutes - appliedAt) >= duration;
+        if (match) {
+            const duration = parseInt(match[1], 10);
+            const appliedAt = timestamps[condition];
+            if (appliedAt === undefined) return false;
+            return (currentMinutes - appliedAt) >= duration;
+        }
+
+        // Path 2: named transient prefix — FIX 3b
+        const isTransient = TRANSIENT_PREFIXES.some(prefix => condition.startsWith(prefix));
+        if (isTransient) {
+            const appliedAt = timestamps[condition];
+            if (appliedAt === undefined) return false;
+            return (currentMinutes - appliedAt) >= TRANSIENT_EXPIRY_MINUTES;
+        }
+
+        return false;
     });
 };
 
@@ -416,6 +454,54 @@ export const partitionConditions = (conditions: string[]): { active: string[]; p
     );
     const active = conditions.filter(c => !passive.includes(c));
     return { active, passive };
+};
+
+// ---------------------------------------------------------------------------
+// Bio modifier ceilings
+// ---------------------------------------------------------------------------
+
+export const BIO_MODIFIER_CEILING = {
+    stamina:   1.5,
+    calories:  2.0,
+    hydration: 2.0,
+    lactation: 3.0,
+};
+
+/**
+ * Clamps bio modifiers to their per-stat ceiling values.
+ * The AI cannot push a modifier above its ceiling regardless of what value it provides.
+ */
+export const applyCeilings = (
+    modifiers: { calories: number; hydration: number; stamina: number; lactation: number }
+): typeof modifiers => {
+    return {
+        calories:  Math.min(modifiers.calories,  BIO_MODIFIER_CEILING.calories),
+        hydration: Math.min(modifiers.hydration, BIO_MODIFIER_CEILING.hydration),
+        stamina:   Math.min(modifiers.stamina,   BIO_MODIFIER_CEILING.stamina),
+        lactation: Math.min(modifiers.lactation, BIO_MODIFIER_CEILING.lactation),
+    };
+};
+
+// ---------------------------------------------------------------------------
+// Bio modifier decay
+// ---------------------------------------------------------------------------
+
+const DECAY_RATE = 0.05;
+
+export const decayBioModifiers = (
+    modifiers: { calories: number; hydration: number; stamina: number; lactation: number },
+    accelerated = false
+): typeof modifiers => {
+    const rate = accelerated ? DECAY_RATE * 2 : DECAY_RATE;
+    const decay = (val: number, baseline = 1.0) =>
+        val > baseline ? Math.max(baseline, val - rate) :
+        val < baseline ? Math.min(baseline, val + rate) : val;
+    return {
+        calories:  decay(modifiers.calories),
+        hydration: decay(modifiers.hydration),
+        stamina:   decay(modifiers.stamina),
+        lactation: decay(modifiers.lactation),
+    };
 };
 
 // ---------------------------------------------------------------------------
