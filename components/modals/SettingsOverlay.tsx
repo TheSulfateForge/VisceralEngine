@@ -9,10 +9,13 @@ interface SettingsOverlayProps {
     onClose: () => void;
     onExport: () => void;
     onImport: (file: File) => void;
+    onExportTemplates: () => void;
+    onImportTemplates: (file: File) => void;
 }
 
-export const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ currentModel, setModel, onReLink, onClose, onExport, onImport }) => {
+export const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ currentModel, setModel, onReLink, onClose, onExport, onImport, onExportTemplates, onImportTemplates }) => {
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const templateFileInputRef = useRef<HTMLInputElement>(null);
     const [temperature, setTemperature] = useState(() => 
         parseFloat(localStorage.getItem('visceral_temperature') || '0.9')
     );
@@ -26,6 +29,14 @@ export const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ currentModel, 
             onImport(file);
         }
         if (fileInputRef.current) fileInputRef.current.value = '';
+    };
+
+    const handleTemplateFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (file) {
+            onImportTemplates(file);
+        }
+        if (templateFileInputRef.current) templateFileInputRef.current.value = '';
     };
 
     const handleTempChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -116,6 +127,28 @@ export const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ currentModel, 
                         ref={fileInputRef} 
                         onChange={handleFileChange} 
                         className="hidden" 
+                        accept=".json"
+                    />
+                </div>
+            </div>
+
+            <div className="space-y-3 pt-4 border-t border-gray-900">
+                <label className="text-[10px] font-bold text-gray-700 uppercase tracking-widest block">Subject Templates</label>
+                <p className="text-[9px] text-gray-600 font-mono leading-relaxed">
+                    Back up or share your character templates. Export saves all archived templates to a JSON file. Import merges templates from file — duplicates by name are overwritten.
+                </p>
+                <div className="flex gap-4">
+                    <button onClick={onExportTemplates} className="flex-1 py-3 bg-gray-900 border border-gray-800 text-gray-400 text-[10px] font-bold uppercase tracking-widest hover:border-red-900 hover:text-white transition-all">
+                        Export Templates
+                    </button>
+                    <button onClick={() => templateFileInputRef.current?.click()} className="flex-1 py-3 bg-gray-900 border border-gray-800 text-gray-400 text-[10px] font-bold uppercase tracking-widest hover:border-red-900 hover:text-white transition-all">
+                        Import Templates
+                    </button>
+                    <input
+                        type="file"
+                        ref={templateFileInputRef}
+                        onChange={handleTemplateFileChange}
+                        className="hidden"
                         accept=".json"
                     />
                 </div>

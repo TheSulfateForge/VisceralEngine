@@ -14,7 +14,7 @@ import { useSavedGames } from '../../hooks/useSavedGames';
 export const ModalManager: React.FC = () => {
     const store = useGameStore();
     const { handleKeyLink } = useGeminiClient();
-    const { saveToDb, loadFromDb, handleExport, handleImport } = usePersistence();
+    const { saveToDb, loadFromDb, handleExport, handleImport, handleExportTemplates, handleImportTemplates } = usePersistence();
     const { saveList, deleteSave } = useSavedGames(store.ui.showLoadModal || store.ui.showSaveModal);
     
     // Local state for the save input
@@ -52,6 +52,8 @@ export const ModalManager: React.FC = () => {
                     onReLink={handleKeyLink} 
                     onExport={handleExport}
                     onImport={handleImport}
+                    onExportTemplates={handleExportTemplates}
+                    onImportTemplates={handleImportTemplates}
                 />
             )}
             

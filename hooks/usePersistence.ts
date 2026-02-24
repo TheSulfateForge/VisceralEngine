@@ -1,7 +1,7 @@
 
 import { useCallback, useEffect, useRef } from 'react';
-import { GameSave } from '../types';
-import { generateSaveId, AUTOSAVE_ID } from '../idUtils';
+import { GameSave, CharacterTemplate } from '../types';
+import { generateSaveId, generateTemplateId, AUTOSAVE_ID } from '../idUtils';
 import { db } from '../db';
 import { downloadFile, debounce } from '../utils';
 import { useToast } from '../components/providers/ToastProvider';
@@ -177,9 +177,59 @@ export const usePersistence = () => {
     }
   }, [setGameHistory, setGameWorld, setCharacter, setUI, showToast]);
 
+  const handleExportTemplates = useCallback(async () => {
+    try {
+      const templates = await db.getAllTemplates();
+      if (templates.length === 0) {
+        showToast("No templates to export.", "error");
+        return;
+      }
+      const date = new Date().toISOString().split('T')[0];
+      const filename = `visceral_templates_${date}.json`;
+      downloadFile(JSON.stringify(templates, null, 2), filename, 'application/json');
+      showToast(`${templates.length} template(s) exported.`, "success");
+    } catch (e) {
+      console.error("Template export failed:", e);
+      showToast("Template export failed.", "error");
+    }
+  }, [showToast]);
+
+  const handleImportTemplates = useCallback(async (file: File) => {
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      const templates: CharacterTemplate[] = Array.isArray(parsed) ? parsed : [parsed];
+
+      const valid = templates.filter(t =>
+        t && typeof t === 'object' &&
+        typeof t.name === 'string' && t.name.trim() &&
+        typeof t.timestamp === 'string' &&
+        t.character && typeof t.character === 'object' &&
+        typeof t.character.name === 'string'
+      );
+
+      if (valid.length === 0) {
+        throw new Error("No valid templates found in file");
+      }
+
+      // Re-stamp IDs so imported templates never collide with local ones
+      for (const t of valid) {
+        t.id = generateTemplateId();
+        await db.saveTemplate(t);
+      }
+
+      showToast(`${valid.length} template(s) imported.`, "success");
+    } catch (e) {
+      console.error("Template import failed:", e);
+      showToast("Template import failed. Invalid file.", "error");
+    }
+  }, [showToast]);
+
   return {
     handleExport,
     handleImport,
+    handleExportTemplates,
+    handleImportTemplates,
     saveToDb,
     loadFromDb
   };
