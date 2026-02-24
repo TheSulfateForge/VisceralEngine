@@ -1,5 +1,5 @@
 /**
- * simulationEngine.ts — v1.4
+ * simulationEngine.ts — v1.6
  *
  * v1.3 changes:
  *   - turnCount now increments on every successful turn and is written to GameWorld.
@@ -20,11 +20,23 @@
  *     before being pushed to pendingLore. Near-duplicates are suppressed with a
  *     debug log. Semantic expansions are marked for the approval modal.
  *   - Updated imports to include checkLoreDuplicate and containsRenameMarker.
+ *
+ * v1.6 changes:
+ *   - Origin Gate: validateThreatCausality() blocks threat seeds that cannot cite
+ *     a dormant hook, a player action this session, or a faction with exposure >= 20.
+ *   - updateFactionExposure(): runs each turn before threat processing. Observation
+ *     verbs in world_tick NPC actions earn +15 exposure; scores decay -2/turn.
+ *   - extractDormantHooks() added to CharacterService for session-start hook extraction.
+ *   - processThreatSeeds() updated: new signature accepts dormantHooks + factionExposure,
+ *     Origin Gate filter applied before ETA floor enforcement.
+ *   - dormantHooks and factionExposure persisted in worldUpdate return value.
+ *
  */
 
 import {
     ModelResponseSchema, GameWorld, DebugLogEntry, LoreItem,
-    Character, MemoryItem, SceneMode, WorldTime, WorldTickEvent
+    Character, MemoryItem, SceneMode, WorldTime, WorldTickEvent,
+    DormantHook, FactionExposure, WorldTickAction
 } from '../types';
 import { ReproductionSystem } from './reproductionSystem';
 import { BioEngine } from './bioEngine';
@@ -117,6 +129,149 @@ const generateThreatId = (): string =>
     `threat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
 // ---------------------------------------------------------------------------
+// v1.6: Exposure scoring constants
+// ---------------------------------------------------------------------------
+
+/** Minimum exposure score before a threat can be seeded from that source. */
+const EXPOSURE_THRESHOLD_FOR_THREAT = 20;
+/** Exposure earned when a faction NPC directly observes the player. */
+const EXPOSURE_DIRECT_OBSERVATION = 15;
+/** Exposure earned when the player takes a notable public action. */
+const EXPOSURE_PUBLIC_ACTION = 10;
+/** Exposure decay per turn when no new observations occur. */
+const EXPOSURE_DECAY_PER_TURN = 2;
+
+// ---------------------------------------------------------------------------
+// v1.6: updateFactionExposure
+// ---------------------------------------------------------------------------
+
+/**
+ * Updates the faction exposure registry each turn based on world_tick NPC actions.
+ * Called BEFORE processThreatSeeds so same-turn exposure is available for validation.
+ */
+const updateFactionExposure = (
+    currentExposure: FactionExposure,
+    npcActions: WorldTickAction[],
+    currentTurn: number,
+    debugLogs: DebugLogEntry[]
+): FactionExposure => {
+    const updated: FactionExposure = { ...currentExposure };
+
+    // Decay all existing scores
+    for (const key of Object.keys(updated)) {
+        const entry = { ...updated[key] };
+        entry.exposureScore = Math.max(0, entry.exposureScore - EXPOSURE_DECAY_PER_TURN);
+        updated[key] = entry;
+    }
+
+    // Award exposure for NPC actions that involve observing the player
+    for (const action of npcActions) {
+        if (!action.player_visible) continue;
+
+        const actionLower = action.action.toLowerCase();
+        const isObservingPlayer =
+            actionLower.includes('watches') ||
+            actionLower.includes('observes') ||
+            actionLower.includes('notices') ||
+            actionLower.includes('follows') ||
+            actionLower.includes('reports') ||
+            actionLower.includes('describes') ||
+            actionLower.includes('identifies') ||
+            actionLower.includes('spots');
+
+        if (isObservingPlayer) {
+            const key = action.npc_name;
+            const existing = updated[key] ?? {
+                exposureScore: 0,
+                lastObservedAction: null,
+                lastObservedTurn: 0,
+                observedCapabilities: []
+            };
+            const newScore = Math.min(100, existing.exposureScore + EXPOSURE_DIRECT_OBSERVATION);
+            updated[key] = {
+                ...existing,
+                exposureScore: newScore,
+                lastObservedAction: action.action,
+                lastObservedTurn: currentTurn
+            };
+            debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[EXPOSURE] ${key}: +${EXPOSURE_DIRECT_OBSERVATION} → ${newScore} (direct observation)`,
+                type: 'info'
+            });
+        }
+    }
+
+    return updated;
+};
+
+// ---------------------------------------------------------------------------
+// v1.6: validateThreatCausality — the Origin Gate
+// ---------------------------------------------------------------------------
+
+/**
+ * Every new threat seed must pass ONE of three origin tests:
+ *   1. It cites a DormantHook.id that exists and isn't resolved.
+ *   2. It cites a specific player action this session (playerActionCause).
+ *   3. The factionSource has accumulated exposure >= EXPOSURE_THRESHOLD_FOR_THREAT.
+ *
+ * Existing threats (turnCreated < currentTurn) are not re-validated.
+ */
+const validateThreatCausality = (
+    threat: WorldTickEvent,
+    dormantHooks: DormantHook[],
+    factionExposure: FactionExposure,
+    currentTurn: number,
+    debugLogs: DebugLogEntry[]
+): boolean => {
+    const log = (msg: string) => debugLogs.push({
+        timestamp: new Date().toISOString(),
+        message: msg,
+        type: 'warning'
+    });
+
+    // Only validate new seeds created this turn
+    if (threat.turnCreated !== undefined && threat.turnCreated < currentTurn) {
+        return true;
+    }
+
+    const desc = threat.description.substring(0, 80);
+
+    // Gate 1: Dormant Hook reference
+    if (threat.dormantHookId) {
+        const hook = dormantHooks.find(h => h.id === threat.dormantHookId);
+        if (hook && hook.status !== 'resolved') {
+            log(`[ORIGIN GATE ✓] "${desc}" — hook: ${hook.summary}`);
+            return true;
+        }
+        log(`[ORIGIN GATE ✗] "${desc}" — dormantHookId "${threat.dormantHookId}" not found or resolved. BLOCKED.`);
+        return false;
+    }
+
+    // Gate 2: Player action cause
+    if (threat.playerActionCause && threat.playerActionCause.trim().length > 10) {
+        log(`[ORIGIN GATE ✓] "${desc}" — player action: "${threat.playerActionCause}"`);
+        return true;
+    }
+
+    // Gate 3: Faction exposure
+    if (threat.factionSource) {
+        const exposure = factionExposure[threat.factionSource];
+        if (exposure && exposure.exposureScore >= EXPOSURE_THRESHOLD_FOR_THREAT) {
+            log(`[ORIGIN GATE ✓] "${desc}" — ${threat.factionSource} exposure: ${exposure.exposureScore}`);
+            return true;
+        }
+        const score = exposure?.exposureScore ?? 0;
+        log(`[ORIGIN GATE ✗] "${desc}" — ${threat.factionSource} exposure ${score} < ${EXPOSURE_THRESHOLD_FOR_THREAT}. BLOCKED.`);
+        return false;
+    }
+
+    // No gate passed
+    log(`[ORIGIN GATE ✗] "${desc}" — no dormantHookId, no playerActionCause, no factionSource with exposure. BLOCKED.`);
+    return false;
+};
+
+// ---------------------------------------------------------------------------
 // v1.3 / v1.4: Threat Seed State Machine
 // ---------------------------------------------------------------------------
 
@@ -128,12 +283,16 @@ const generateThreatId = (): string =>
  *   4. Enforces a hard cap of THREAT_SEED_CAP simultaneous seeds.
  *   5. v1.4: ENFORCES ETA floors — faction threats below ETA_FLOOR_FACTION are
  *      bumped up automatically, not just logged.
+ *   6. v1.6: Origin Gate filter applied after Step 1 — new seeds blocked if they
+ *      cannot cite a dormant hook, a player action, or sufficient faction exposure.
  */
 const processThreatSeeds = (
     incomingThreats: WorldTickEvent[],
     existingThreats: WorldTickEvent[],
     currentTurn: number,
-    debugLogs: DebugLogEntry[]
+    debugLogs: DebugLogEntry[],
+    dormantHooks: DormantHook[] = [],       // v1.6: origin gate
+    factionExposure: FactionExposure = {}   // v1.6: origin gate
 ): WorldTickEvent[] => {
     const log = (message: string, type: DebugLogEntry['type'] = 'warning') => {
         debugLogs.push({ timestamp: new Date().toISOString(), message, type });
@@ -222,12 +381,19 @@ const processThreatSeeds = (
         };
     });
 
-    // Step 2: Filter out expired seeds
-    const active = processed.filter(t => t.status !== 'expired' && t.status !== 'triggered');
+    // v1.6: Origin Gate — filter out causally invalid NEW threats before expiry/cap.
+    // validateThreatCausality() auto-passes any threat with turnCreated < currentTurn,
+    // so this only ever blocks seeds being proposed for the first time this turn.
+    const causallyValid = processed.filter(threat =>
+        validateThreatCausality(threat, dormantHooks, factionExposure, currentTurn, debugLogs)
+    );
+
+    // Step 2: Filter out expired seeds (operates on gate-passed threats only)
+    const active = causallyValid.filter(t => t.status !== 'expired' && t.status !== 'triggered');
 
     // Step 3: Enforce cap of THREAT_SEED_CAP simultaneous seeds
     if (active.length > THREAT_SEED_CAP) {
-        log(`[THREAT CAP] ${active.length} seeds present — cap is ${THREAT_SEED_CAP}. Oldest seeds trimmed.`, 'warning');
+        log(`[THREAT CAP] ${active.length} seeds (after origin gate) — cap is ${THREAT_SEED_CAP}. Oldest seeds trimmed.`, 'warning');
         // Sort by creation turn ascending (oldest first) and trim from the front
         active.sort((a, b) => (a.turnCreated ?? 0) - (b.turnCreated ?? 0));
         active.splice(0, active.length - THREAT_SEED_CAP);
@@ -565,13 +731,42 @@ const pendingLore: LoreItem[] = [];
                 });
             }
 
-            // v1.3 / v1.4: Threat seed state machine with enforced ETA floors
+            // v1.6: Exposure scoring runs before threat validation so same-turn exposure counts
+            const updatedExposure = updateFactionExposure(
+                ((currentWorld as any).factionExposure as FactionExposure) ?? {},
+                r.world_tick.npc_actions,
+                currentTurn,
+                debugLogs
+            );
+            (currentWorld as any).factionExposure = updatedExposure;
+
+            // v1.6 / v1.4: Threat seed state machine with Origin Gate + ETA floors
             const processedThreats = processThreatSeeds(
                 r.world_tick.emerging_threats,
                 ((currentWorld as any).emergingThreats as WorldTickEvent[]) ?? [],
                 currentTurn,
-                debugLogs
+                debugLogs,
+                ((currentWorld as any).dormantHooks as DormantHook[]) ?? [],
+                updatedExposure
             );
+
+            // v1.6: Activate dormant hooks referenced by processed threats
+            let currentHooks: DormantHook[] = ((currentWorld as any).dormantHooks as DormantHook[]) ?? [];
+            for (const threat of processedThreats) {
+                if (threat.dormantHookId) {
+                    currentHooks = currentHooks.map(h =>
+                        h.id === threat.dormantHookId && h.status === 'dormant'
+                            ? { ...h, status: 'activated' as const, activatedTurn: currentTurn }
+                            : h
+                    );
+                    debugLogs.push({
+                        timestamp: new Date().toISOString(),
+                        message: `[DORMANT HOOK] "${threat.dormantHookId}" activated on turn ${currentTurn}`,
+                        type: 'info'
+                    });
+                }
+            }
+            (currentWorld as any).dormantHooks = currentHooks;
 
             // Write active threats to hidden registry for AI context
             for (const threat of processedThreats) {
@@ -784,6 +979,9 @@ const pendingLore: LoreItem[] = [];
                 lastBargainTurn,
                 factionIntelligence: currentWorld.factionIntelligence ?? {},
                 legalStatus: currentWorld.legalStatus ?? { knownClaims: [], playerDocuments: [] },
+                // v1.6 fields
+                dormantHooks: ((currentWorld as any).dormantHooks as DormantHook[]) ?? [],
+                factionExposure: ((currentWorld as any).factionExposure as FactionExposure) ?? {},
                 emergingThreats: finalEmergingThreats,
             } as GameWorld & { emergingThreats: WorldTickEvent[] },
             characterUpdate: {

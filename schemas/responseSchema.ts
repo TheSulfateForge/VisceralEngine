@@ -191,7 +191,15 @@ export const RESPONSE_SCHEMA: Schema = {
             type: Type.OBJECT,
             properties: {
               description: { type: Type.STRING, description: "What is developing." },
-              turns_until_impact: { type: Type.INTEGER, description: "Estimated turns before this affects the player directly. 0 = this turn. 1-3 = imminent. 4+ = distant." }
+              turns_until_impact: { type: Type.INTEGER, description: "Estimated turns before this affects the player directly. 0 = this turn. 1-3 = imminent. 4+ = distant." },
+              dormant_hook_id: {
+                  type: Type.STRING,
+                  description: "ORIGIN GATE TEST A: If this threat derives from the character's pre-existing background, set this to the exact DormantHook ID from the [ORIGIN GATE CONTEXT] block. If passing Test B instead, leave empty. If neither applies, this threat is FORBIDDEN."
+              },
+              player_action_cause: {
+                  type: Type.STRING,
+                  description: "ORIGIN GATE TEST B: If this threat was caused by a specific player action this session, describe it as: '[NPC name] observed [player action] at [location] on turn [N]'. The NPC must exist in the entity registry. If passing Test A instead, leave empty."
+              }
             },
             required: ["description"]
           }

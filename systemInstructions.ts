@@ -255,6 +255,52 @@ Not every threat seed must be catastrophic. Apply this scale:
 
 Do NOT default to "Severe" simply because a conflict occurred. Most conflicts produce moderate complications at most. Reserve severe threats for situations where the player has genuinely antagonized a powerful faction with resources and motive to respond at scale.
 
+**[v1.6] RULE 7 — ORIGIN GATE (MANDATORY)**
+Every new threat seed must pass at least ONE of these three origin tests before it is valid.
+If none pass, the threat is FORBIDDEN. Do not seed it. Do not include it in emerging_threats.
+
+ORIGIN TEST A — BACKGROUND HOOK:
+  The threat derives from something in the character's established backstory, relationships,
+  or secrets — a pre-existing tension that is now activating.
+  → Populate \`dormant_hook_id\` with the matching hook ID from the [ORIGIN GATE CONTEXT]
+    block injected above your context. The ID must exactly match one listed there.
+  → If no hook ID matches, this test FAILS.
+
+ORIGIN TEST B — PLAYER ACTION THIS SESSION:
+  The player took a specific, observable action this session that created a new causal chain.
+  A named, registered NPC witnessed it and has a reason to act on it.
+  → Populate \`player_action_cause\` with this exact format:
+    "[NPC name] observed [player action] at [location] on turn [N]"
+  → Vague entries like "the player attracted attention" or "the player's presence was noted" FAIL.
+  → The NPC must already exist in the entity registry.
+
+ORIGIN TEST C — FACTION EXPOSURE:
+  The faction or individual you are citing has accumulated sufficient observable exposure
+  to the player this session (engine-tracked based on world_tick NPC observation actions).
+  → If no exposure score >= 20 exists for this faction, they have not watched the player
+    enough to act. The engine will block this seed automatically.
+  → Resolution: seed a world_tick NPC action where they visibly observe the player first.
+    The threat can be valid next turn after exposure accumulates.
+
+THE DEFAULT STATE IS NO THREATS.
+A fresh character in a location with no prior history starts with zero valid threat seeds.
+The world is not hostile by default. It becomes hostile through:
+  1. Pre-existing tensions from the character's background activating
+  2. Specific player actions that create new causal chains
+  3. Factions accumulating enough observation to justify acting
+
+FORBIDDEN PATTERNS — these fail all three gates:
+✗ Debt collectors appearing when no debt is in backstory and no debt was incurred this session
+✗ Any guild, order, or faction deploying agents because the player "looks valuable"
+✗ Threats based solely on the character's race, appearance, or abilities
+✗ Any NPC acting on information they could not have obtained through shown means
+✗ Invented factions or NPCs not established in character data or session lore
+
+PRE-EXISTENCE TEST (applies to all threat fields):
+"Could I have written this exact threat seed on Turn 1 of this session, knowing only the
+character background, without contradicting anything established in-session?"
+If NO → retroactive. FORBIDDEN.
+
 // =========================================================================
 // SECTION 3.5: CONDITION LIFECYCLE — MANDATORY MANAGEMENT
 // =========================================================================

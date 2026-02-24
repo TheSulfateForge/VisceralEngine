@@ -184,13 +184,20 @@ export class GeminiClient {
             }),
             environment_changes: asArray<string>(safeData.world_tick.environment_changes)
                 .filter((s: unknown): s is string => typeof s === 'string'),
-            emerging_threats: asArray<{ description: string; turns_until_impact?: number }>(
+            emerging_threats: asArray<{ description: string; turns_until_impact?: number; dormant_hook_id?: string; player_action_cause?: string }>(
                 safeData.world_tick.emerging_threats
             ).map((t: unknown) => {
                 const threat = isObject(t) ? t : {};
                 return {
                     description: asString(threat.description, 'Unknown threat'),
-                    turns_until_impact: asOptionalNumber(threat.turns_until_impact)
+                    turns_until_impact: asOptionalNumber(threat.turns_until_impact),
+                    // v1.6: Origin Gate fields — pass through for engine validation
+                    dormantHookId: typeof threat.dormant_hook_id === 'string' && threat.dormant_hook_id.trim()
+                        ? threat.dormant_hook_id.trim()
+                        : undefined,
+                    playerActionCause: typeof threat.player_action_cause === 'string' && threat.player_action_cause.trim()
+                        ? threat.player_action_cause.trim()
+                        : undefined,
                 };
             })
         } : { npc_actions: [], environment_changes: [], emerging_threats: [] },

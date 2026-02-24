@@ -92,9 +92,15 @@ const initialWorld: GameWorld = {
         knownClaims: [],
         playerDocuments: []
     },
-    // emergingThreats is managed by the threat seed state machine in simulationEngine.ts
-    // It is stored as part of world state but typed via the WorldTickEvent interface
-    emergingThreats: [],
+
+    // v1.6: Dormant Hook Registry — populated at session start from character backstory.
+    // The AI may ONLY seed new threats that reference a hook here, OR cite a specific
+    // player action this session, OR belong to a faction with exposure score >= 20.
+    dormantHooks: [],
+
+    // v1.6: Faction Exposure Scoring — accumulates as NPCs observe the player.
+    // A faction with exposureScore < 20 cannot be the source of a new threat seed.
+    factionExposure: {},
 };
 
 interface UIState {

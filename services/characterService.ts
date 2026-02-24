@@ -1,6 +1,11 @@
+// ============================================================================
+// services/characterService.ts
+// v1.6: Added extractDormantHooks() — called once at session start to build
+//       the Dormant Hook Registry from character backstory/relationships/goals.
+// ============================================================================
 
 import { GoogleGenAI, Schema, Type } from "@google/genai";
-import { GeneratedCharacterFields, Character } from "../types";
+import { GeneratedCharacterFields, Character, DormantHook, HookCategory, HookStatus } from "../types";
 import { SAFETY_SETTINGS } from "../constants";
 import { CHARACTER_GEN_SCHEMA } from "../schemas/characterSchema";
 import { GeminiClient } from "./geminiClient";
@@ -36,7 +41,7 @@ Output valid JSON matching the schema exactly.
                     responseMimeType: "application/json",
                     responseSchema: CHARACTER_GEN_SCHEMA,
                     safetySettings: SAFETY_SETTINGS,
-                    temperature: 1.0 // Higher creativity for character gen
+                    temperature: 1.0
                 }
             });
 
@@ -53,12 +58,11 @@ Output valid JSON matching the schema exactly.
     }
 
     async generateCharacterField(
-        character: Partial<Character>, 
-        fieldName: string, 
+        character: Partial<Character>,
+        fieldName: string,
         fieldDescription: string
     ): Promise<string | string[] | null> {
         try {
-            // Build context from whatever the user has already filled in
             const context = Object.entries(character)
                 .filter(([_, v]) => {
                     if (typeof v === 'string') return v.trim().length > 0;
@@ -68,45 +72,29 @@ Output valid JSON matching the schema exactly.
                 .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`)
                 .join('\n');
 
-            const isArrayField = ['inventory', 'relationships', 'conditions', 'goals'].includes(fieldName);
-
             const prompt = `
-You are generating a SINGLE field for a character in a "Visceral Realism" RPG.
+You are assisting with character creation for a "Visceral Realism" roleplaying simulation.
+Generate ONLY the "${fieldName}" field for this character.
 
-EXISTING CHARACTER DATA (use this as context — maintain consistency):
-${context || "No data yet. Make bold creative choices."}
+Field description: ${fieldDescription}
 
-GENERATE THE FOLLOWING FIELD: ${fieldName}
-FIELD DESCRIPTION: ${fieldDescription}
-
-${isArrayField ? 
-    `Return a JSON array of 2-5 strings. Each string should be specific and vivid.` : 
-    `Return a JSON object with a single "value" key containing the generated text. Be detailed and specific — 2-4 sentences for descriptive fields, concise for labels.`
-}
+Existing character context:
+${context}
 
 RULES:
-- Stay consistent with existing data.
-- Be specific, not generic. Real-feeling details.
+- Output must be appropriate for the field type (string or array of strings).
+- Be specific and visceral. No generic fantasy tropes unless setting demands it.
+- Maintain consistency with existing character context.
 - NEVER use these names: Elara, Kaela, Lyra, Aria, Kaelith, Kael, Vex, Nyx, Thorne.
-        `;
 
-            const schema: Schema = isArrayField ? {
-                type: Type.ARRAY,
-                items: { type: Type.STRING }
-            } : {
-                type: Type.OBJECT,
-                properties: {
-                    value: { type: Type.STRING }
-                },
-                required: ["value"]
-            };
+Output ONLY the value for the requested field as valid JSON.
+            `;
 
             const response = await this.client.ai.models.generateContent({
                 model: (this.client as any).modelName,
                 contents: prompt,
                 config: {
                     responseMimeType: "application/json",
-                    responseSchema: schema,
                     safetySettings: SAFETY_SETTINGS,
                     temperature: 0.9
                 }
@@ -116,16 +104,134 @@ RULES:
             if (!text) return null;
 
             const clean = this.client.cleanJsonOutput(text);
-            const parsed = JSON.parse(clean);
-
-            if (isArrayField) {
-                return Array.isArray(parsed) ? parsed : null;
-            } else {
-                return typeof parsed.value === 'string' ? parsed.value : null;
-            }
+            return JSON.parse(clean);
         } catch (e) {
-            console.error(`Field generation failed for ${fieldName}:`, e);
+            console.error(`Character field generation failed for ${fieldName}:`, e);
             return null;
+        }
+    }
+
+    /**
+     * v1.6: Dormant Hook Registry extraction.
+     *
+     * Analyzes the character's backstory, relationships, goals, and inventory
+     * to extract a Dormant Hook Registry — the set of latent tension vectors
+     * that can legitimately activate as threats during gameplay.
+     *
+     * Called ONCE at session start (ScenarioSelectionView or equivalent).
+     * Result stored in gameWorld.dormantHooks.
+     *
+     * The engine enforces that new threat seeds must reference one of these hooks
+     * (via dormantHookId), OR cite a specific player action this session, OR belong
+     * to a faction with accumulated exposure score ≥ 20. All other threat seeds
+     * are blocked by validateThreatCausality() in simulationEngine.ts.
+     */
+    async extractDormantHooks(character: Character): Promise<DormantHook[]> {
+        const DORMANT_HOOK_SCHEMA: Schema = {
+            type: Type.ARRAY,
+            items: {
+                type: Type.OBJECT,
+                properties: {
+                    id: {
+                        type: Type.STRING,
+                        description: "Short snake_case identifier, e.g. hook_father_guild_records"
+                    },
+                    summary: {
+                        type: Type.STRING,
+                        description: "One sentence describing the latent tension."
+                    },
+                    category: {
+                        type: Type.STRING,
+                        description: "One of: relationship, backstory, secret, resource, location"
+                    },
+                    sourceField: {
+                        type: Type.STRING,
+                        description: "Which character field this comes from: backstory, relationships, goals, inventory, notableFeatures"
+                    },
+                    involvedEntities: {
+                        type: Type.ARRAY,
+                        items: { type: Type.STRING },
+                        description: "Names of NPCs or factions involved. Only names present in the character data."
+                    },
+                    activationConditions: {
+                        type: Type.STRING,
+                        description: "Plain language: what specific player action or in-world event would cause this to activate."
+                    },
+                    status: {
+                        type: Type.STRING,
+                        description: "Always 'dormant' for newly extracted hooks."
+                    }
+                },
+                required: ['id', 'summary', 'category', 'sourceField', 'involvedEntities', 'activationConditions', 'status']
+            }
+        };
+
+        const prompt = `
+You are the threat analysis subsystem for a Visceral Realism simulation engine.
+Your job is to read a character's background and extract DORMANT HOOKS —
+pre-existing tension vectors that could realistically activate during play.
+
+A Dormant Hook is NOT a threat. It is a latent condition that COULD become a threat
+if the player takes relevant actions or time passes. It must be rooted entirely in
+the character's background — you may NOT invent new elements.
+
+Character data:
+Name: ${character.name}
+Race: ${character.race}
+Backstory: ${character.backstory}
+Relationships: ${character.relationships.join(' | ')}
+Goals: ${character.goals.join(' | ')}
+Inventory: ${character.inventory.join(' | ')}
+Setting: ${character.setting}
+
+RULES:
+- Extract 3–6 hooks maximum. Quality over quantity.
+- Only extract hooks with a genuine, specific causal chain — not vague atmosphere.
+- Do NOT invent new NPCs, factions, or events not present in the character data.
+- A secret the character possesses counts as a hook only if the background implies
+  someone ALREADY knows or could plausibly find out through normal social channels.
+- Do NOT add a hook for general setting hazards ("the city is dangerous", "the dungeon exists").
+- Relationship hooks require a named person and a specific tension, not just "has family."
+- A character trait or physical attribute is NOT a hook by itself. It becomes a hook only
+  if the background establishes a specific person or faction who already has reason to care.
+- Set status to "dormant" for all hooks.
+
+Output valid JSON array of hook objects.
+        `;
+
+        try {
+            const response = await this.client.ai.models.generateContent({
+                model: (this.client as any).modelName,
+                contents: prompt,
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: DORMANT_HOOK_SCHEMA,
+                    safetySettings: SAFETY_SETTINGS,
+                    temperature: 0.3 // Low temp — precise extraction, not creativity
+                }
+            });
+
+            const text = response.text;
+            if (!text) return [];
+
+            const clean = this.client.cleanJsonOutput(text);
+            const parsed = JSON.parse(clean) as DormantHook[];
+
+            // Sanitize: ensure all IDs are unique and status is dormant
+            const seen = new Set<string>();
+            return parsed
+                .filter(hook => hook.id && hook.summary && hook.activationConditions)
+                .map(hook => ({
+                    ...hook,
+                    id: seen.has(hook.id)
+                        ? `${hook.id}_${Date.now()}`
+                        : (seen.add(hook.id), hook.id),
+                    status: 'dormant' as HookStatus
+                }));
+
+        } catch (e) {
+            console.error('[DormantHooks] Extraction failed:', e);
+            return [];
         }
     }
 }

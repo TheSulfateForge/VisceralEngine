@@ -1,4 +1,4 @@
-import { GameHistory, GameWorld, Character, SceneMode, MemoryItem, LoreItem, KnownEntity, BioMonitor, ActiveThreat } from '../types';
+import { GameHistory, GameWorld, Character, SceneMode, MemoryItem, LoreItem, KnownEntity, BioMonitor, ActiveThreat, DormantHook, FactionExposure } from '../types';
 import { retrieveRelevantContext, RAGResult } from './ragEngine';
 import { getSectionReminder } from '../sectionReminders';
 import { partitionConditions } from './contentValidation';
@@ -175,6 +175,58 @@ ${threatList}
 };
 
 /**
+ * v1.6: Builds the Origin Gate context block injected into each turn's prompt.
+ * Shows the AI exactly which dormant hook IDs are valid and what faction exposure
+ * scores currently exist, so it can correctly populate dormant_hook_id.
+ */
+const buildDormantHooksContext = (
+    dormantHooks: DormantHook[],
+    factionExposure: FactionExposure
+): string => {
+    if (!dormantHooks.length && !Object.keys(factionExposure).length) return '';
+
+    const lines: string[] = ['[ORIGIN GATE CONTEXT — read before seeding any threat this turn]', ''];
+
+    if (dormantHooks.length > 0) {
+        lines.push('DORMANT HOOKS (pre-existing tension vectors from character background):');
+        lines.push('To pass Origin Test A, set dormant_hook_id to the exact ID shown below.');
+        lines.push('');
+        for (const hook of dormantHooks) {
+            const statusMark =
+                hook.status === 'dormant'   ? '◆ DORMANT'   :
+                hook.status === 'activated' ? '▶ ACTIVE'    : '✓ RESOLVED';
+            lines.push(`  ${statusMark} [${hook.id}]`);
+            lines.push(`    ${hook.summary}`);
+            lines.push(`    Activates when: ${hook.activationConditions}`);
+            if (hook.involvedEntities.length > 0) {
+                lines.push(`    Entities: ${hook.involvedEntities.join(', ')}`);
+            }
+        }
+        lines.push('');
+    }
+
+    const activeExposures = Object.entries(factionExposure)
+        .filter(([, e]) => e.exposureScore > 0)
+        .sort((a, b) => b[1].exposureScore - a[1].exposureScore);
+
+    if (activeExposures.length > 0) {
+        lines.push('FACTION EXPOSURE (≥20 required to pass Origin Test C):');
+        for (const [name, entry] of activeExposures) {
+            const filled = Math.floor(entry.exposureScore / 10);
+            const bar = '█'.repeat(filled) + '░'.repeat(10 - filled);
+            lines.push(`  ${name}: [${bar}] ${entry.exposureScore}/100`);
+        }
+        lines.push('');
+    }
+
+    lines.push('If no dormant hook ID matches and no player action this session caused this,');
+    lines.push('and no faction above has score ≥ 20, the threat seed is FORBIDDEN.');
+    lines.push('[END ORIGIN GATE CONTEXT]');
+
+    return lines.join('\n');
+};
+
+/**
  * Builds a condition lock block when the player has manually removed conditions.
  * Informs the AI that these conditions were deliberately cleared and must NOT
  * be re-added via character_updates unless strong new narrative evidence justifies it.
@@ -252,6 +304,12 @@ export const constructGeminiPrompt = (
   const encounterScopeLock = buildEncounterScopeLock(gameWorld.activeThreats || []);
   const conditionLock = buildConditionLock(playerRemovedConditions);
 
+  // v1.6: Origin Gate context
+  const dormantHooksContext = buildDormantHooksContext(
+      (gameWorld as any).dormantHooks as DormantHook[] ?? [],
+      (gameWorld as any).factionExposure as FactionExposure ?? {}
+  );
+
   // 8. Assembly
   const promptString = `
 [CONTEXT]
@@ -266,7 +324,7 @@ Tension Level: ${tension}/100
 ${bioStatus}
 
 [HIDDEN_REGISTRY]
-${gameWorld.hiddenRegistry}
+${dormantHooksContext ? dormantHooksContext + '\n\n' : ''}${gameWorld.hiddenRegistry}
 
 ${characterBlock}
 

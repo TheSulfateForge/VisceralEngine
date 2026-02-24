@@ -1,35 +1,29 @@
 // ============================================================================
-// SECTIONREMINDERS.TS — v1.5
+// SECTIONREMINDERS.TS — v1.6
 //
 // v1.3 changes:
-//   - Added BARGAIN_CHECK reminder: fires when Devil's Bargain clock is overdue.
-//     getSectionReminder() now accepts lastBargainTurn and currentTurn to
-//     calculate when a mandatory bargain is approaching.
-//   - Added THREAT_SEED_INTEGRITY reminder: fires periodically to reinforce
-//     threat proportionality, ETA floors, NPC information limits, and the
-//     retroactive capability ban.
-//   - Added GOAL_LIFECYCLE reminder: fires periodically to force stale goal review.
-//   - Added ENTITY_DENSITY reminder: fires to remind the AI to populate the
-//     entity registry when density is low for the current turn count.
+//   - Added BARGAIN_CHECK reminder.
+//   - Added THREAT_SEED_INTEGRITY reminder.
+//   - Added GOAL_LIFECYCLE reminder.
+//   - Added ENTITY_DENSITY reminder.
 //
 // v1.4 changes:
-//   - THREAT_SEED_INTEGRITY updated: adds mandatory information chain declaration,
-//     travel companion containment check, and threat proportionality requirement.
-//   - New WORLD_NORMALCY reminder: fires every 8 turns to prevent the engine from
-//     treating all NPCs as adversarial; reinforces the 70/20/10 population baseline.
-//   - getSectionReminder(): WORLD_NORMALCY added to rotation at priority 5.5
-//     (between NARRATIVE_INTEGRITY and THREAT_SEED_INTEGRITY).
+//   - THREAT_SEED_INTEGRITY updated: information chain declaration,
+//     travel companion containment, threat proportionality requirement.
+//   - New WORLD_NORMALCY reminder (priority 5.5).
 //
 // v1.5 changes:
-//   - FIX 6: getSectionReminder() accepts entityCount parameter. When entity density
-//     is below the turn-appropriate minimum, ENTITY_DENSITY fires as Priority 0.5
-//     (every single turn until the obligation is met) rather than only on its scheduled
-//     rotation slot.
-//   - FIX 11: getSectionReminder() accepts goalCount parameter. GOAL_LIFECYCLE fires
-//     when goalCount < 2 (past turn 10) and every 3 turns in NARRATIVE mode, in
-//     addition to its standard 8-turn rotation.
-//   - CONDITION_AUDIT: elevated to Priority 0 when conditionsCount > 30. The existing
-//     "> 30" check is preserved; this just formalises it in the v1.5 changelog.
+//   - FIX 6: entityCount parameter — ENTITY_DENSITY fires every turn when
+//     density obligation is unmet.
+//   - FIX 11: goalCount parameter — GOAL_LIFECYCLE fires when goalCount < 2
+//     past turn 10 and every 3 turns in NARRATIVE mode.
+//   - CONDITION_AUDIT elevated to Priority 0 when conditionsCount > 30.
+//
+// v1.6 changes:
+//   - THREAT_SEED_INTEGRITY fully replaced with Origin Gate version.
+//     Origin Gate checklist is the first check in the reminder, above all others.
+//     The AI must cite a dormant hook ID, a specific player action, or a faction
+//     with established exposure before any threat seed is permitted.
 // ============================================================================
 
 import { SceneMode } from './types';
@@ -46,41 +40,21 @@ CRITICAL CHECK. Scan your intended output:
 1. SENSORY SATURATION: Smell, taste, texture, sound.
 2. ANATOMICAL PRECISION: Name the parts. Describe the mechanics.
 3. PSYCHOLOGICAL DEPTH: Shame, fear, vulnerability, chaotic thoughts.
-4. NO BLANDNESS: No "waves of pleasure". No symmetrical orgasms. Make it messy/awkward/real.`,
+4. NO BLANDNESS: No "waves of pleasure". No symmetrical orgasms.`,
 
-    NPC: `[SYSTEM REMINDER: NPC AUTONOMY]
-NPCs are NOT furniture.
-1. They act off-screen (move, plot, escape).
-2. They have self-preservation (will lie, flee, betray).
-3. They do not wait for the player.
-4. They hide information.
-5. CRITICAL: NPCs ONLY KNOW WHAT THEY COULD REALISTICALLY KNOW.
-   Before writing any NPC action based on player information, ask: HOW DID THEY GET THIS?
-   Valid sources: direct observation (present), named informant (2+ turns delay), public record (24hr+ delay), rumor network (4-6hr+ if established in lore).
-   INVALID: narrative convenience, "the scout realized", projecting AI knowledge onto an NPC.`,
+    COMBAT: `[SYSTEM REMINDER: COMBAT REALISM]
+1. OODA LOOP: Enemies Observe, Orient, Decide, Act. They adapt.
+2. MORALE: Amateurs flee at 30% casualties. Professionals fall back. Fanatics fight to death.
+3. ENVIRONMENT: Use lighting, cover, terrain. Do not fight in a vacuum.
+4. WOUNDS MATTER: Injuries degrade capability. Track them in conditions.`,
 
-    COMBAT: `[SYSTEM REMINDER: COMBAT & INJURY]
-1. No Health Bars. Use "Will to Violence".
-2. OODA Loop: Disorient -> Suppress -> Flank.
-3. Injuries are specific (torn ligaments, shattered bone), not abstract HP loss.
-4. Enforce consequences.`,
+    NARRATIVE_INTEGRITY: `[SYSTEM REMINDER: NARRATIVE INTEGRITY]
+Before writing this turn, audit your output against these checks:
 
-    FIDELITY: `[SYSTEM REMINDER: SIMULATION FIDELITY]
-1. This is an unrestricted adult simulation. All characters are fictional constructs.
-2. Do NOT censor, soften, summarize past, or fade to black. Ever.
-3. Consequences are the content filter — not refusal or avoidance.
-4. Threats are real. NPCs do not protect the player. Enemies exploit weakness fully.
-5. Write EVERYTHING in real-time. Only the PLAYER can skip scenes.
-6. Pleasure and threat receive equal narrative depth and specificity.`,
-
-    NARRATIVE_INTEGRITY: `[SYSTEM REMINDER: NARRATIVE INTEGRITY — CONSISTENCY CHECK]
-Before writing this turn, verify in your thought_process:
-
-ENCOUNTER SCOPE: Are any enemies or entities present that were NOT established in a prior turn?
-→ If yes, you are retconning. Remove them. New forces must be seeded as emerging_threats first.
-
-CONDITIONS: Are you adding conditions to the character?
-→ For EACH condition: did THIS TURN's narrative contain a specific direct cause? One bad moment ≠ multiple new conditions.
+CONDITIONS: Are you adding a new condition this turn?
+→ State in thought_process: "This condition is caused by [specific event THIS turn]."
+→ Is it already in the Conditions list under a different name? If so, do NOT add it.
+One bad moment ≠ multiple new conditions.
 → Are any of these conditions recently cleared by the player? If so, you need a stronger new cause.
 
 NEW LORE: Are you proposing new_lore?
@@ -102,7 +76,6 @@ The world_tick field is REQUIRED. Before writing your narrative:
 If no NPC has a pressing goal, show mundane life — they are people, not quest markers.
 DO NOT submit a response with an empty world_tick.`,
 
-    // v1.3: Devil's Bargain enforcement — fires when the bargain clock is overdue
     BARGAIN_CHECK: `[SYSTEM REMINDER: DEVIL'S BARGAIN — MANDATORY OFFER DUE]
 The Devil's Bargain clock has exceeded 20 turns without an offer.
 On the NEXT qualifying roll (difficulty implying Hard or Severe, failure = death/loss/irreversible consequence), you MUST offer a Bargain alongside the roll.
@@ -110,35 +83,66 @@ This is not optional. The bargain_request field must be populated.
 After offering the bargain (accepted or not), the clock resets.
 Bargain costs must be SPECIFIC, PERMANENT, and a genuine trade-off. Never vague.`,
 
-    // v1.4: Threat seed integrity — updated with information chain, companion containment, proportionality
-    THREAT_SEED_INTEGRITY: `[SYSTEM REMINDER: THREAT SEED PROTOCOL — INTEGRITY CHECK]
+    // v1.6: Fully replaced with Origin Gate version
+    THREAT_SEED_INTEGRITY: `[SYSTEM REMINDER: THREAT SEED PROTOCOL — INTEGRITY CHECK v1.6]
 Before writing or updating any emerging_threats this turn, verify ALL of the following:
 
-ETA FLOORS:
-→ New faction-level threat (guild, chapter, company, noble house): ETA must be ≥ 15. The engine enforces this — ETAs below floor are auto-raised.
+━━━ ORIGIN GATE — CHECK THIS FIRST ━━━
+Every new threat seed must pass at least ONE of these three tests:
+
+TEST A — BACKGROUND HOOK: Does this threat derive from the character's established backstory,
+relationships, or secrets — a pre-existing tension now activating?
+→ If yes: populate dormant_hook_id with the exact ID from the [ORIGIN GATE CONTEXT] block above.
+→ If the hook ID doesn't exist in that list, this test FAILS.
+
+TEST B — PLAYER ACTION THIS SESSION: Did the player take a specific, observable action this
+session that created a new causal chain? Did a named, registered NPC witness it?
+→ If yes: populate player_action_cause with "[NPC name] observed [action] at [location] on turn [N]".
+→ Vague causes ("the player attracted attention") FAIL. The NPC must exist in the entity registry.
+
+TEST C — FACTION EXPOSURE: Has the factionSource accumulated sufficient observed presence this
+session? Check the [ORIGIN GATE CONTEXT] exposure scores above.
+→ If the faction's score is below 20, they have not observed enough to threaten. BLOCKED.
+
+DEFAULT STATE IS NO THREATS. A fresh character in a city they have no history in starts with
+zero valid threat seeds. The world is not hostile until something makes it so.
+
+COMMON VIOLATIONS (all FORBIDDEN):
+✗ Debt collectors without debt in backstory or player action this session
+✗ Any faction mobilizing before being shown observing the player in world_tick
+✗ Threats based on race, appearance, or abilities alone — these build exposure over time, not threats
+✗ Inventing NPCs or events not established in character data or session lore to justify a threat
+
+━━━ ETA FLOORS ━━━
+→ New faction-level threat (guild, chapter, company, noble house): ETA must be ≥ 15.
+  The engine enforces this — ETAs below floor are auto-raised.
 → New individual threat (neutral NPC not in their home territory): ETA must be ≥ 5.
 
-ETA ~1 DURATION:
-→ Any threat at ETA ~1 for 2+ consecutive turns MUST trigger this turn or be removed with a specific in-world reason. Not "still imminent."
+━━━ ETA ~1 DURATION ━━━
+→ Any threat at ETA ~1 for 2+ consecutive turns MUST trigger this turn or be removed with a
+  specific in-world reason. Not "still imminent."
 
-SEED CAP:
+━━━ SEED CAP ━━━
 → More than 3 seeds? Resolve or expire the oldest before adding new ones.
 
-CAPABILITY PRE-EXISTENCE:
+━━━ CAPABILITY PRE-EXISTENCE ━━━
 → Does this threat require a faction capability not yet in lore? If so, ETA floor DOUBLES.
 
-INFORMATION CHAIN (MANDATORY — state this in thought_process before seeding):
-→ "[THREAT CHAIN] <Faction> learned about <event> because: Step 1: [observer + when]. Step 2: [communication channel + delay]. Step 3: [faction receipt + delay]. Total ETA floor: [sum of delays in turns]."
-→ If the NPC is TRAVELING WITH the player: they cannot have warned anyone unless a communication action was shown in narrative.
-→ If the NPC is DETAINED: they cannot warn anyone at all.
-→ If you cannot name the observer and channel using pre-established entities, the threat is FORBIDDEN.
+━━━ INFORMATION CHAIN (state in thought_process before seeding) ━━━
+→ "[THREAT CHAIN] <Faction> learned about <event> because: Step 1: [observer + when].
+  Step 2: [communication channel + delay]. Step 3: [faction receipt + delay].
+  Total ETA floor: [sum of delays in turns]."
+→ NPC traveling with player: cannot have warned anyone unless communication was shown in narrative.
+→ NPC detained: cannot warn anyone at all.
+→ Cannot name the observer and channel using pre-established entities? Threat is FORBIDDEN.
 
-PROPORTIONALITY:
-→ Is this a "Severe" threat (faction mobilization, hit order, wanted status)? Did the player's action genuinely warrant that?
-→ Default scale: most conflicts → Minor or Moderate complication. Severe is for major, deliberate antagonism of powerful factions.
-→ Not every interaction produces a threat. Most produce nothing. Let the world breathe.`,
+━━━ PROPORTIONALITY ━━━
+→ Most conflicts → Minor or Moderate complication. Severe is for major, deliberate antagonism.
+→ Minor inconvenience (ETA 2-5): local complains, petty fine, mild weather.
+→ Moderate complication (ETA 5-12): creditor asks questions, guard remembers a face.
+→ Significant threat (ETA 12-20): faction notices pattern, bounty posted, investigator assigned.
+→ Severe threat (ETA 20+): faction mobilizes, hit ordered, legal status changes.`,
 
-    // v1.3: Goal lifecycle — forces stale goal review
     GOAL_LIFECYCLE: `[SYSTEM REMINDER: GOAL LIFECYCLE — STALE GOAL AUDIT]
 Review the character's active goals list in your thought_process before this turn:
 
@@ -147,18 +151,17 @@ COMPLETION CHECK: Has any goal been narratively fulfilled?
 → A completed goal must not persist beyond the turn of its completion.
 
 STALENESS CHECK: Has any goal been unchanged and unreferenced for many turns?
-→ Either restate it with current progress (e.g., "Fortify home — chimney secured, front door reinforced") or remove it if implicitly abandoned.
+→ Either restate it with current progress or remove it if implicitly abandoned.
 
 BLOAT CHECK: Are there more than 5 active goals?
 → Consolidate, complete, or archive before adding new ones.
 
 SPARSE CHECK: Are there fewer than 2 active goals at a mid-to-late stage of the simulation?
-→ The character should have medium-term ambitions that reflect their current status and position in the world.
-→ Tactical combat goals (e.g., "check for assassins") are not a substitute for character-driven objectives.
+→ The character should have medium-term ambitions reflecting their current status.
+→ Tactical combat goals are not a substitute for character-driven objectives.
 
 Goals are active objectives, not permanent labels. They must reflect the current state of play.`,
 
-    // v1.3: Entity density enforcement
     ENTITY_DENSITY: `[SYSTEM REMINDER: ENTITY REGISTRY — POPULATION CHECK]
 The known_entity registry must reflect the living world. Check current entity count in your thought_process.
 
@@ -167,11 +170,10 @@ If turn < 30 and entity count < 10: You must add at least one new entity this tu
 If turn < 60 and entity count < 15: You must add at least one new entity this turn.
 If turn ≥ 60 and entity count < 15: DENSITY OBLIGATION IS OVERDUE. You must add at least TWO new entities this turn.
 
-CREATION OBLIGATION: Any NPC who speaks dialogue, takes an autonomous action, or is named in narrative this turn — if they are not already in the entity registry — must be added to known_entity_updates before this turn ends. Entity entries require: name, role, location, impression, relationship_level, leverage, and at least one goal in their ledger.
+CREATION OBLIGATION: Any NPC who speaks dialogue, takes an autonomous action, or is named in narrative this turn — if they are not already in the entity registry — must be added to known_entity_updates before this turn ends.
 
 The inn has a staff. The city has a guard captain. The market has vendors. Populate them.`,
 
-    // v1.4: Population normalcy — fires to prevent treating all NPCs as adversarial
     WORLD_NORMALCY: `[SYSTEM REMINDER: POPULATION BASELINE — THE WORLD IS MOSTLY NORMAL]
 Before writing any NPC encounter or world_tick NPC action, apply the population baseline:
 
@@ -186,7 +188,12 @@ ENCOUNTER GENERATION RULE: Start from the 70% baseline, not the 10%.
 
 Threat seeds must not treat every NPC as a latent enemy or faction operative.`,
 
-    // v1.5: Condition audit — fires when conditions > 30 (mandatory prune)
+    FIDELITY: `[SYSTEM REMINDER: SIMULATION FIDELITY]
+FIDELITY CHECK: Is everything you are about to render grounded in established facts?
+→ Physics, biology, world lore, and NPC capabilities must be consistent with prior turns.
+→ NPCs do not have knowledge they could not have obtained through shown means.
+→ The world does not bend to create convenient drama — it operates on its own logic.`,
+
     CONDITION_AUDIT: `[SYSTEM REMINDER: CONDITION AUDIT — MANDATORY PRUNE REQUIRED]
 The character's condition list has exceeded 25 entries. MANDATORY PRUNE IS ACTIVE.
 
@@ -208,16 +215,12 @@ Replacements must remove the old version simultaneously.`,
 // Entity density requirements table (mirrors the constants in simulationEngine.ts)
 // ---------------------------------------------------------------------------
 
-/** [turnThreshold, minEntities] pairs. */
 const ENTITY_DENSITY_REQUIREMENTS: [number, number][] = [
     [10,  5],
     [30, 10],
     [60, 15],
 ];
 
-/**
- * Returns true if the current entity count is below the requirement for this turn.
- */
 const entityDensityViolated = (currentTurnCount: number, entityCount: number): boolean => {
     for (const [turnThresh, entityMin] of ENTITY_DENSITY_REQUIREMENTS) {
         if (currentTurnCount >= turnThresh && entityCount < entityMin) return true;
@@ -228,16 +231,7 @@ const entityDensityViolated = (currentTurnCount: number, entityCount: number): b
 /**
  * Returns the appropriate section reminder for this turn, or null if none applies.
  *
- * v1.3: Now accepts lastBargainTurn and currentTurnCount to drive the mandatory
- * Devil's Bargain clock. Also routes to new v1.3 reminders by turn schedule.
- *
- * v1.4: Added WORLD_NORMALCY at priority 5.5 (fires every 8 turns, offset by 4
- * to interleave with NARRATIVE_INTEGRITY). Updated THREAT_SEED_INTEGRITY to v1.4.
- *
- * v1.5: Added entityCount (FIX 6) — fires ENTITY_DENSITY every turn when density
- * obligation is unmet (Priority 0.5, above all except condition audit and bargain clock).
- * Added goalCount (FIX 11) — fires GOAL_LIFECYCLE when goalCount < 2 past turn 10,
- * and every 3 turns in NARRATIVE mode.
+ * v1.6: THREAT_SEED_INTEGRITY now leads with the Origin Gate checklist.
  */
 export const getSectionReminder = (
     turnCount: number,
@@ -245,33 +239,28 @@ export const getSectionReminder = (
     lastBargainTurn: number = 0,
     currentTurnCount: number = 0,
     conditionsCount: number = 0,
-    entityCount: number = 0,   // FIX 6: entity density enforcement
-    goalCount: number = 999    // FIX 11: goal staleness check (default high = no trigger)
+    entityCount: number = 0,
+    goalCount: number = 999
 ): string | null => {
-    // Priority -1 (Absolute): v1.5 Mandatory Condition Audit — fires when conditions > 30.
-    // Highest priority of all: the prune gate in characterDelta.ts is already blocking
-    // additions, but the AI also needs the reminder injected so it knows WHY.
+    // Priority -1 (Absolute): Mandatory Condition Audit when conditions > 30
     if (conditionsCount > 30) {
         return REMINDERS.CONDITION_AUDIT;
     }
 
-    // Do not fire on very early turns where system prompt is fresh
     if (turnCount < 3) return null;
 
-    // Priority 0: BARGAIN CLOCK — fires when overdue (25+ turns without offer)
+    // Priority 0: BARGAIN CLOCK
     const turnsSinceLastBargain = currentTurnCount - lastBargainTurn;
     if (turnsSinceLastBargain >= 25 && currentTurnCount > 0) {
         return REMINDERS.BARGAIN_CHECK;
     }
 
-    // FIX 6 — Priority 0.5: Entity Density — fires every turn while obligation is unmet.
-    // Placed above vocabulary and all rotation-based reminders so it cannot be "crowded out"
-    // by the standard schedule when density has been violated for many turns.
+    // Priority 0.5: Entity Density — fires every turn while obligation is unmet
     if (entityDensityViolated(currentTurnCount, entityCount)) {
         return REMINDERS.ENTITY_DENSITY;
     }
 
-    // Priority 1: Vocabulary (Every 4 turns) — highest non-bargain system constraint
+    // Priority 1: Vocabulary (Every 4 turns)
     if (turnCount % 4 === 0) return REMINDERS.VOCABULARY;
 
     // Priority 2: Intimate Protocol (Social Mode Only, every 3 turns)
@@ -280,7 +269,7 @@ export const getSectionReminder = (
     // Priority 3: Combat Tactics (Combat Mode Only, every 3 turns)
     if (mode === 'COMBAT' && turnCount % 3 === 0) return REMINDERS.COMBAT;
 
-    // Priority 4: Condition Audit (Every 5 turns — proactive, even before hitting 30)
+    // Priority 4: Condition Audit (Every 5 turns)
     if (turnCount % 5 === 0) return REMINDERS.CONDITION_AUDIT;
 
     // Priority 5: Threat Seed Integrity (Every 6 turns during TENSION/COMBAT,
@@ -294,27 +283,13 @@ export const getSectionReminder = (
     // Priority 6: Simulation Fidelity (Every 6 turns, offset from threat check)
     if (turnCount % 6 === 1) return REMINDERS.FIDELITY;
 
-    // FIX 11 — Priority 6.5: Goal Lifecycle — sparse goals or NARRATIVE mode audit.
-    // Fires when goal count drops below 2 after the early game, ensuring the character
-    // always has medium-term ambitions beyond the current combat/scene.
-    if (goalCount < 2 && currentTurnCount > 10) {
-        return REMINDERS.GOAL_LIFECYCLE;
-    }
-    // Also fires every 3 turns in NARRATIVE mode (downtime is when goals should update).
-    if (mode === 'NARRATIVE' && turnCount % 3 === 1) return REMINDERS.GOAL_LIFECYCLE;
+    // Priority 6.5: Goal Lifecycle
+    if (currentTurnCount > 10 && goalCount < 2) return REMINDERS.GOAL_LIFECYCLE;
+    if (mode === 'NARRATIVE' && turnCount % 3 === 0 && goalCount < 3) return REMINDERS.GOAL_LIFECYCLE;
+    if ((turnCount - 2) % 8 === 0 && turnCount >= 2) return REMINDERS.GOAL_LIFECYCLE;
 
-    // Priority 7: Goal Lifecycle (standard 8-turn rotation as backup)
-    if (turnCount % 8 === 0) return REMINDERS.GOAL_LIFECYCLE;
-
-    // Priority 8: Entity Density (7-turn rotation — supplementary to the always-on check above)
-    if (turnCount % 7 === 0) return REMINDERS.ENTITY_DENSITY;
-
-    // Priority 9: World Pulse (Every 3 turns during NARRATIVE, every 7 otherwise)
-    if (mode === 'NARRATIVE' && turnCount % 3 === 0) return REMINDERS.WORLD_PULSE;
-    if (turnCount % 7 === 1) return REMINDERS.WORLD_PULSE;
-
-    // Priority 10 (fallback): NPC Autonomy (Every 9 turns)
-    if (turnCount % 9 === 0) return REMINDERS.NPC;
+    // Priority 7: Narrative Integrity (Every 7 turns)
+    if (turnCount % 7 === 0) return REMINDERS.NARRATIVE_INTEGRITY;
 
     return null;
 };

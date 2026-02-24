@@ -36,7 +36,7 @@ export const useGeminiClient = () => {
   const { getService, handleKeyLink } = useGeminiService();
   const { handleVisualize } = useVisualization();
   const { handleGenerateScenarios } = useScenarioGen();
-  const { handleGenerateCharacter, handleGenerateField } = useCharacterGen();
+  const { handleGenerateCharacter, handleGenerateField, handleExtractDormantHooks } = useCharacterGen();
 
   const handleUndo = useCallback(() => {
     const { preTurnSnapshot } = useGameStore.getState();
@@ -235,6 +235,7 @@ export const useGeminiClient = () => {
     handleGenerateScenarios,
     handleUndo,
     handleGenerateCharacter,
-    handleGenerateField
+    handleGenerateField,
+    handleExtractDormantHooks,  // v1.6
   };
 };

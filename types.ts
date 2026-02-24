@@ -1,5 +1,8 @@
 // ============================================================================
 // TYPES.TS — Visceral Engine Type Definitions
+// v1.6: Added DormantHook, HookCategory, HookStatus, FactionExposureEntry,
+//       FactionExposure. Extended WorldTickEvent with dormantHookId and
+//       playerActionCause. Extended GameWorld with dormantHooks and factionExposure.
 // ============================================================================
 
 // --- Nominal ID Types (prevent accidental mixing) ---
@@ -141,6 +144,57 @@ export interface NPCInteraction {
 
 export type ThreatStatus = 'building' | 'imminent' | 'triggered' | 'expired';
 
+// --- v1.6: Dormant Hook Registry ---
+// Pre-existing tension vectors extracted from character backstory at session start.
+// Every new threat seed must cite one of these, or cite a specific player action,
+// or belong to a faction with sufficient exposure score. No other origin is valid.
+
+/** Categories of latent tension vectors extracted from character backstory. */
+export type HookCategory =
+    | 'relationship'   // an existing NPC tie with unresolved tension
+    | 'backstory'      // a past event that could catch up to them
+    | 'secret'         // something the character knows or possesses that others want
+    | 'resource'       // something of value the character has (ability, item, lineage)
+    | 'location';      // somewhere the character has history or stakes
+
+export type HookStatus = 'dormant' | 'activated' | 'resolved';
+
+/**
+ * A latent threat vector extracted from character backstory at session start.
+ * Threats may ONLY be seeded if they reference a DormantHook OR cite a specific
+ * player action from this session as their cause. No other origin is valid.
+ */
+export interface DormantHook {
+    id: string;                      // e.g. "hook_brennan_favor"
+    summary: string;                 // one-sentence description of the tension
+    category: HookCategory;
+    sourceField: string;             // 'backstory' | 'relationships' | 'goals' | etc.
+    involvedEntities: string[];      // names of NPCs or factions involved
+    activationConditions: string;    // what player action or event would wake this
+    status: HookStatus;
+    activatedTurn?: number;
+    resolvedTurn?: number;
+}
+
+// --- v1.6: Faction Exposure Scoring ---
+// Tracks how much a given faction or individual has observed of the player.
+// Exposure must accumulate through actual in-session events before a threat
+// can be seeded referencing that faction.
+
+/**
+ * Per-faction or per-NPC exposure entry.
+ * Exposure earns the right to threaten — no observation = no valid threat seed.
+ */
+export interface FactionExposureEntry {
+    exposureScore: number;           // 0–100. Threats require ≥ 20 to be valid.
+    lastObservedAction: string | null;
+    lastObservedTurn: number;
+    observedCapabilities: string[];  // what this entity has concretely witnessed
+}
+
+/** Keyed by faction name or NPC name for individuals. */
+export type FactionExposure = Record<string, FactionExposureEntry>;
+
 export interface WorldTickEvent {
     description: string;
     turns_until_impact?: number;
@@ -152,6 +206,9 @@ export interface WorldTickEvent {
     consecutiveTurnsAtEtaOne?: number;
     requiredLoreCapability?: string;
     status?: ThreatStatus;
+    // v1.6 additions — Origin Gate fields (AI-populated, engine-validated):
+    dormantHookId?: string;      // Must match a DormantHook.id to pass origin gate
+    playerActionCause?: string;  // Describes the specific player action this session that caused this
 }
 
 // --- Faction Intelligence (v1.3) ---
@@ -378,10 +435,14 @@ export interface GameWorld {
     lastWorldTickTurn: number;
 
     // v1.3 — Simulation Integrity Systems
-    turnCount: number;                      // authoritative turn counter (was on GameHistory only)
-    lastBargainTurn: number;               // tracks when last Devil's Bargain was offered
-    factionIntelligence: FactionIntelligence; // NPC omniscience prevention
-    legalStatus: LegalStatus;             // claim resurrection prevention
+    turnCount: number;
+    lastBargainTurn: number;
+    factionIntelligence: FactionIntelligence;
+    legalStatus: LegalStatus;
+
+    // v1.6 — Dormant Hook Registry + Exposure Scoring
+    dormantHooks: DormantHook[];
+    factionExposure: FactionExposure;
 }
 
 export interface WorldTime {
@@ -415,9 +476,11 @@ export interface SaveMetadata {
 
 export type View = 'landing' | 'creator' | 'scenario' | 'game';
 
+import type { ReactNode } from 'react';
+
 export interface ModalProps {
     show: boolean;
     onClose: () => void;
     title: string;
-    children: React.ReactNode;
+    children: ReactNode;
 }

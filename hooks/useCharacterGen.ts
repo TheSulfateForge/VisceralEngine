@@ -3,9 +3,10 @@ import { useCallback } from 'react';
 import { useGameStore } from '../store';
 import { useGeminiService } from './useGeminiService';
 import { useToast } from '../components/providers/ToastProvider';
+import { CharacterService } from '../services/characterService';
 
 export const useCharacterGen = () => {
-    const { setCharacter } = useGameStore();
+    const { setCharacter, setGameWorld } = useGameStore();
     const { getService } = useGeminiService();
     const { showToast } = useToast();
 
@@ -74,5 +75,48 @@ export const useCharacterGen = () => {
         }
       }, [getService, setCharacter, showToast]);
 
-    return { handleGenerateCharacter, handleGenerateField };
+      /**
+   * v1.6: Extract Dormant Hook Registry from the current character.
+   * Call this once when the player starts a session (before the first AI turn).
+   * The result is written directly to gameWorld.dormantHooks.
+   */
+  const handleExtractDormantHooks = useCallback(async (): Promise<void> => {
+      const { character } = useGameStore.getState();
+      if (!character.name || !character.backstory) return;
+
+      try {
+          const service = await getService();
+          if (!service) return;
+
+          const characterService = new CharacterService((service as any).client ?? service);
+          const hooks = await characterService.extractDormantHooks(character);
+
+          if (hooks.length > 0) {
+              setGameWorld(prev => ({
+                  ...prev,
+                  dormantHooks: hooks
+              }));
+              // Log to debug panel
+              useGameStore.getState().setGameHistory(prev => ({
+                  ...prev,
+                  debugLog: [
+                      ...prev.debugLog,
+                      {
+                          timestamp: new Date().toISOString(),
+                          message: `[SESSION START] Extracted ${hooks.length} dormant hook(s): ${hooks.map(h => h.id).join(', ')}`,
+                          type: 'info'
+                      }
+                  ]
+              }));
+          }
+      } catch (e) {
+          console.error('[DormantHooks] Session-start extraction failed:', e);
+      }
+  }, [getService, setGameWorld]);
+
+  return {
+      handleGenerateCharacter,
+      handleGenerateField,
+      handleExtractDormantHooks,  // v1.6: exposed for ScenarioSelectionView
+  };
 };
