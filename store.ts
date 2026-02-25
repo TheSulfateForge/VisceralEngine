@@ -101,6 +101,9 @@ const initialWorld: GameWorld = {
     // v1.6: Faction Exposure Scoring — accumulates as NPCs observe the player.
     // A faction with exposureScore < 20 cannot be the source of a new threat seed.
     factionExposure: {},
+
+    // v1.7: Persistent name resolution map for banned names
+    bannedNameMap: {},
 };
 
 interface UIState {

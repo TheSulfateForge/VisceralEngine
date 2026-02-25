@@ -427,6 +427,7 @@ export interface GameWorld {
     environment?: CombatEnvironment;
     activeThreats: ActiveThreat[];
     knownEntities: KnownEntity[];
+    bannedNameMap: Record<string, string>;
 
     // State Tracking
     sceneMode: SceneMode;

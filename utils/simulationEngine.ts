@@ -54,6 +54,7 @@ import {
     significantWords,
     jaccardSimilarity,
 } from './contentValidation';
+import { resolveAllBannedNames } from './nameResolver';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -423,8 +424,10 @@ export const SimulationEngine = {
         //    scanned and sanitised before any state is written.
         //    v1.4: Also filters out lore with [RENAME:X] markers and entity updates
         //    with unresolved names before they reach state.
+        //    v1.7: Uses nameMap for immediate resolution.
         // ===================================================================
-        const { sanitisedResponse: response_sanitised, allViolations } = sanitiseAllFields(response);
+        const nameMap = { ...currentWorld.bannedNameMap };
+        const { sanitisedResponse: response_sanitised, allViolations } = sanitiseAllFields(response, nameMap);
         const r = response_sanitised; // Use sanitised copy for all subsequent processing
 
         if (allViolations.length > 0) {
@@ -966,7 +969,7 @@ const pendingLore: LoreItem[] = [];
                 time: newTime,
                 lore: currentWorld.lore,
                 memory: finalMemory,
-                hiddenRegistry: trimHiddenRegistry(newHiddenRegistry),
+                hiddenRegistry: resolveAllBannedNames(trimHiddenRegistry(newHiddenRegistry), nameMap),
                 pregnancies: currentPregnancies,
                 activeThreats: nextThreats,
                 environment: nextEnv,
@@ -982,6 +985,7 @@ const pendingLore: LoreItem[] = [];
                 // v1.6 fields
                 dormantHooks: ((currentWorld as any).dormantHooks as DormantHook[]) ?? [],
                 factionExposure: ((currentWorld as any).factionExposure as FactionExposure) ?? {},
+                bannedNameMap: nameMap,
                 emergingThreats: finalEmergingThreats,
             } as GameWorld & { emergingThreats: WorldTickEvent[] },
             characterUpdate: {

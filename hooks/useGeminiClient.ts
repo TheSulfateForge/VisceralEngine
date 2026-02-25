@@ -130,7 +130,8 @@ export const useGeminiClient = () => {
         const response: ModelResponseSchema = await service.sendMessage(
             contextPrompt, 
             [...preCallState.gameHistory.history, userMsg], 
-            preCallState.gameHistory.lastActiveSummary
+            preCallState.gameHistory.lastActiveSummary,
+            preCallState.gameWorld.bannedNameMap ?? {}  // v1.7
         );
 
         if (latestRequestId.current !== requestId) {

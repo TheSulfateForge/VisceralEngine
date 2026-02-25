@@ -7,6 +7,7 @@ import { downloadFile, debounce } from '../utils';
 import { useToast } from '../components/providers/ToastProvider';
 import { TIMING } from '../constants';
 import { useGameStore } from '../store';
+import { sanitiseStateOnLoad } from '../utils/nameResolver';
 
 /**
  * HOOK: useAutosave
@@ -131,9 +132,16 @@ export const usePersistence = () => {
         throw new Error("Invalid save structure");
       }
 
-      setGameHistory(save.gameState.history);
-      setGameWorld(save.gameState.world);
-      setCharacter(save.character);
+      // v1.7: Deep-sanitise all state to resolve legacy [RENAME:X] contamination
+      const { world, character: cleanChar, history } = sanitiseStateOnLoad(
+        save.gameState.world,
+        save.character,
+        save.gameState.history
+      );
+
+      setGameHistory(history);
+      setGameWorld(world);
+      setCharacter(cleanChar);
       setUI({ view: 'game', isSettingsOpen: false });
       showToast("Reality state reconstructed.", "success");
     } catch (e) {
@@ -163,9 +171,14 @@ export const usePersistence = () => {
     try {
       const save = await db.loadGame(name);
       if (save) {
-        setGameHistory({ ...save.gameState.history, isThinking: false });
-        setGameWorld({ ...save.gameState.world });
-        setCharacter({ ...save.character });
+        const { world, character: cleanChar, history } = sanitiseStateOnLoad(
+          save.gameState.world,
+          save.character,
+          save.gameState.history
+        );
+        setGameHistory({ ...history, isThinking: false });
+        setGameWorld({ ...world });
+        setCharacter({ ...cleanChar });
         setUI({ view: 'game' });
         showToast("Reality restored.", "success");
       } else {

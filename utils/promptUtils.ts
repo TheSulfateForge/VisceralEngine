@@ -2,6 +2,7 @@ import { GameHistory, GameWorld, Character, SceneMode, MemoryItem, LoreItem, Kno
 import { retrieveRelevantContext, RAGResult } from './ragEngine';
 import { getSectionReminder } from '../sectionReminders';
 import { partitionConditions } from './contentValidation';
+import { applyExistingMap } from './nameResolver';
 
 const DOWNTIME_KEYWORDS = [
   'sleep', 'rest', 'wait', 'camp', 'hide', 
@@ -310,29 +311,33 @@ export const constructGeminiPrompt = (
       (gameWorld as any).factionExposure as FactionExposure ?? {}
   );
 
+  // v1.7: Final sanitisation pass — ensure no banned names leak into prompt
+  const nameMap = (gameWorld as any).bannedNameMap as Record<string, string> ?? {};
+  const sanitise = (s: string) => applyExistingMap(s, nameMap);
+
   // 8. Assembly
   const promptString = `
 [CONTEXT]
-${memoryContext}
-${loreContext}
-${knownEntitiesContext}
+${sanitise(memoryContext)}
+${sanitise(loreContext)}
+${sanitise(knownEntitiesContext)}
 
 [CURRENT ATMOSPHERE]
 Mode: ${currentMode}
 Tension Level: ${tension}/100
 
-${bioStatus}
+${sanitise(bioStatus)}
 
 [HIDDEN_REGISTRY]
-${dormantHooksContext ? dormantHooksContext + '\n\n' : ''}${gameWorld.hiddenRegistry}
+${sanitise(dormantHooksContext ? dormantHooksContext + '\n\n' : '')}${sanitise(gameWorld.hiddenRegistry)}
 
-${characterBlock}
+${sanitise(characterBlock)}
 
-${pacingInstruction}
+${sanitise(pacingInstruction)}
 
-${worldPressure ? `\n${worldPressure}\n` : ''}
-${encounterScopeLock ? `\n${encounterScopeLock}\n` : ''}
-${conditionLock ? `\n${conditionLock}\n` : ''}
+${sanitise(worldPressure ? `\n${worldPressure}\n` : '')}
+${sanitise(encounterScopeLock ? `\n${encounterScopeLock}\n` : '')}
+${sanitise(conditionLock ? `\n${conditionLock}\n` : '')}
 
 [STRICT INPUT RULES]
 1. If the user input is mundane ("I look around"), do NOT ask for a roll. Just describe.

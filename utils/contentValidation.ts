@@ -1,42 +1,21 @@
 /**
- * contentValidation.ts — v1.5
+ * contentValidation.ts — v1.7 CHANGES
  *
- * v1.3 changes:
- *   - Banned name scanning now covers ALL string fields in the AI response,
- *     not just the narrative text. Conditions, memory facts, lore entries,
- *     NPC interaction fields, and world_tick entries are all scanned and
- *     sanitised before being written to state.
- *   - Added sanitiseAllFields() for full-response sanitisation.
+ * KEY CHANGE: sanitiseBannedNames() and sanitiseAllFields() now use the
+ * nameResolver module for immediate resolution instead of wrapping in
+ * [RENAME:X] markers.
  *
- * v1.4 changes:
- *   - containsRenameMarker(): detects unresolved [RENAME:X] placeholders.
- *   - checkLoreDuplicate(): semantic Jaccard similarity check for lore (threshold 0.60),
- *     preventing near-duplicate entries like "Silver-Stabilized" vs "Silver-Stilled".
- *   - sanitiseAllFields() section 5 (new_lore): nulls out lore entries that still
- *     contain [RENAME:X] markers after sanitisation — they never reach the approval modal.
- *   - sanitiseAllFields() section 11 (known_entity_updates): filters out entity updates
- *     whose name still contains a [RENAME:X] marker, preserving the existing registry entry.
- *
- * v1.5 changes:
- *   - FIX 1: sanitiseBannedNames() now guards against double-wrapping. If the input
- *     string already contains a [RENAME:X] marker, it is returned unchanged. This
- *     prevents the nested [RENAME:[RENAME:X]] bug when the AI re-submits a previously
- *     flagged entity name.
- *   - FIX 3b: findExpiredConditions() now handles named transient condition prefixes
- *     (Adrenaline, Ambrosia Afterglow, Magical Overclock, etc.) that lack an explicit
- *     (Xmins) duration stamp. These auto-expire after TRANSIENT_EXPIRY_MINUTES of
- *     in-game time from when they were first applied.
- *   - FIX 8: checkLoreDuplicate() now applies a stricter shared-prefix threshold (0.40)
- *     when two lore entries begin with the same topic prefix (e.g., both "Tharnic ...").
- *     This catches near-duplicates within the same faction/topic cluster that would
- *     otherwise slip through the standard 0.60 threshold.
+ * This file shows ONLY the functions that change. All other functions
+ * (findExpiredConditions, checkMemoryDuplicate, checkLoreDuplicate, etc.)
+ * remain unchanged.
  */
 
 import { BANNED_NAMES } from '../constants';
 import { ModelResponseSchema, LoreItem, MemoryItem } from '../types';
+import { resolveAllBannedNames, resolveWithTracking } from './nameResolver';
 
 // ---------------------------------------------------------------------------
-// Core: banned name detector
+// Core: banned name detector (UNCHANGED)
 // ---------------------------------------------------------------------------
 
 export const findBannedNames = (text: string): string[] => {
@@ -46,38 +25,40 @@ export const findBannedNames = (text: string): string[] => {
     });
 };
 
+// ---------------------------------------------------------------------------
+// CHANGED: sanitiseBannedNames() — now resolves immediately via nameMap
+// ---------------------------------------------------------------------------
+
 /**
- * Replaces banned names in text with [RENAME:X] markers.
+ * Replaces banned names in text with their mapped replacements.
  *
- * v1.5 FIX 1: If the input already contains a [RENAME:X] marker, return it unchanged.
- * Re-scanning a previously-flagged string wraps the placeholder's own content,
- * producing nested tokens like [RENAME:[RENAME:Kaelith]]. The guard breaks that loop.
+ * v1.7 CHANGE: No longer wraps in [RENAME:X] markers. Instead, uses the
+ * nameResolver module to immediately substitute compliant replacement names.
+ * The nameMap is passed in and may be mutated to add new mappings.
+ *
+ * SIGNATURE CHANGE: Now requires a nameMap parameter.
+ * All call sites must be updated to pass the map.
  */
-export const sanitiseBannedNames = (text: string): { result: string; violations: string[] } => {
-    // FIX 1: Early-return guard — do not re-process strings that already have a marker.
-    // This prevents [RENAME:X] from being scanned again and producing [RENAME:[RENAME:X]].
-    if (/\[RENAME:[^\]]+\]/i.test(text)) {
-        return { result: text, violations: [] };
-    }
+export const sanitiseBannedNames = (
+    text: string,
+    nameMap: Record<string, string>
+): { result: string; violations: string[] } => {
+    if (!text) return { result: text, violations: [] };
 
-    const violations: string[] = [];
-    let result = text;
-
-    for (const name of BANNED_NAMES) {
-        const pattern = new RegExp(`\\b${name}\\b`, 'g');
-        if (pattern.test(result)) {
-            violations.push(name);
-            result = result.replace(new RegExp(`\\b${name}\\b`, 'g'), `[RENAME:${name}]`);
-        }
-    }
-
+    const { result, violations } = resolveWithTracking(text, nameMap);
     return { result, violations };
 };
 
 // ---------------------------------------------------------------------------
-// v1.3: Full-response field sanitisation
-// Scans every string field in the parsed AI response, not just narrative.
-// Returns the sanitised response and all violations found across all fields.
+// containsRenameMarker — UNCHANGED but now mostly vestigial
+// (kept for backwards compatibility during transition)
+// ---------------------------------------------------------------------------
+
+export const containsRenameMarker = (text: string): boolean =>
+    /\[RENAME:[^\]]+\]/i.test(text);
+
+// ---------------------------------------------------------------------------
+// CHANGED: sanitiseAllFields() — passes nameMap through all sanitisation
 // ---------------------------------------------------------------------------
 
 export interface FullSanitisationResult {
@@ -87,141 +68,113 @@ export interface FullSanitisationResult {
 
 /**
  * Sanitises ALL string fields in the AI response before anything touches state.
- * This prevents banned names from being written into conditions, memory facts,
- * lore entries, NPC names, or world_tick entries.
+ *
+ * v1.7 CHANGE: Accepts a nameMap parameter. All field sanitisation now
+ * resolves immediately rather than wrapping in [RENAME:X].
+ * The entity filter (section 11) no longer needs to drop RENAME-marker
+ * entities because markers are resolved before they reach state.
+ *
+ * SIGNATURE CHANGE: Now requires a nameMap parameter.
  */
-export const sanitiseAllFields = (response: ModelResponseSchema): FullSanitisationResult => {
+export const sanitiseAllFields = (
+    response: ModelResponseSchema,
+    nameMap: Record<string, string>
+): FullSanitisationResult => {
     const allViolations: string[] = [];
     const track = (violations: string[]) => {
         violations.forEach(v => { if (!allViolations.includes(v)) allViolations.push(v); });
     };
 
-    // Deep clone to avoid mutating the original
     const r: ModelResponseSchema = JSON.parse(JSON.stringify(response));
 
-    // 1. Narrative (existing behaviour)
-    const { result: cleanNarrative, violations: narViolations } = sanitiseBannedNames(r.narrative ?? '');
-    r.narrative = cleanNarrative;
-    track(narViolations);
+    // Helper: resolve a single string field
+    const clean = (text: string): string => {
+        const { result, violations } = sanitiseBannedNames(text, nameMap);
+        track(violations);
+        return result;
+    };
+
+    // 1. Narrative
+    r.narrative = clean(r.narrative ?? '');
 
     // 2. thought_process
     if (r.thought_process) {
-        const { result, violations } = sanitiseBannedNames(r.thought_process);
-        r.thought_process = result;
-        track(violations);
+        r.thought_process = clean(r.thought_process);
     }
 
     // 3. character_updates — added_conditions
     if (r.character_updates?.added_conditions) {
-        r.character_updates.added_conditions = r.character_updates.added_conditions.map(c => {
-            const { result, violations } = sanitiseBannedNames(c);
-            track(violations);
-            return result;
-        });
+        r.character_updates.added_conditions = r.character_updates.added_conditions.map(clean);
     }
 
     // 4. new_memory.fact
     if (r.new_memory?.fact) {
-        const { result, violations } = sanitiseBannedNames(r.new_memory.fact);
-        r.new_memory.fact = result;
-        track(violations);
+        r.new_memory.fact = clean(r.new_memory.fact);
     }
 
     // 5. new_lore — keyword and content
-    // v1.4: If [RENAME:X] survives sanitisation in either field, null out the lore entirely.
-    // The AI used a banned name it couldn't auto-resolve — better to skip the entry than
-    // write "[RENAME:Thorne]'s Equipment" into canonical lore where it will persist.
+    // v1.7: Since we now resolve immediately, [RENAME:X] markers should never
+    // survive. But we keep the containsRenameMarker guard as a safety net.
     if (r.new_lore) {
-        const { result: kw, violations: kviol } = sanitiseBannedNames(r.new_lore.keyword);
-        r.new_lore.keyword = kw;
-        track(kviol);
+        r.new_lore.keyword = clean(r.new_lore.keyword);
+        r.new_lore.content = clean(r.new_lore.content);
 
-        const { result: ct, violations: cviol } = sanitiseBannedNames(r.new_lore.content);
-        r.new_lore.content = ct;
-        track(cviol);
-
+        // Safety net: if somehow a marker survived resolution, null it out
         if (containsRenameMarker(r.new_lore.keyword) || containsRenameMarker(r.new_lore.content)) {
             r.new_lore = null;
         }
     }
 
-    // 6. npc_interaction — speaker, dialogue, subtext, biological_tells
+    // 6. npc_interaction
     if (r.npc_interaction) {
         const fields: Array<keyof typeof r.npc_interaction> = ['speaker', 'dialogue', 'subtext', 'biological_tells'];
         const interaction = r.npc_interaction as unknown as Record<string, unknown>;
         for (const field of fields) {
             if (typeof r.npc_interaction[field] === 'string') {
-                const { result, violations } = sanitiseBannedNames(r.npc_interaction[field] as string);
-                interaction[field] = result;
-                track(violations);
+                interaction[field] = clean(r.npc_interaction[field] as string);
             }
         }
     }
 
-    // 7. world_tick — npc_actions (npc_name and action)
+    // 7. world_tick — npc_actions
     if (r.world_tick?.npc_actions) {
-        r.world_tick.npc_actions = r.world_tick.npc_actions.map(action => {
-            const { result: name, violations: nv } = sanitiseBannedNames(action.npc_name);
-            track(nv);
-            const { result: act, violations: av } = sanitiseBannedNames(action.action);
-            track(av);
-            return { ...action, npc_name: name, action: act };
-        });
+        r.world_tick.npc_actions = r.world_tick.npc_actions.map(action => ({
+            ...action,
+            npc_name: clean(action.npc_name),
+            action: clean(action.action),
+        }));
     }
 
     // 8. world_tick — environment_changes
     if (r.world_tick?.environment_changes) {
-        r.world_tick.environment_changes = r.world_tick.environment_changes.map(change => {
-            const { result, violations } = sanitiseBannedNames(change);
-            track(violations);
-            return result;
-        });
+        r.world_tick.environment_changes = r.world_tick.environment_changes.map(clean);
     }
 
-    // 9. world_tick — emerging_threats descriptions
+    // 9. world_tick — emerging_threats
     if (r.world_tick?.emerging_threats) {
-        r.world_tick.emerging_threats = r.world_tick.emerging_threats.map(threat => {
-            const { result, violations } = sanitiseBannedNames(threat.description);
-            track(violations);
-            return { ...threat, description: result };
-        });
+        r.world_tick.emerging_threats = r.world_tick.emerging_threats.map(threat => ({
+            ...threat,
+            description: clean(threat.description),
+        }));
     }
 
     // 10. hidden_update
     if (r.hidden_update) {
-        const { result, violations } = sanitiseBannedNames(r.hidden_update);
-        r.hidden_update = result;
-        track(violations);
+        r.hidden_update = clean(r.hidden_update);
     }
 
-    // 11. known_entity_updates — name, role, impression, leverage, ledger entries
-    // v1.4: Filter out any entity update whose name still contains a [RENAME:X] marker.
-    // The AI failed to resolve the banned name — writing "Thor-6" into the registry
-    // is worse than preserving the old entry until a clean name arrives next turn.
+    // 11. known_entity_updates
+    // v1.7: No longer need to filter out RENAME-marker entities since
+    // resolution is immediate. We still sanitise all fields.
     if (r.known_entity_updates) {
-        r.known_entity_updates = r.known_entity_updates.filter(entity => {
-            if (containsRenameMarker(entity.name)) {
-                track([`RENAME_MARKER_IN_ENTITY:${entity.name}`]);
-                return false;
-            }
-            return true;
-        });
-
-        r.known_entity_updates = r.known_entity_updates.map(entity => {
-            const scanField = (val: string): string => {
-                const { result, violations } = sanitiseBannedNames(val);
-                track(violations);
-                return result;
-            };
-            return {
-                ...entity,
-                name: scanField(entity.name),
-                role: scanField(entity.role),
-                impression: scanField(entity.impression),
-                leverage: scanField(entity.leverage),
-                ledger: (entity.ledger ?? []).map(scanField),
-            };
-        });
+        r.known_entity_updates = r.known_entity_updates.map(entity => ({
+            ...entity,
+            name: clean(entity.name),
+            role: clean(entity.role),
+            impression: clean(entity.impression),
+            leverage: clean(entity.leverage),
+            ledger: (entity.ledger ?? []).map(clean),
+        }));
     }
 
     return { sanitisedResponse: r, allViolations };
@@ -282,14 +235,6 @@ export const checkMemoryDuplicate = (
 export const findExistingLore = (keyword: string, lore: LoreItem[]): LoreItem | undefined => {
     return lore.find(l => l.keyword.toLowerCase() === keyword.toLowerCase());
 };
-
-/**
- * v1.4: Detects unresolved [RENAME:X] placeholders in any string.
- * Used to guard lore entries and entity names from being written to state
- * with broken placeholder names.
- */
-export const containsRenameMarker = (text: string): boolean =>
-    /\[RENAME:[^\]]+\]/i.test(text);
 
 /**
  * v1.4 / v1.5: Semantic duplicate detector for lore entries.
@@ -505,19 +450,6 @@ export const decayBioModifiers = (
 };
 
 // ---------------------------------------------------------------------------
-// Legacy top-level validateResponse (preserved for backward compatibility)
-// Now delegates to sanitiseAllFields for narrative only to match old callers.
-// New callers should use sanitiseAllFields directly.
+// Legacy top-level validateResponse has been removed.
+// Use sanitiseAllFields directly.
 // ---------------------------------------------------------------------------
-
-export interface ValidationResult {
-    bannedNameViolations: string[];
-    sanitisedNarrative: string;
-}
-
-export const validateResponse = (response: ModelResponseSchema): ValidationResult => {
-    const { result: sanitisedNarrative, violations: bannedNameViolations } =
-        sanitiseBannedNames(response.narrative);
-
-    return { bannedNameViolations, sanitisedNarrative };
-};

@@ -3,6 +3,7 @@ import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { SAFETY_SETTINGS, MAX_CONTEXT_HISTORY } from "../constants";
 import { ChatMessage, Role, ModelResponseSchema, SCENE_MODES, SceneMode, Lighting, LIGHTING_LEVELS } from "../types";
 import { RESPONSE_SCHEMA } from "../schemas/responseSchema";
+import { sanitiseHistory } from '../utils/nameResolver';
 
 const REQUEST_TIMEOUT_MS = 60000;
 
@@ -223,13 +224,22 @@ export class GeminiClient {
   async sendMessage(
       systemPrompt: string, 
       history: ChatMessage[], 
-      historicalSummary?: string
+      historicalSummary?: string,
+      nameMap?: Record<string, string>  // v1.7
   ): Promise<ModelResponseSchema> {
     
     const contextHistory = history.length > 0 ? history.slice(0, -1) : [];
     const recentHistory = contextHistory.slice(-MAX_CONTEXT_HISTORY);
 
-    const apiHistory = recentHistory
+    // v1.7: Sanitise history to remove any banned names before sending to AI.
+    // The nameMap must be passed in or accessed from the prompt context.
+    // Since sendMessage doesn't have direct world access, we add nameMap as
+    // an optional parameter (see signature change below).
+    const cleanHistory = nameMap
+      ? sanitiseHistory(recentHistory, nameMap)
+      : recentHistory;
+
+    const apiHistory = cleanHistory
       .filter(msg => msg.role === Role.USER || msg.role === Role.MODEL)
       .map(msg => ({
         role: msg.role,
