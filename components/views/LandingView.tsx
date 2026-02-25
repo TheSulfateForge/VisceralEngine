@@ -36,7 +36,7 @@ export const LandingView: React.FC = () => {
 
             <h1 className="text-7xl font-bold tracking-tighter uppercase italic text-red-900 animate-pulse mb-4 text-center">Visceral</h1>
             <p className="text-[10px] font-mono tracking-[0.8em] text-gray-500 uppercase mb-2 text-center">Realism Engine</p>
-            <p className="text-[10px] font-mono tracking-widest text-white opacity-90 mb-12 text-center">ver. 0.9.7.564</p>
+            <p className="text-[10px] font-mono tracking-widest text-white opacity-90 mb-12 text-center">ver. 0.9.7.682</p>
             
             <div className="flex flex-col space-y-3 w-64 z-10">
                 {hasAutosave && (
