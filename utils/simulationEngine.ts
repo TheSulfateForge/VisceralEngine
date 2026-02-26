@@ -276,6 +276,89 @@ const validateThreatCausality = (
 // v1.3 / v1.4: Threat Seed State Machine
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// v1.7: NPC Action Coherence — prevents world_tick from bypassing threat ETAs
+// ---------------------------------------------------------------------------
+
+/**
+ * Validates that world_tick NPC actions don't contradict emerging threat ETAs.
+ *
+ * The AI's primary bypass vector is: set an emerging_threat with ETA 15, then
+ * use npc_actions to show the threat already arriving/acting locally. This
+ * validator detects when a hidden NPC action references terms/entities from
+ * an emerging threat whose ETA is still > 3, and blocks those actions.
+ */
+const validateNpcActionCoherence = (
+    npcActions: WorldTickAction[],
+    emergingThreats: WorldTickEvent[],
+    currentTurn: number,
+    debugLogs: DebugLogEntry[]
+): WorldTickAction[] => {
+    const log = (msg: string, type: DebugLogEntry['type'] = 'warning') => {
+        debugLogs.push({ timestamp: new Date().toISOString(), message: msg, type });
+    };
+
+    // Build significant keywords from threats with ETA > 3
+    const distantThreatTerms: Map<string, number> = new Map();
+    for (const threat of emergingThreats) {
+        const eta = threat.turns_until_impact ?? 0;
+        if (eta <= 3) continue; // Imminent threats can appear in NPC actions
+
+        const words = threat.description.toLowerCase()
+            .split(/[\s,.:;!?()"']+/)
+            .filter(w => w.length > 4);
+        for (const word of words) {
+            const existing = distantThreatTerms.get(word) ?? 0;
+            if (eta > existing) distantThreatTerms.set(word, eta);
+        }
+    }
+
+    if (distantThreatTerms.size === 0) return npcActions; // No distant threats — skip validation
+
+    // Verbs indicating physical presence / arrival at a location
+    const ARRIVAL_INDICATORS = [
+        'arrived', 'arriving', 'reached', 'reaching',
+        'approaching', 'entered', 'entering',
+        'dismounting', 'dismounted',
+        'surrounding', 'surrounded',
+        'position', 'positioned', 'in position',
+        'slaughter', 'slaughtering',
+        'moving through', 'fan out', 'fanned out', 'fanout',
+        'pincer', 'encircle', 'encircling',
+        'back alleys', 'perimeter',
+        'outskirts', 'edge of town', 'edge of the town',
+        'north gate', 'south gate', 'east gate', 'west gate',
+        'town square', 'town center',
+        'three-mile', 'one-mile', 'half-mile',
+    ];
+
+    return npcActions.filter(action => {
+        // Only validate hidden (off-screen) actions — visible ones are already narrated
+        if (action.player_visible) return true;
+
+        const actionLower = action.action.toLowerCase();
+
+        // Check for threat keyword + arrival indicator overlap
+        for (const [keyword, eta] of distantThreatTerms.entries()) {
+            if (!actionLower.includes(keyword)) continue;
+
+            const hasArrivalIndicator = ARRIVAL_INDICATORS.some(v => actionLower.includes(v));
+            if (hasArrivalIndicator) {
+                log(
+                    `[NPC ACTION BLOCKED — v1.7 COHERENCE] "${action.npc_name}: ` +
+                    `${action.action.substring(0, 100)}" — implies local presence of ` +
+                    `entity from threat with ETA ${eta}. Actions cannot advance threats ` +
+                    `faster than their ETA countdown.`,
+                    'error'
+                );
+                return false;
+            }
+        }
+
+        return true;
+    });
+};
+
 /**
  * Processes the emerging_threats array from the AI response:
  *   1. Assigns IDs and creation turns to new seeds.
@@ -348,6 +431,24 @@ const processThreatSeeds = (
                     'warning'
                 );
                 currentEta = floor;
+            }
+        }
+
+        // v1.7: Enforce ETA countdown for existing threats.
+        // If a threat existed last turn, its ETA must decrease by at least 1.
+        // This prevents the AI from holding threats at ETA 15 forever while
+        // advancing them through NPC actions.
+        if (existing && existing.turns_until_impact !== undefined && turnCreated !== currentTurn) {
+            const previousEta = existing.turns_until_impact;
+            const expectedMaxEta = Math.max(0, previousEta - 1);
+            if (currentEta > expectedMaxEta) {
+                log(
+                    `[THREAT ETA COUNTDOWN ENFORCED] "${threat.description.substring(0, 60)}" — ` +
+                    `AI submitted ETA ${currentEta}, previous was ${previousEta}. ` +
+                    `Forced to ${expectedMaxEta}.`,
+                    'warning'
+                );
+                currentEta = expectedMaxEta;
             }
         }
 
@@ -705,12 +806,25 @@ const pendingLore: LoreItem[] = [];
 
             if (hasActivity) lastWorldTickTurn = currentTurn;
 
-            const hiddenActions = r.world_tick.npc_actions.filter(a => !a.player_visible);
+            // v1.7: Validate NPC actions against emerging threat ETAs before logging.
+            // This prevents the AI from using npc_actions to teleport distant threats.
+            const existingEmergingForCoherence =
+                ((currentWorld as any).emergingThreats as WorldTickEvent[]) ?? [];
+            const validatedNpcActions = validateNpcActionCoherence(
+                r.world_tick.npc_actions,
+                existingEmergingForCoherence,
+                currentTurn,
+                debugLogs
+            );
+            // Overwrite so downstream processing (exposure scoring, etc.) uses validated set
+            r.world_tick.npc_actions = validatedNpcActions;
+
+            const hiddenActions = validatedNpcActions.filter(a => !a.player_visible);
             for (const action of hiddenActions) {
                 newHiddenRegistry += `\n[${newTime.display}] [WORLD-TICK] ${action.npc_name}: ${action.action}`;
             }
 
-            const visibleActions = r.world_tick.npc_actions.filter(a => a.player_visible);
+            const visibleActions = validatedNpcActions.filter(a => a.player_visible);
             for (const action of visibleActions) {
                 debugLogs.push({
                     timestamp: new Date().toISOString(),
@@ -771,15 +885,44 @@ const pendingLore: LoreItem[] = [];
             }
             (currentWorld as any).dormantHooks = currentHooks;
 
-            // Write active threats to hidden registry for AI context
-            for (const threat of processedThreats) {
+            // v1.7: Only write NEW threats to hidden registry. Existing threats
+            // get a single consolidated status line. This prevents the feedback
+            // loop where 30+ [EMERGING] entries cause the AI to escalate faster.
+            const brandNewThreats = processedThreats.filter(
+                t => t.turnCreated === currentTurn
+            );
+            const continuingThreats = processedThreats.filter(
+                t => t.turnCreated !== currentTurn
+            );
+
+            for (const threat of brandNewThreats) {
                 const eta = threat.turns_until_impact !== undefined
                     ? ` (ETA: ~${threat.turns_until_impact} turns)`
                     : '';
-                newHiddenRegistry += `\n[${newTime.display}] [EMERGING] ${threat.description}${eta}`;
+                newHiddenRegistry += `\n[${newTime.display}] [NEW THREAT] ${threat.description}${eta}`;
                 debugLogs.push({
                     timestamp: new Date().toISOString(),
-                    message: `[THREAT SEED] ${threat.description}${eta}`,
+                    message: `[NEW THREAT SEED] ${threat.description}${eta}`,
+                    type: 'warning'
+                });
+            }
+
+            // Single consolidated line for continuing threats — no per-threat spam
+            if (continuingThreats.length > 0) {
+                const statusSummaries = continuingThreats.map(t => {
+                    const desc = t.description.substring(0, 60);
+                    return `"${desc}…" ETA:${t.turns_until_impact ?? '?'} [${t.status}]`;
+                });
+                newHiddenRegistry += `\n[${newTime.display}] [THREAT STATUS] ${statusSummaries.join(' | ')}`;
+            }
+
+            // Always log all threats to debug panel for developer visibility
+            for (const threat of processedThreats) {
+                debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    message: `[THREAT SEED] ${threat.description.substring(0, 80)} ` +
+                        `(ETA: ~${threat.turns_until_impact}, status: ${threat.status}, ` +
+                        `created: T${threat.turnCreated})`,
                     type: 'warning'
                 });
             }

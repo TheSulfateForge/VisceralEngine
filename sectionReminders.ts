@@ -30,6 +30,31 @@ import { SceneMode } from './types';
 
 // Condensed reinforcements derived from SYSTEM_INSTRUCTIONS
 const REMINDERS = {
+    LOGISTICS_CHECK: `[SYSTEM REMINDER: LOGISTICS & DISTANCE VALIDATION v1.7]
+Before writing NPC actions or advancing threats this turn, verify:
+
+1. WHERE IS EACH THREAT ENTITY RIGHT NOW?
+   Not where you want them. If they were 200 miles away last turn and 15 minutes
+   passed, they are STILL ~200 miles away (cavalry moves ~1 mile per 1.5 hours).
+
+2. HOW DID THE DISTANT FACTION LEARN ABOUT RECENT EVENTS?
+   Name the specific messenger and communication method. "They learned" is invalid.
+   If no communication chain exists, they DON'T KNOW YET.
+
+3. RESPONSE TIME: Even after learning, organizing takes time.
+   A local cell can react in hours. Cavalry takes days to muster. An army takes weeks.
+
+4. NPC ACTION COHERENCE: Your world_tick NPC actions CANNOT show a threat entity
+   arriving if that threat's ETA is > 3. The engine WILL BLOCK such actions.
+   Show threats TRAVELING, not ARRIVING.
+
+5. LOCAL ASSETS ONLY for fast responses. If local agents exist in lore, THEY can
+   act quickly — but limited to their pre-established capability. You cannot
+   invent new local assets mid-crisis.
+
+REMEMBER: A realistic delayed response creates BETTER drama than an omniscient instant one.
+The player correctly identified the last logistics violation. Do not repeat it.`,
+
     VOCABULARY: `[SYSTEM REMINDER: FORBIDDEN VOCABULARY]
 CRITICAL CHECK. Scan your intended output:
 1. Are you using BANNED NAMES? (Elara, Kaela, Lyra, Kael, Vex, Thorne...) -> REPLACE with a completely original name. No near-homophones. No numbered suffixes.
@@ -240,7 +265,8 @@ export const getSectionReminder = (
     currentTurnCount: number = 0,
     conditionsCount: number = 0,
     entityCount: number = 0,
-    goalCount: number = 999
+    goalCount: number = 999,
+    emergingThreatsCount: number = 0
 ): string | null => {
     // Priority -1 (Absolute): Mandatory Condition Audit when conditions > 30
     if (conditionsCount > 30) {
@@ -258,6 +284,12 @@ export const getSectionReminder = (
     // Priority 0.5: Entity Density — fires every turn while obligation is unmet
     if (entityDensityViolated(currentTurnCount, entityCount)) {
         return REMINDERS.ENTITY_DENSITY;
+    }
+
+    // Priority 1.5: Logistics Check — fires every turn while threats exist
+    if (emergingThreatsCount > 0) {
+        // Only fire every other turn to avoid drowning out other reminders
+        if (turnCount % 2 === 0) return REMINDERS.LOGISTICS_CHECK;
     }
 
     // Priority 1: Vocabulary (Every 4 turns)

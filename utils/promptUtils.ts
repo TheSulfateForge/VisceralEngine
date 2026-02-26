@@ -291,7 +291,8 @@ export const constructGeminiPrompt = (
     gameHistory.turnCount,
     character.conditions.length,
     (gameWorld.knownEntities ?? []).length,           // FIX 6: entity density
-    (character.goals ?? []).length                     // FIX 11: goal staleness
+    (character.goals ?? []).length,                    // FIX 11: goal staleness
+    ((gameWorld as any).emergingThreats as any[] ?? []).length // v1.7: logistics check
   );
   
   // 6. World Pressure (v1.1)

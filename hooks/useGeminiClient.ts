@@ -109,7 +109,8 @@ export const useGeminiClient = () => {
             preCallState.gameWorld.turnCount ?? 0,
             preCallState.character.conditions.length,
             (preCallState.gameWorld.knownEntities ?? []).length,   // FIX 6
-            (preCallState.character.goals ?? []).length             // FIX 11
+            (preCallState.character.goals ?? []).length,           // FIX 11
+            ((preCallState.gameWorld as any).emergingThreats ?? []).length  // v1.7
         );
         let requestLogs = [...preCallState.gameHistory.debugLog];
         
