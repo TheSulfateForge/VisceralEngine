@@ -90,33 +90,91 @@ const PIVOT_JACCARD_THRESHOLD = 0.35;    // Below this = plan pivot detected (de
 // rewriting descriptions until Jaccard similarity drops below 0.60
 // ---------------------------------------------------------------------------
 
+// Common capitalized words that are NOT entity names.
+// These appear at sentence starts or in titles and must not trigger matching.
+const ENTITY_EXTRACTION_BLACKLIST = new Set([
+    'the', 'this', 'that', 'these', 'those', 'there',
+    'inspector', 'captain', 'magistrate', 'registrar', 'guild', 'city',
+    'safety', 'guard', 'guards', 'crew', 'gang', 'squad', 'patrol',
+    'council', 'court', 'office', 'hall', 'tavern', 'district',
+    'north', 'south', 'east', 'west', 'upper', 'lower',
+    'sector', 'level', 'floor', 'chamber', 'gate', 'wall',
+    'day', 'night', 'morning', 'evening', 'turn',
+    'warrant', 'arrest', 'inquiry', 'complaint', 'charges',
+    'missing', 'person', 'fugitive', 'antagonist',
+    'preparing', 'mobilizing', 'approaching', 'searching', 'tracking',
+    'dungeon', 'sewer', 'undercity', 'docks', 'market',
+]);
+
 /**
  * Extracts probable entity/NPC names from a threat description.
- * Uses capitalized multi-word sequences and known entity names.
+ *
+ * v1.8 REWRITE: Only matches against the REGISTERED entity names from
+ * knownEntities. No longer extracts arbitrary capitalized words — that
+ * approach caused catastrophic false positives (e.g., "Moira", "The",
+ * "Guild" were treated as entity names, collapsing all threats into one).
+ *
+ * The player character's name is explicitly excluded since it appears
+ * in virtually every threat and provides zero signal.
+ *
  * Returns lowercase names for matching.
  */
 const extractEntityNamesFromDescription = (
     description: string,
-    knownEntityNames: string[] = []
+    knownEntityNames: string[] = [],
+    playerCharacterName: string = ''
 ): string[] => {
     const names: Set<string> = new Set();
-
-    // Match capitalized proper nouns (2+ chars, not sentence starters after periods)
-    // This catches "Kavar", "Zhentarim", "Black Network", etc.
-    const properNouns = description.match(/\b[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})*/g);
-    if (properNouns) {
-        for (const noun of properNouns) {
-            names.add(noun.toLowerCase());
-        }
-    }
-
-    // Also check against known entity names (case-insensitive substring match)
     const descLower = description.toLowerCase();
+
+    // Extract player name parts for exclusion
+    const playerNameParts = new Set(
+        playerCharacterName.toLowerCase().split(/\s+/).filter(p => p.length >= 3)
+    );
+
+    // ONLY match against registered entity names from knownEntities.
+    // This ensures we only track THREAT ACTORS, not common nouns.
     for (const entityName of knownEntityNames) {
         // Extract the primary name (before parenthetical like "Kavar (Zhentarim)")
         const primary = entityName.split('(')[0].trim().toLowerCase();
-        if (primary.length >= 3 && descLower.includes(primary)) {
+        if (primary.length < 3) continue;
+
+        const primaryParts = primary.split(/\s+/);
+
+        // Skip if this is the player character themselves.
+        // Only check the FIRST significant name part (given name) — family names
+        // like "Mercer" are shared with relatives (e.g., "Nesta Mercer" is the
+        // player's mother and should NOT be excluded).
+        const firstSignificantPart = primaryParts.find(p => p.length >= 3 && !ENTITY_EXTRACTION_BLACKLIST.has(p));
+        const isPlayerName = firstSignificantPart !== undefined && playerNameParts.has(firstSignificantPart);
+        if (isPlayerName) continue;
+
+        // Skip blacklisted common words
+        if (primaryParts.every(part => ENTITY_EXTRACTION_BLACKLIST.has(part))) continue;
+
+        // Check if the entity's significant name parts appear in the description.
+        // For multi-word names like "Scar-Face Silas", match any significant part.
+        const significantParts = primaryParts.filter(part =>
+            part.length >= 3 && !ENTITY_EXTRACTION_BLACKLIST.has(part)
+        );
+
+        if (significantParts.length > 0 && significantParts.some(part => descLower.includes(part))) {
+            // Use the full primary name as the match key for consistency
             names.add(primary);
+        }
+    }
+
+    // Also extract quoted or apostrophe-bounded faction names like 'The Rusty Hook'
+    // or 'Broken Hand' — these are named entities even if not in the registry yet.
+    const quotedNames = description.match(/['']([A-Z][^'']{2,30})['']|"([A-Z][^"]{2,30})"/g);
+    if (quotedNames) {
+        for (const match of quotedNames) {
+            const cleaned = match.replace(/[''""]/g, '').trim().toLowerCase();
+            // Skip if all words are blacklisted
+            const parts = cleaned.split(/\s+/);
+            if (!parts.every(p => ENTITY_EXTRACTION_BLACKLIST.has(p))) {
+                names.add(cleaned);
+            }
         }
     }
 
@@ -267,7 +325,8 @@ const validateThreatCausality = (
     factionExposure: FactionExposure,
     currentTurn: number,
     debugLogs: DebugLogEntry[],
-    knownEntityNames: string[] = []    // v1.8: for validating observer entities
+    knownEntityNames: string[] = [],    // v1.8: for validating observer entities
+    playerCharacterName: string = ''    // v1.8: for self-evident action matching
 ): boolean => {
     const log = (msg: string) => debugLogs.push({
         timestamp: new Date().toISOString(),
@@ -330,10 +389,14 @@ const validateThreatCausality = (
         }
 
         // Allow causes that describe self-evident player actions without a specific observer
-        // (e.g., "Camilla cast a loud spell on an open road" — the action itself is the cause)
+        // (e.g., "Moira cast a loud spell on an open road" — the action itself is the cause)
         // These must use language indicating the action was publicly observable.
+        const playerNameParts = playerCharacterName.toLowerCase().split(/\s+/).filter(p => p.length >= 3);
+        const playerNamePattern = playerNameParts.length > 0
+            ? new RegExp(`player|character|${playerNameParts.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')}`, 'i')
+            : /player|character/i;
         const selfEvidentPatterns = [
-            /player|camilla|character/i,     // Names the player
+            playerNamePattern,     // Names the player (dynamic)
         ];
         const publicityPatterns = [
             /open road|public|trade way|street|market|gate|crowd/i,  // Public location
@@ -466,7 +529,7 @@ const validateNpcActionCoherence = (
 /**
  * Validates that hidden_update text doesn't describe threat entities as locally
  * present when their threat ETA is still > 3. The AI uses hidden_update to
- * narrate threat progress (e.g., "Kavar has tracked Camilla to the shop") even
+ * narrate threat progress (e.g., "Kavar has tracked the player to the shop") even
  * when NPC actions would be blocked by the coherence check.
  *
  * Returns the sanitised hidden_update string with violating lines stripped.
@@ -474,7 +537,8 @@ const validateNpcActionCoherence = (
 const validateHiddenUpdateCoherence = (
     hiddenUpdate: string,
     emergingThreats: WorldTickEvent[],
-    debugLogs: DebugLogEntry[]
+    debugLogs: DebugLogEntry[],
+    playerCharacterName: string = ''
 ): string => {
     if (!hiddenUpdate || hiddenUpdate.trim().length === 0) return hiddenUpdate;
 
@@ -486,7 +550,7 @@ const validateHiddenUpdateCoherence = (
 
         // Use stored entity names if available, otherwise extract
         const names = threat.entitySourceNames ??
-            extractEntityNamesFromDescription(threat.description);
+            extractEntityNamesFromDescription(threat.description, [], playerCharacterName);
         for (const name of names) {
             const existing = distantThreatEntityNames.get(name) ?? 0;
             if (eta > existing) distantThreatEntityNames.set(name, eta);
@@ -553,7 +617,8 @@ const processThreatSeeds = (
     debugLogs: DebugLogEntry[],
     dormantHooks: DormantHook[] = [],       // v1.6: origin gate
     factionExposure: FactionExposure = {},  // v1.6: origin gate
-    knownEntityNames: string[] = []         // v1.8: entity-name continuity
+    knownEntityNames: string[] = [],        // v1.8: entity-name continuity
+    playerCharacterName: string = ''        // v1.8: exclude player name from entity matching
 ): WorldTickEvent[] => {
     const log = (message: string, type: DebugLogEntry['type'] = 'warning') => {
         debugLogs.push({ timestamp: new Date().toISOString(), message, type });
@@ -581,14 +646,14 @@ const processThreatSeeds = (
         let entityMatchUsed = false;
         if (!existing) {
             const incomingNames = extractEntityNamesFromDescription(
-                threat.description, knownEntityNames
+                threat.description, knownEntityNames, playerCharacterName
             );
 
             if (incomingNames.length > 0) {
                 for (const existingThreat of existingThreats) {
                     const existingNames = existingThreat.entitySourceNames ??
                         extractEntityNamesFromDescription(
-                            existingThreat.description, knownEntityNames
+                            existingThreat.description, knownEntityNames, playerCharacterName
                         );
 
                     const sharedNames = incomingNames.filter(n => existingNames.includes(n));
@@ -615,7 +680,7 @@ const processThreatSeeds = (
 
         // v1.8: Extract and store entity names for future continuity matching
         const entitySourceNames = existing?.entitySourceNames ??
-            extractEntityNamesFromDescription(threat.description, knownEntityNames);
+            extractEntityNamesFromDescription(threat.description, knownEntityNames, playerCharacterName);
 
         // Raw ETA from AI
         let currentEta = threat.turns_until_impact ?? 0;
@@ -762,7 +827,7 @@ const processThreatSeeds = (
     // validateThreatCausality() auto-passes any threat with turnCreated < currentTurn,
     // so this only ever blocks seeds being proposed for the first time this turn.
     const causallyValid = processed.filter(threat =>
-        validateThreatCausality(threat, dormantHooks, factionExposure, currentTurn, debugLogs, knownEntityNames)
+        validateThreatCausality(threat, dormantHooks, factionExposure, currentTurn, debugLogs, knownEntityNames, playerCharacterName)
     );
 
     // Step 2: Filter out expired seeds (operates on gate-passed threats only)
@@ -893,17 +958,161 @@ export const SimulationEngine = {
         }
 
         // ===================================================================
-        // 6. Entity Pipeline
+        // 6. Entity Pipeline — v1.8: Enhanced dedup with fuzzy name matching
         // ===================================================================
+        // Collect banned-name replacement values so we know which names might be
+        // artificial collisions (two different NPCs renamed to the same name).
+        const bannedReplacementNames = new Set(
+            Object.values(nameMap).map(v => v.toLowerCase())
+        );
         let updatedKnownEntities = [...(currentWorld.knownEntities || [])];
         if (r.known_entity_updates) {
             for (const update of r.known_entity_updates) {
-                const existingIdx = updatedKnownEntities.findIndex(e => e.id === update.id || e.name === update.name);
+                // v1.8: Multi-strategy dedup:
+                // 1. Exact ID match
+                // 2. Exact name match
+                // 3. First-name fuzzy match (catches "Halloway" vs "Magistrate Clerk Halloway")
+                let existingIdx = updatedKnownEntities.findIndex(e => e.id === update.id);
+
+                if (existingIdx < 0) {
+                    existingIdx = updatedKnownEntities.findIndex(e => e.name === update.name);
+                }
+
+                if (existingIdx < 0) {
+                    // Fuzzy first-name match: extract significant name words and check overlap
+                    const updateNameParts = update.name
+                        .replace(/\([^)]*\)/g, '')  // Remove parentheticals
+                        .split(/\s+/)
+                        .map(p => p.toLowerCase().trim())
+                        .filter(p => p.length >= 3 && !ENTITY_EXTRACTION_BLACKLIST.has(p));
+
+                    if (updateNameParts.length > 0) {
+                        existingIdx = updatedKnownEntities.findIndex(e => {
+                            const existingParts = e.name
+                                .replace(/\([^)]*\)/g, '')
+                                .split(/\s+/)
+                                .map(p => p.toLowerCase().trim())
+                                .filter(p => p.length >= 3 && !ENTITY_EXTRACTION_BLACKLIST.has(p));
+
+                            const nameMatch = existingParts.some(ep => updateNameParts.includes(ep));
+                            if (!nameMatch) return false;
+
+                            // Find the shared name part(s)
+                            const matchedParts = existingParts.filter(ep => updateNameParts.includes(ep));
+
+                            // v1.8: Role similarity guard — ONLY applies when the shared name
+                            // is a banned-name replacement value (e.g., "Tegwen" from the map
+                            // {"Kaelen": "Tegwen"}). For organic names (like "Halloway"),
+                            // merge freely — it's the same person with different role labels.
+                            const isBannedNameCollision = matchedParts.some(p => bannedReplacementNames.has(p));
+
+                            if (isBannedNameCollision) {
+                                const updateRole = (update.role ?? '').toLowerCase();
+                                const existingRole = (e.role ?? '').toLowerCase();
+                                const roleWords = (role: string) => new Set(
+                                    role.split(/[\s/,()]+/).filter(w => w.length >= 3)
+                                );
+                                const updateRoleWords = roleWords(updateRole);
+                                const existingRoleWords = roleWords(existingRole);
+                                const sharedRoleWords = [...updateRoleWords].filter(w => existingRoleWords.has(w));
+
+                                // If roles share zero words AND both have meaningful roles,
+                                // these are likely different characters with the same banned-name replacement.
+                                if (updateRoleWords.size >= 1 && existingRoleWords.size >= 1 && sharedRoleWords.length === 0) {
+                                    return false; // Don't merge — different characters
+                                }
+                            }
+
+                            return true;
+                        });
+
+                        if (existingIdx >= 0) {
+                            debugLogs.push({
+                                timestamp: new Date().toISOString(),
+                                message: `[ENTITY DEDUP — v1.8 FUZZY MATCH] "${update.name}" (${update.id}) matched existing "${updatedKnownEntities[existingIdx].name}" (${updatedKnownEntities[existingIdx].id}) via first-name overlap. Updating in place.`,
+                                type: 'warning'
+                            });
+                        }
+                    }
+                }
+
                 if (existingIdx >= 0) {
-                    updatedKnownEntities[existingIdx] = update;
+                    // Merge: keep the newer data but preserve the existing ID if it's older
+                    // (prevents ID fragmentation)
+                    const existingEntity = updatedKnownEntities[existingIdx];
+                    updatedKnownEntities[existingIdx] = {
+                        ...update,
+                        id: existingEntity.id,  // Preserve canonical ID
+                    };
                 } else {
                     updatedKnownEntities.push(update);
                 }
+            }
+        }
+
+        // v1.8: Post-processing dedup pass — catch any pre-existing duplicates
+        // that slipped in before this fix was deployed.
+        {
+            const seen = new Map<string, number>(); // lowercase first-name → index
+            const toRemove: number[] = [];
+            for (let i = 0; i < updatedKnownEntities.length; i++) {
+                const entity = updatedKnownEntities[i];
+                const nameParts = entity.name
+                    .replace(/\([^)]*\)/g, '')
+                    .split(/\s+/)
+                    .map(p => p.toLowerCase().trim())
+                    .filter(p => p.length >= 3 && !ENTITY_EXTRACTION_BLACKLIST.has(p));
+
+                let isDuplicate = false;
+                for (const part of nameParts) {
+                    if (seen.has(part)) {
+                        const existingIdx = seen.get(part)!;
+                        const existingEntity = updatedKnownEntities[existingIdx];
+
+                        // Role similarity guard: ONLY apply for banned-name replacements.
+                        // For organic names (like "Halloway"), merge freely — same person.
+                        const isBannedCollision = bannedReplacementNames.has(part);
+                        if (isBannedCollision) {
+                            const roleWords = (role: string) => new Set(
+                                (role ?? '').toLowerCase().split(/[\s/,()]+/).filter(w => w.length >= 3)
+                            );
+                            const entityRoleWords = roleWords(entity.role);
+                            const existingRoleWords = roleWords(existingEntity.role);
+                            const sharedRoleWords = [...entityRoleWords].filter(w => existingRoleWords.has(w));
+
+                            if (entityRoleWords.size >= 1 && existingRoleWords.size >= 1 && sharedRoleWords.length === 0) {
+                                // Different roles + banned-name collision → different characters
+                                continue;
+                            }
+                        }
+
+                        // Same or similar roles — genuine duplicate. Keep the more detailed one.
+                        const existingLen = (existingEntity.impression ?? '').length;
+                        const currentLen = (entity.impression ?? '').length;
+                        if (currentLen > existingLen) {
+                            toRemove.push(existingIdx);
+                            seen.set(part, i);
+                        } else {
+                            toRemove.push(i);
+                        }
+                        isDuplicate = true;
+                        debugLogs.push({
+                            timestamp: new Date().toISOString(),
+                            message: `[ENTITY DEDUP — v1.8 POST-PROCESS] Duplicate detected: "${entity.name}" shares name part "${part}" with "${existingEntity.name}". Keeping more detailed entry.`,
+                            type: 'warning'
+                        });
+                        break;
+                    }
+                }
+                if (!isDuplicate) {
+                    for (const part of nameParts) {
+                        seen.set(part, i);
+                    }
+                }
+            }
+            if (toRemove.length > 0) {
+                const removeSet = new Set(toRemove);
+                updatedKnownEntities = updatedKnownEntities.filter((_, i) => !removeSet.has(i));
             }
         }
 
@@ -1057,7 +1266,8 @@ const pendingLore: LoreItem[] = [];
             const validatedHiddenUpdate = validateHiddenUpdateCoherence(
                 r.hidden_update,
                 existingEmergingForHiddenCheck,
-                debugLogs
+                debugLogs,
+                character.name
             );
             if (validatedHiddenUpdate.trim().length > 0) {
                 newHiddenRegistry += `\n[${newTime.display}] ${validatedHiddenUpdate}`;
@@ -1153,7 +1363,8 @@ const pendingLore: LoreItem[] = [];
                 debugLogs,
                 ((currentWorld as any).dormantHooks as DormantHook[]) ?? [],
                 updatedExposure,
-                knownEntityNames
+                knownEntityNames,
+                character.name
             );
 
             // v1.6: Activate dormant hooks referenced by processed threats
