@@ -1,4 +1,3 @@
-
 import { useRef, useCallback } from 'react';
 import { ChatMessage, Role, ModelResponseSchema } from '../types';
 import { generateMessageId } from '../idUtils';
@@ -110,7 +109,8 @@ export const useGeminiClient = () => {
             preCallState.character.conditions.length,
             (preCallState.gameWorld.knownEntities ?? []).length,   // FIX 6
             (preCallState.character.goals ?? []).length,           // FIX 11
-            ((preCallState.gameWorld as any).emergingThreats ?? []).length  // v1.7
+            ((preCallState.gameWorld as any).emergingThreats ?? []).length,  // v1.7
+            !!(preCallState.gameWorld as any).passiveAlliesDetected          // v1.10
         );
         let requestLogs = [...preCallState.gameHistory.debugLog];
         

@@ -292,7 +292,8 @@ export const constructGeminiPrompt = (
     character.conditions.length,
     (gameWorld.knownEntities ?? []).length,           // FIX 6: entity density
     (character.goals ?? []).length,                    // FIX 11: goal staleness
-    ((gameWorld as any).emergingThreats as any[] ?? []).length // v1.7: logistics check
+    ((gameWorld as any).emergingThreats as any[] ?? []).length, // v1.7: logistics check
+    !!(gameWorld as any).passiveAlliesDetected         // v1.10: allied passivity
   );
   
   // 6. World Pressure (v1.1)

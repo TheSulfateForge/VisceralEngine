@@ -1,5 +1,5 @@
 // ============================================================================
-// SECTIONREMINDERS.TS — v1.6
+// SECTIONREMINDERS.TS — v1.10
 //
 // v1.3 changes:
 //   - Added BARGAIN_CHECK reminder.
@@ -24,13 +24,19 @@
 //     Origin Gate checklist is the first check in the reminder, above all others.
 //     The AI must cite a dormant hook ID, a specific player action, or a faction
 //     with established exposure before any threat seed is permitted.
+//
+// v1.10 changes:
+//   - LOGISTICS_CHECK updated to v1.10 with de facto combat detection rules,
+//     messenger entity suppression, and enhanced allied proactivity rules.
+//   - getSectionReminder() now accepts passiveAlliesDetected parameter.
+//     When allied passivity is detected, LOGISTICS_CHECK fires every turn.
 // ============================================================================
 
 import { SceneMode } from './types';
 
 // Condensed reinforcements derived from SYSTEM_INSTRUCTIONS
 const REMINDERS = {
-    LOGISTICS_CHECK: `[SYSTEM REMINDER: LOGISTICS & DISTANCE VALIDATION v1.8]
+    LOGISTICS_CHECK: `[SYSTEM REMINDER: LOGISTICS & DISTANCE VALIDATION v1.10]
 Before writing NPC actions or advancing threats this turn, verify:
 
 1. WHERE IS EACH THREAT ENTITY RIGHT NOW?
@@ -45,39 +51,57 @@ Before writing NPC actions or advancing threats this turn, verify:
    A local cell can react in hours. Cavalry takes days to muster. An army takes weeks.
 
 4. NPC ACTION COHERENCE: Your world_tick NPC actions CANNOT show a threat entity
-   arriving if that threat's ETA is > 3. The engine WILL BLOCK such actions.
-   Show threats TRAVELING, not ARRIVING.
+   arriving or acting locally if that threat's ETA is > 1. The engine validates
+   BOTH visible and hidden NPC actions during NARRATIVE/SOCIAL scenes. Even marking
+   an action as player_visible will NOT bypass this check. Show threats TRAVELING,
+   not ARRIVING, until their ETA reaches 1 or 0.
 
 5. LOCAL ASSETS ONLY for fast responses. If local agents exist in lore, THEY can
    act quickly — but limited to their pre-established capability. You cannot
    invent new local assets mid-crisis.
 
-[v1.8] 6. DESCRIPTION LOCK: The engine now LOCKS threat descriptions on continuation.
-   Do NOT rewrite the threat description each turn. The description you wrote when
-   the threat was first created IS the threat. Your rewrite WILL BE DISCARDED by the
-   engine. Only ETA countdown matters for progression.
+[v1.10] 6. ALLIED NPC PROACTIVITY: NPCs loyal to the player who have standing orders
+   or established behavioral patterns MUST act autonomously without waiting for
+   player commands. Specifically:
+   - A summoned/bonded creature commanded to "kill enemies" ATTACKS when enemies appear
+   - A protective familiar/companion DEFENDS when its charge is under attack
+   - An NPC under combat orders acts EVERY turn, not just when the player addresses them
+   These NPCs have agency. They do not become passive observers between player turns.
+   If the player summoned a killing machine and hostiles arrive, the killing machine KILLS.
+   THE ENGINE DETECTS ALLIED PASSIVITY. If hostile combat actions exist and allied NPCs
+   are only growling/watching/circling, the engine will flag this as an error.
 
-[v1.8] 7. INFORMATION ISOLATION: Threat entities CANNOT know about player actions they
-   did not witness. Specifically:
-   - Actions taken indoors, in private rooms, behind closed doors → NOT OBSERVABLE
-   - Disguise changes, spell casting in private → NOT OBSERVABLE
-   - Conversations with NPCs behind closed curtains → NOT OBSERVABLE
-   The threat description and hidden_update MUST NOT reference information from
-   private player actions. If the player changed their hair in a tailor's back room,
-   the pursuing NPC is STILL looking for the original appearance.
+[v1.10] 7. DE FACTO COMBAT: The engine detects actual combat from NPC actions. If NPCs
+   are shooting arrows, charging cavalry, or swinging swords, the engine treats
+   the scene as COMBAT regardless of your stated scene_mode. Set scene_mode to
+   COMBAT when combat is occurring — the engine will override you if you don't.
+   During COMBAT:
+   - Origin Gate is BYPASSED — threats from in-scene entities don't need dormant hooks
+   - ETA floors drop to 1 (individual) and 3 (faction) — a lance impact is 1 turn away
+   - Environmental threats (fire, structural collapse) don't need observers
+   - Biological events (injury complications, conditions) don't need observers
+   USE THIS to create proper combat pacing.
 
-[v1.8] 8. NO RETCON OF THREAT IDENTITY: Once a threat is established (e.g., "a Zhentarim
-   patrol investigating smoke"), you cannot retroactively assign it a named leader,
-   change who is pursuing, or upgrade the threat's capabilities. The entity you named
-   at creation is the entity. Period.
+[v1.10] 8. MESSENGER ENTITY SUPPRESSION: When an NPC is the subject of a messenger
+   threat (e.g., "Garek is fleeing toward a Tharnic outpost"), the engine blocks
+   ALL NPC actions by that entity until their threat ETA ≤ 2. The messenger is
+   physically traveling and CANNOT appear locally to kneel, gesture, signal, or
+   lead anyone anywhere. Write their actions ONLY in threat description evolution
+   and hidden_update, NOT in world_tick.npc_actions.
 
-[v1.8] 9. PLAN PIVOT PENALTY: If you substantially change what a threat is doing
-   (e.g., "searching Trades Ward" → "sent word to Black Network contacts"), the engine
-   detects this as a plan pivot and adds a 2-turn delay. The threat entity needs
-   REACTION TIME to change plans — just like the player does.
+[v1.9] 9. DESCRIPTION EVOLUTION: The engine ALLOWS threat descriptions to evolve
+   when the threat's ETA is counting down normally. If your updated description
+   shows the threat progressing ("fleeing" → "arriving" → "reporting"), AND the
+   ETA decreased, the engine will accept the new description.
+
+[v1.8] 10. INFORMATION ISOLATION: Threat entities CANNOT know about player actions they
+   did not witness.
+
+[v1.8] 11. NO RETCON OF THREAT IDENTITY: Once a threat is established, you cannot
+   retroactively assign named leaders, change pursuers, or upgrade capabilities.
 
 REMEMBER: A realistic delayed response creates BETTER drama than an omniscient instant one.
-The player correctly identified the last logistics violation. Do not repeat it.`,
+Allied NPCs with orders CREATE drama by acting — passive allies are a narrative dead zone.`,
 
     VOCABULARY: `[SYSTEM REMINDER: FORBIDDEN VOCABULARY]
 CRITICAL CHECK. Scan your intended output:
@@ -290,7 +314,8 @@ export const getSectionReminder = (
     conditionsCount: number = 0,
     entityCount: number = 0,
     goalCount: number = 999,
-    emergingThreatsCount: number = 0
+    emergingThreatsCount: number = 0,
+    passiveAlliesDetected: boolean = false  // v1.10
 ): string | null => {
     // Priority -1 (Absolute): Mandatory Condition Audit when conditions > 30
     if (conditionsCount > 30) {
@@ -298,6 +323,13 @@ export const getSectionReminder = (
     }
 
     if (turnCount < 3) return null;
+
+    // v1.10: Priority -0.5: LOGISTICS fires EVERY turn when allied passivity detected
+    // This takes precedence over bargain clock because passive allies in combat
+    // is a more urgent issue than bargain timing.
+    if (passiveAlliesDetected) {
+        return REMINDERS.LOGISTICS_CHECK;
+    }
 
     // Priority 0: BARGAIN CLOCK
     const turnsSinceLastBargain = currentTurnCount - lastBargainTurn;

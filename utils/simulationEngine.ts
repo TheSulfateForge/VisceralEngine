@@ -1,5 +1,5 @@
 /**
- * simulationEngine.ts — v1.6
+ * simulationEngine.ts — v1.10
  *
  * v1.3 changes:
  *   - turnCount now increments on every successful turn and is written to GameWorld.
@@ -30,6 +30,17 @@
  *   - processThreatSeeds() updated: new signature accepts dormantHooks + factionExposure,
  *     Origin Gate filter applied before ETA floor enforcement.
  *   - dormantHooks and factionExposure persisted in worldUpdate return value.
+ *
+ * v1.10 changes:
+ *   - DE FACTO COMBAT DETECTION: getEffectiveSceneMode() examines NPC actions for
+ *     combat verbs. If scene is TENSION but NPCs are shooting/charging/slashing,
+ *     upgrades to effective COMBAT for Origin Gate/ETA/coherence purposes.
+ *   - MESSENGER ENTITY SUPPRESSION: isMessengerThreat() + full entity suppression
+ *     in validateNpcActionCoherence(). ALL NPC actions by a messenger entity are
+ *     blocked until the messenger threat's ETA <= 2.
+ *   - ALLIED NPC PASSIVITY DETECTION: detectAlliedPassivity() flags when bonded/
+ *     companion NPCs are passive while hostile combat actions occur. Triggers
+ *     LOGISTICS_CHECK reminder every turn via passiveAlliesDetected flag.
  *
  */
 
@@ -80,10 +91,71 @@ const ETA_FLOOR_INDIVIDUAL_NEUTRAL = 5;
 const ETA_FLOOR_INDIVIDUAL_HOME = 3;
 const ETA_FLOOR_ENVIRONMENTAL = 2;
 
+// v1.9: Scene-mode-aware ETA floors — combat threats escalate in seconds, not turns
+const ETA_FLOOR_COMBAT_INDIVIDUAL = 1;
+const ETA_FLOOR_COMBAT_FACTION = 3;
+const ETA_FLOOR_TENSION_INDIVIDUAL = 2;
+const ETA_FLOOR_TENSION_FACTION = 5;
+
 // v1.8: Anti-replacement-loop and plan-pivot constants
 const PIVOT_DELAY_TURNS = 2;             // Extra turns added when AI rewrites a threat's plan
 const ENTITY_NAME_MATCH_THRESHOLD = 1;   // Minimum shared entity names to consider continuity
 const PIVOT_JACCARD_THRESHOLD = 0.35;    // Below this = plan pivot detected (description changed too much)
+
+// v1.10: De facto combat detection — verbs in NPC actions that indicate actual combat
+// regardless of the AI's stated scene_mode. If the scene contains these, it IS combat.
+const COMBAT_ACTION_VERBS = new Set([
+    'attack', 'attacks', 'attacked', 'attacking',
+    'shoot', 'shoots', 'shot', 'shooting',
+    'fire', 'fires', 'fired', 'firing',
+    'charge', 'charges', 'charged', 'charging',
+    'strike', 'strikes', 'struck', 'striking',
+    'slash', 'slashes', 'slashed', 'slashing',
+    'stab', 'stabs', 'stabbed', 'stabbing',
+    'volley', 'volleys',
+    'trample', 'tramples', 'trampled', 'trampling',
+    'lance', 'lances', 'lanced', 'lancing',
+    'cleave', 'cleaves', 'cleaved', 'cleaving',
+    'kill', 'kills', 'killed', 'killing',
+    'execute', 'executes', 'executed', 'executing',
+    'impale', 'impales', 'impaled', 'impaling',
+    'decapitate', 'decapitates', 'decapitated',
+    'disembowel', 'disembowels', 'disemboweled',
+    'crushes', 'crushed', 'crushing',
+    'smash', 'smashes', 'smashed', 'smashing',
+]);
+
+// Broader patterns that indicate combat context (multi-word or participial)
+const COMBAT_ACTION_PATTERNS = [
+    /\b(?:draws?\s+(?:sword|weapon|bow|blade|knife|dagger|crossbow|lance|mace))/i,
+    /\b(?:fire[sd]?\s+(?:arrow|bolt|volley|crossbow))/i,
+    /\b(?:cavalry\s+charge)/i,
+    /\b(?:heavy\s+cavalry)/i,
+    /\b(?:prepare[sd]?\s+(?:to\s+)?(?:fire|attack|charge|strike|execute))/i,
+    /\b(?:aim|aims|aimed|aiming)\s+(?:at|toward)/i,
+    /\b(?:lunge[sd]?|leaps?|lunges?)\s+(?:at|toward|into)/i,
+    /\b(?:arrows?\s+(?:hit|strike|land|lodge|sprout|pierce))/i,
+    /\b(?:incendiary|fire-?arrow|alchemical\s+fire)/i,
+    /\b(?:shred|shredding|rend|rending|tear|tearing|rip|ripping)\s/i,
+    /\b(?:crossbow|longbow|shortbow|ballista|catapult|trebuchet)/i,
+];
+
+// v1.10: Messenger threat patterns — threats where an entity is traveling away
+// to deliver information. These require full entity suppression until ETA <= 2.
+const MESSENGER_PATTERNS = [
+    /\bfleeing\s+toward/i,
+    /\bheading\s+toward/i,
+    /\btraveling\s+to/i,
+    /\brunning\s+to/i,
+    /\briding\s+to/i,
+    /\bsprinting\s+toward/i,
+    /\bfleeing\s+to/i,
+    /\bescaping\s+to/i,
+    /\breporting\s+to/i,
+    /\bmaking\s+(?:his|her|their|its)\s+way\s+to/i,
+    /\bheading\s+(?:for|to)\b/i,
+    /\bwith\s+news\s+of/i,
+];
 
 // ---------------------------------------------------------------------------
 // v1.8: Entity Name Extraction — prevents the AI from replacing threats by
@@ -114,6 +186,11 @@ const ENTITY_EXTRACTION_BLACKLIST = new Set([
  * approach caused catastrophic false positives (e.g., "Moira", "The",
  * "Guild" were treated as entity names, collapsing all threats into one).
  *
+ * v1.9: Dynamic setting-word detection — words that appear across 3+ entity
+ * names (e.g., "Tharnic" in "Tharnic Captain", "Tharnic Cinder-Guard",
+ * "Tharnic Sergeant") are setting adjectives, not identifiers. Matching
+ * requires at least one NON-setting significant part to hit.
+ *
  * The player character's name is explicitly excluded since it appears
  * in virtually every threat and provides zero signal.
  *
@@ -130,6 +207,26 @@ const extractEntityNamesFromDescription = (
     // Extract player name parts for exclusion
     const playerNameParts = new Set(
         playerCharacterName.toLowerCase().split(/\s+/).filter(p => p.length >= 3)
+    );
+
+    // v1.9: Compute setting words — significant name parts appearing in 3+ entities.
+    // These are culture/faction adjectives (e.g., "tharnic", "zhentarim") that describe
+    // the setting, not specific actors. Using them alone for matching causes false
+    // continuity (every "Tharnic X" threat collapses into one).
+    const partFrequency: Map<string, number> = new Map();
+    for (const entityName of knownEntityNames) {
+        const primary = entityName.split('(')[0].trim().toLowerCase();
+        const parts = primary.split(/\s+/).filter(p => p.length >= 3 && !ENTITY_EXTRACTION_BLACKLIST.has(p));
+        // Deduplicate per-entity so one entity can't inflate its own parts
+        const uniqueParts = new Set(parts);
+        for (const part of uniqueParts) {
+            partFrequency.set(part, (partFrequency.get(part) ?? 0) + 1);
+        }
+    }
+    const settingWords = new Set(
+        [...partFrequency.entries()]
+            .filter(([_, count]) => count >= 3)
+            .map(([word]) => word)
     );
 
     // ONLY match against registered entity names from knownEntities.
@@ -152,15 +249,28 @@ const extractEntityNamesFromDescription = (
         // Skip blacklisted common words
         if (primaryParts.every(part => ENTITY_EXTRACTION_BLACKLIST.has(part))) continue;
 
-        // Check if the entity's significant name parts appear in the description.
-        // For multi-word names like "Scar-Face Silas", match any significant part.
+        // v1.9: Identify which parts are setting words vs identity words.
+        // A match requires at least one NON-setting significant part to appear.
         const significantParts = primaryParts.filter(part =>
             part.length >= 3 && !ENTITY_EXTRACTION_BLACKLIST.has(part)
         );
+        const identityParts = significantParts.filter(part => !settingWords.has(part));
+        const settingOnlyParts = significantParts.filter(part => settingWords.has(part));
 
-        if (significantParts.length > 0 && significantParts.some(part => descLower.includes(part))) {
-            // Use the full primary name as the match key for consistency
-            names.add(primary);
+        if (significantParts.length === 0) continue;
+
+        if (identityParts.length > 0) {
+            // Has identity parts — require at least one identity part to match
+            if (identityParts.some(part => descLower.includes(part))) {
+                names.add(primary);
+            }
+        } else if (settingOnlyParts.length > 0) {
+            // ALL significant parts are setting words (e.g., "Tharnic Patrol").
+            // Only match if the FULL multi-word name appears as a phrase.
+            const fullPhrase = significantParts.join(' ');
+            if (fullPhrase.length >= 6 && descLower.includes(fullPhrase)) {
+                names.add(primary);
+            }
         }
     }
 
@@ -229,6 +339,164 @@ const calculateTimeDelta = (
  */
 const generateThreatId = (): string =>
     `threat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+// ---------------------------------------------------------------------------
+// v1.10: De Facto Combat Detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Examines NPC actions for combat verbs and patterns. If actual combat is
+ * happening (arrows firing, cavalry charging, melee fighting), returns 'COMBAT'
+ * regardless of the AI's stated scene_mode. This closes the critical gap where
+ * the AI labels active combat as TENSION, preventing the engine's COMBAT
+ * bypasses from activating.
+ *
+ * Only UPGRADES scene mode (TENSION → COMBAT). Never downgrades COMBAT → TENSION.
+ */
+const getEffectiveSceneMode = (
+    statedMode: string,
+    npcActions: WorldTickAction[],
+    debugLogs: DebugLogEntry[]
+): string => {
+    // If already COMBAT, no override needed
+    if (statedMode === 'COMBAT') return 'COMBAT';
+
+    // Only upgrade TENSION → COMBAT (not NARRATIVE/SOCIAL)
+    if (statedMode !== 'TENSION') return statedMode;
+
+    // Check NPC actions for combat activity
+    let combatActionCount = 0;
+    for (const action of npcActions) {
+        const actionLower = action.action.toLowerCase();
+        const words = actionLower.split(/\s+/);
+
+        // Check individual combat verbs
+        if (words.some(w => COMBAT_ACTION_VERBS.has(w))) {
+            combatActionCount++;
+            continue;
+        }
+
+        // Check multi-word combat patterns
+        if (COMBAT_ACTION_PATTERNS.some(p => p.test(action.action))) {
+            combatActionCount++;
+        }
+    }
+
+    // Require at least 2 combat actions to confirm de facto combat
+    // (a single "draws sword" might be a threat display, not active combat)
+    if (combatActionCount >= 2) {
+        debugLogs.push({
+            timestamp: new Date().toISOString(),
+            message: `[SCENE OVERRIDE — v1.10] De facto COMBAT detected: ${combatActionCount} NPC actions ` +
+                `contain combat verbs. Overriding stated "${statedMode}" → "COMBAT" for ` +
+                `Origin Gate, ETA floors, and coherence checks.`,
+            type: 'warning'
+        });
+        return 'COMBAT';
+    }
+
+    return statedMode;
+};
+
+/**
+ * Checks if a threat is a "messenger threat" — one where the primary entity
+ * is traveling away from the scene to deliver information elsewhere.
+ * These threats need special handling: the messenger's NPC actions should be
+ * suppressed entirely (not just arrival actions) until the threat's ETA is
+ * low enough for them to plausibly have arrived.
+ */
+const isMessengerThreat = (threat: WorldTickEvent): boolean => {
+    return MESSENGER_PATTERNS.some(p => p.test(threat.description));
+};
+
+/**
+ * v1.10: Detects when allied NPCs are passive during hostile combat actions.
+ * Returns a list of passive allies that should be acting.
+ */
+const detectAlliedPassivity = (
+    npcActions: WorldTickAction[],
+    knownEntities: { name: string; role: string; relationship_level: string }[],
+    debugLogs: DebugLogEntry[]
+): string[] => {
+    // Identify allied entities (bonded, loyal, companion-type)
+    const ALLIED_ROLES = /protector|companion|mate|familiar|bonded|guardian|pet|mount|summon|allied|loyal/i;
+    const ALLIED_RELATIONSHIPS = new Set(['bonded', 'loyal', 'devoted', 'friendly']);
+
+    const alliedEntities = knownEntities.filter(e =>
+        ALLIED_ROLES.test(e.role) || ALLIED_RELATIONSHIPS.has(e.relationship_level)
+    );
+    if (alliedEntities.length === 0) return [];
+
+    // Check if hostile combat actions are happening
+    let hostileCombatActions = 0;
+    for (const action of npcActions) {
+        const actionLower = action.action.toLowerCase();
+        const words = actionLower.split(/\s+/);
+        const isCombat = words.some(w => COMBAT_ACTION_VERBS.has(w)) ||
+            COMBAT_ACTION_PATTERNS.some(p => p.test(action.action));
+
+        // Is this from a non-allied NPC?
+        const isAllyAction = alliedEntities.some(a => {
+            const primaryName = a.name.split('(')[0].trim().toLowerCase();
+            return action.npc_name.toLowerCase().includes(primaryName) ||
+                primaryName.includes(action.npc_name.toLowerCase());
+        });
+
+        if (isCombat && !isAllyAction) {
+            hostileCombatActions++;
+        }
+    }
+
+    if (hostileCombatActions === 0) return [];
+
+    // Check what allied NPCs are doing — flag passive ones
+    const PASSIVE_INDICATORS = [
+        /\bgrowl/i, /\bsnarl/i, /\bcircl/i, /\bgroom/i,
+        /\bwatch/i, /\bsniff/i, /\bnudge/i, /\blick/i,
+        /\brest/i, /\bsleep/i, /\bwait/i, /\bstand/i,
+        /\bguard/i, /\bvigil/i, /\bmark/i, /\bscent/i,
+        /\bnuzzl/i, /\brasp/i, /\bpurr/i, /\bhover/i,
+        /\bpace[sd]?\b/i, /\bperch/i,
+    ];
+
+    const passiveAllies: string[] = [];
+    for (const ally of alliedEntities) {
+        const allyNameLower = ally.name.split('(')[0].trim().toLowerCase();
+        const allyActions = npcActions.filter(a =>
+            a.npc_name.toLowerCase().includes(allyNameLower) ||
+            allyNameLower.includes(a.npc_name.toLowerCase())
+        );
+
+        if (allyActions.length === 0) {
+            // Ally has NO actions this turn while hostiles are fighting
+            passiveAllies.push(ally.name);
+            continue;
+        }
+
+        // Check if all of this ally's actions are passive
+        const allPassive = allyActions.every(a =>
+            PASSIVE_INDICATORS.some(p => p.test(a.action)) &&
+            !COMBAT_ACTION_VERBS.has(a.action.toLowerCase().split(/\s+/)[0]) &&
+            !COMBAT_ACTION_PATTERNS.some(p => p.test(a.action))
+        );
+
+        if (allPassive) {
+            passiveAllies.push(ally.name);
+        }
+    }
+
+    if (passiveAllies.length > 0) {
+        debugLogs.push({
+            timestamp: new Date().toISOString(),
+            message: `[ALLIED PASSIVITY — v1.10] ${hostileCombatActions} hostile combat actions this turn, ` +
+                `but allied NPC(s) [${passiveAllies.join(', ')}] are PASSIVE. ` +
+                `Allied NPCs with standing combat orders should be actively fighting.`,
+            type: 'error'
+        });
+    }
+
+    return passiveAllies;
+};
 
 // ---------------------------------------------------------------------------
 // v1.6: Exposure scoring constants
@@ -449,34 +717,82 @@ const validateThreatCausality = (
  * The AI's primary bypass vector is: set an emerging_threat with ETA 15, then
  * use npc_actions to show the threat already arriving/acting locally. This
  * validator detects when a hidden NPC action references terms/entities from
- * an emerging threat whose ETA is still > 3, and blocks those actions.
+ * an emerging threat whose ETA is still > coherence threshold, and blocks those actions.
+ *
+ * v1.9: Scene-mode awareness.
+ *   COMBAT: Skip coherence entirely — all NPCs are in-scene.
+ *   TENSION: Check only hidden actions with threshold ETA > 1.
+ *   NARRATIVE/SOCIAL: Check BOTH visible and hidden actions for entities
+ *     linked to distant threats. This closes the vector where the AI marks
+ *     a messenger's arrival as player_visible to bypass the check.
+ *     Threshold: ETA > 1 for arrival actions.
  */
 const validateNpcActionCoherence = (
     npcActions: WorldTickAction[],
     emergingThreats: WorldTickEvent[],
     currentTurn: number,
-    debugLogs: DebugLogEntry[]
+    debugLogs: DebugLogEntry[],
+    sceneMode: string = 'NARRATIVE'   // v1.9
 ): WorldTickAction[] => {
     const log = (msg: string, type: DebugLogEntry['type'] = 'warning') => {
         debugLogs.push({ timestamp: new Date().toISOString(), message: msg, type });
     };
 
-    // Build significant keywords from threats with ETA > 3
-    const distantThreatTerms: Map<string, number> = new Map();
+    // v1.9: During active COMBAT, all NPCs are physically present in the scene.
+    // Coherence checking would block legitimate combat actions (archers shooting,
+    // cavalry charging, etc.) whose ETA floors just got bumped by the engine.
+    if (sceneMode === 'COMBAT') return npcActions;
+
+    // Build entity names from threats with ETA > 1
+    // v1.9: Use entity-name matching instead of keyword extraction to prevent
+    // false positives from common words in threat descriptions.
+    const distantThreatEntities: Map<string, { eta: number; originalEta: number }> = new Map();
+    // v1.10: Track messenger threat entities separately — these get FULL suppression
+    const messengerEntities: Map<string, { eta: number }> = new Map();
     for (const threat of emergingThreats) {
         const eta = threat.turns_until_impact ?? 0;
-        if (eta <= 3) continue; // Imminent threats can appear in NPC actions
+        if (eta <= 1) continue; // Imminent threats — NPC can appear freely
 
-        const words = threat.description.toLowerCase()
-            .split(/[\s,.:;!?()"']+/)
-            .filter(w => w.length > 4);
-        for (const word of words) {
-            const existing = distantThreatTerms.get(word) ?? 0;
-            if (eta > existing) distantThreatTerms.set(word, eta);
+        const entityNames = threat.entitySourceNames ?? [];
+
+        // v1.10: Messenger threats get full entity suppression until ETA <= 2.
+        // When Garek is "fleeing toward a battalion" (ETA 5), ANY action by Garek
+        // is invalid — he's not here. Not just "arrival" actions.
+        const isMessenger = isMessengerThreat(threat) && eta > 2;
+        if (isMessenger) {
+            for (const name of entityNames) {
+                const nameLower = name.toLowerCase();
+                const parts = nameLower.split(/\s+/).filter(p =>
+                    p.length >= 3 && !ENTITY_EXTRACTION_BLACKLIST.has(p)
+                );
+                for (const part of parts) {
+                    const existing = messengerEntities.get(part);
+                    if (!existing || eta > existing.eta) {
+                        messengerEntities.set(part, { eta });
+                    }
+                }
+            }
+        }
+
+        for (const name of entityNames) {
+            const nameLower = name.toLowerCase();
+            // Extract the identity part (skip setting words / blacklisted)
+            const parts = nameLower.split(/\s+/).filter(p =>
+                p.length >= 3 && !ENTITY_EXTRACTION_BLACKLIST.has(p)
+            );
+            for (const part of parts) {
+                const existing = distantThreatEntities.get(part);
+                if (!existing || eta > existing.eta) {
+                    distantThreatEntities.set(part, {
+                        eta,
+                        originalEta: threat.originalEta ?? eta
+                    });
+                }
+            }
         }
     }
 
-    if (distantThreatTerms.size === 0) return npcActions; // No distant threats — skip validation
+    if (distantThreatEntities.size === 0 && messengerEntities.size === 0) return npcActions;
 
     // Verbs indicating physical presence / arrival at a location
     const ARRIVAL_INDICATORS = [
@@ -493,25 +809,56 @@ const validateNpcActionCoherence = (
         'north gate', 'south gate', 'east gate', 'west gate',
         'town square', 'town center',
         'three-mile', 'one-mile', 'half-mile',
+        // v1.9: Additional arrival verbs observed in save data
+        'collapses inside', 'collapses in front', 'collapses at',
+        'leads the', 'leading the',   // "Leads the patrol to the site"
+        'signals', 'signaling',        // "Signals the riders" (implies present with group)
+        'within sight', 'in sight of',
+        'draws', 'drawing in the dust', // "Drawing a wolf in the dust to explain"
+        'waving his arms', 'waving her arms',
+        'breaches the', 'breaks through',
+        'crawls into', 'stumbles into',
     ];
 
     return npcActions.filter(action => {
-        // Only validate hidden (off-screen) actions — visible ones are already narrated
-        if (action.player_visible) return true;
+        // v1.9: During TENSION, only check hidden actions (visible NPCs are in-scene)
+        // During NARRATIVE/SOCIAL, check ALL actions — the AI bypasses by marking
+        // distant messenger arrivals as player_visible.
+        if (sceneMode === 'TENSION' && action.player_visible) return true;
 
         const actionLower = action.action.toLowerCase();
+        const npcNameLower = action.npc_name.toLowerCase();
 
-        // Check for threat keyword + arrival indicator overlap
-        for (const [keyword, eta] of distantThreatTerms.entries()) {
-            if (!actionLower.includes(keyword)) continue;
+        // v1.10: MESSENGER ENTITY FULL SUPPRESSION
+        // If this NPC is the primary entity of a messenger threat (ETA > 2),
+        // ALL actions by them are blocked — not just arrival actions.
+        // The messenger is physically elsewhere (traveling to report).
+        for (const [entityPart, { eta }] of messengerEntities.entries()) {
+            if (npcNameLower.includes(entityPart)) {
+                log(
+                    `[NPC ACTION BLOCKED — v1.10 MESSENGER] "${action.npc_name}: ` +
+                    `${action.action.substring(0, 100)}" — entity "${entityPart}" is ` +
+                    `the subject of a messenger threat with ETA ${eta} (> 2). ` +
+                    `Messenger NPCs cannot appear locally while traveling to their destination.`,
+                    'error'
+                );
+                return false;
+            }
+        }
+
+        // Check if this NPC's name matches a distant threat entity
+        for (const [entityPart, { eta, originalEta }] of distantThreatEntities.entries()) {
+            // Check both the NPC name and the action text for the entity name
+            const entityInAction = npcNameLower.includes(entityPart) || actionLower.includes(entityPart);
+            if (!entityInAction) continue;
 
             const hasArrivalIndicator = ARRIVAL_INDICATORS.some(v => actionLower.includes(v));
             if (hasArrivalIndicator) {
                 log(
-                    `[NPC ACTION BLOCKED — v1.7 COHERENCE] "${action.npc_name}: ` +
+                    `[NPC ACTION BLOCKED — v1.9 COHERENCE] "${action.npc_name}: ` +
                     `${action.action.substring(0, 100)}" — implies local presence of ` +
-                    `entity from threat with ETA ${eta}. Actions cannot advance threats ` +
-                    `faster than their ETA countdown.`,
+                    `entity "${entityPart}" from threat with ETA ${eta} (original: ${originalEta}). ` +
+                    `Actions cannot advance threats faster than their ETA countdown.`,
                     'error'
                 );
                 return false;
@@ -538,9 +885,13 @@ const validateHiddenUpdateCoherence = (
     hiddenUpdate: string,
     emergingThreats: WorldTickEvent[],
     debugLogs: DebugLogEntry[],
-    playerCharacterName: string = ''
+    playerCharacterName: string = '',
+    sceneMode: string = 'NARRATIVE'   // v1.9
 ): string => {
     if (!hiddenUpdate || hiddenUpdate.trim().length === 0) return hiddenUpdate;
+
+    // v1.9: During COMBAT, all entities are in-scene — skip coherence
+    if (sceneMode === 'COMBAT') return hiddenUpdate;
 
     // Build entity names from distant threats (ETA > 3)
     const distantThreatEntityNames: Map<string, number> = new Map();
@@ -609,6 +960,9 @@ const validateHiddenUpdateCoherence = (
  *   7. v1.8: Entity-name-based continuity matching — prevents the AI from resetting
  *      threat ETAs by rewriting descriptions. Plan-pivot delay enforced when the AI
  *      substantially changes a threat's plan mid-countdown.
+ *   8. v1.9: Scene-mode awareness — COMBAT uses lower ETA floors (1/3 instead of
+ *      5/15) and bypasses Origin Gate entirely. Description lock relaxed when
+ *      ETA is counting down normally (progression, not retcon).
  */
 const processThreatSeeds = (
     incomingThreats: WorldTickEvent[],
@@ -618,7 +972,8 @@ const processThreatSeeds = (
     dormantHooks: DormantHook[] = [],       // v1.6: origin gate
     factionExposure: FactionExposure = {},  // v1.6: origin gate
     knownEntityNames: string[] = [],        // v1.8: entity-name continuity
-    playerCharacterName: string = ''        // v1.8: exclude player name from entity matching
+    playerCharacterName: string = '',       // v1.8: exclude player name from entity matching
+    sceneMode: string = 'NARRATIVE'         // v1.9: scene-aware floors + origin gate bypass
 ): WorldTickEvent[] => {
     const log = (message: string, type: DebugLogEntry['type'] = 'warning') => {
         debugLogs.push({ timestamp: new Date().toISOString(), message, type });
@@ -685,7 +1040,7 @@ const processThreatSeeds = (
         // Raw ETA from AI
         let currentEta = threat.turns_until_impact ?? 0;
 
-        // v1.4: Enforce ETA floors on newly created threats
+        // v1.4 + v1.9: Enforce ETA floors on newly created threats (scene-mode-aware)
         if (turnCreated === currentTurn && !existing) {
             const descLower = threat.description.toLowerCase();
             const isFactionThreat =
@@ -701,11 +1056,21 @@ const processThreatSeeds = (
                 // Fallback: any threat with a high initial ETA is likely faction-scale
                 currentEta >= 10;
 
-            const floor = isFactionThreat ? ETA_FLOOR_FACTION : ETA_FLOOR_INDIVIDUAL_NEUTRAL;
+            // v1.9: Scene-mode-aware floors. During COMBAT, threats escalate in
+            // seconds (lance charge, arrow volley) — floor of 1. During TENSION,
+            // threats are nearby but not yet in action — floor of 2.
+            let floor: number;
+            if (sceneMode === 'COMBAT') {
+                floor = isFactionThreat ? ETA_FLOOR_COMBAT_FACTION : ETA_FLOOR_COMBAT_INDIVIDUAL;
+            } else if (sceneMode === 'TENSION') {
+                floor = isFactionThreat ? ETA_FLOOR_TENSION_FACTION : ETA_FLOOR_TENSION_INDIVIDUAL;
+            } else {
+                floor = isFactionThreat ? ETA_FLOOR_FACTION : ETA_FLOOR_INDIVIDUAL_NEUTRAL;
+            }
 
             if (currentEta < floor) {
                 log(
-                    `[THREAT ETA ENFORCED] "${threat.description.substring(0, 60)}" bumped ETA ${currentEta} → ${floor} (floor for ${isFactionThreat ? 'faction' : 'individual'} threat)`,
+                    `[THREAT ETA ENFORCED] "${threat.description.substring(0, 60)}" bumped ETA ${currentEta} → ${floor} (floor for ${isFactionThreat ? 'faction' : 'individual'} threat, scene: ${sceneMode})`,
                     'warning'
                 );
                 currentEta = floor;
@@ -728,15 +1093,18 @@ const processThreatSeeds = (
             }
         }
 
-        // v1.8: DESCRIPTION LOCK — The AI's primary retcon vector is rewriting
-        // the threat description every turn to inject new info the threat entity
-        // couldn't know (e.g., "even if her hair changed" when the player changed
-        // hair in a private room). When a continuation is detected (entity match
-        // or Jaccard match), the EXISTING description is preserved.
+        // v1.8 + v1.9: DESCRIPTION LOCK — prevents retcon/info-leak via description rewrites.
         //
-        // Additionally, plan pivot detection: if the AI's new description has
-        // very low similarity, it's trying to change the threat's entire plan,
-        // which requires a reaction delay.
+        // v1.9 RELAXATION: The original v1.8 lock was too aggressive for messenger/
+        // escalation threats where description evolution IS the threat progressing
+        // (e.g., "Garek fleeing" → "Garek arrives" → "patrol dispatched"). The lock
+        // now considers whether the ETA has been counting down normally:
+        //
+        // - ETA STALLING (same or higher): LOCK — this is a retcon/info-leak attempt
+        // - ETA COUNTING DOWN (decreased by ≥1): ALLOW evolution if similarity ≥ 0.15
+        //   (the threat is progressing naturally, not being retconned)
+        // - ETA COUNTING DOWN but similarity < 0.15: LOCK + pivot penalty
+        //   (complete topic change, not progression)
         let lockedDescription = threat.description; // default: use AI's new desc
         if (existing && turnCreated !== currentTurn) {
             const descSimilarity = jaccardSimilarity(
@@ -744,18 +1112,30 @@ const processThreatSeeds = (
                 significantWords(existing.description)
             );
 
+            const previousEta = existing.turns_until_impact ?? 999;
+            const etaDecreased = currentEta < previousEta; // ETA counting down normally
+
             if (entityMatchUsed) {
-                // Entity-matched continuation: ALWAYS lock description.
-                // The AI matched via shared entity names, meaning the descriptions
-                // diverged enough to defeat Jaccard. The new description is almost
-                // certainly a retcon/info-leak attempt. Keep the original.
-                lockedDescription = existing.description;
-                log(
-                    `[DESCRIPTION LOCKED — v1.8] "${threat.description.substring(0, 60)}" → ` +
-                    `keeping existing: "${existing.description.substring(0, 60)}" ` +
-                    `(entity-matched continuation, similarity ${descSimilarity.toFixed(2)})`,
-                    'warning'
-                );
+                if (etaDecreased && descSimilarity >= 0.15) {
+                    // v1.9: ETA is counting down AND descriptions share some DNA.
+                    // This is natural progression — allow the evolution.
+                    lockedDescription = threat.description;
+                    log(
+                        `[DESCRIPTION EVOLVED — v1.9] "${threat.description.substring(0, 60)}" ` +
+                        `allowed (entity-matched, ETA ${previousEta}→${currentEta}, similarity ${descSimilarity.toFixed(2)} ≥ 0.15)`,
+                        'warning'
+                    );
+                } else {
+                    // ETA stalling/resetting OR complete topic change: LOCK
+                    lockedDescription = existing.description;
+                    log(
+                        `[DESCRIPTION LOCKED — v1.9] "${threat.description.substring(0, 60)}" → ` +
+                        `keeping existing: "${existing.description.substring(0, 60)}" ` +
+                        `(entity-matched, ETA ${previousEta}→${currentEta}, ` +
+                        `similarity ${descSimilarity.toFixed(2)}${!etaDecreased ? ', ETA NOT decreasing' : ', similarity < 0.15'})`,
+                        'warning'
+                    );
+                }
             } else if (descSimilarity >= 0.60) {
                 // Jaccard-matched continuation with high similarity: allow minor
                 // natural evolution of the description (e.g., "patrol spotted smoke"
@@ -771,14 +1151,16 @@ const processThreatSeeds = (
             // Plan pivot detection: if the AI tried to substantially rewrite the
             // description (even though we're locking it), apply a reaction delay
             // to the ETA to punish the pivot attempt.
+            // v1.9: Only apply pivot penalty when description is LOCKED (not when evolved)
+            const descriptionWasLocked = lockedDescription === existing.description;
             const alreadyPenalized = existing.pivotPenaltyApplied === currentTurn ||
                 (existing.pivotPenaltyApplied !== undefined &&
                  currentTurn - existing.pivotPenaltyApplied < PIVOT_DELAY_TURNS);
 
-            if (descSimilarity < PIVOT_JACCARD_THRESHOLD && !alreadyPenalized) {
+            if (descriptionWasLocked && descSimilarity < PIVOT_JACCARD_THRESHOLD && !alreadyPenalized) {
                 const pivotEta = Math.max(currentEta, currentEta + PIVOT_DELAY_TURNS);
                 log(
-                    `[THREAT PIVOT DETECTED — v1.8] AI attempted: "${threat.description.substring(0, 60)}" — ` +
+                    `[THREAT PIVOT DETECTED — v1.9] AI attempted: "${threat.description.substring(0, 60)}" — ` +
                     `similarity ${descSimilarity.toFixed(2)} < ${PIVOT_JACCARD_THRESHOLD}. ` +
                     `Description locked + adding ${PIVOT_DELAY_TURNS}-turn reaction delay: ` +
                     `ETA ${currentEta} → ${pivotEta}.`,
@@ -817,18 +1199,27 @@ const processThreatSeeds = (
             turnCreated,
             entitySourceNames,
             pivotPenaltyApplied: (threat as any).pivotPenaltyApplied ?? existing?.pivotPenaltyApplied,
+            originalEta: existing?.originalEta ?? currentEta,  // v1.9: Track initial ETA at creation
             consecutiveTurnsAtEtaOne,
             turns_until_impact: currentEta,
             status,
         };
     });
 
-    // v1.6: Origin Gate — filter out causally invalid NEW threats before expiry/cap.
+    // v1.6 + v1.9: Origin Gate — filter out causally invalid NEW threats before expiry/cap.
     // validateThreatCausality() auto-passes any threat with turnCreated < currentTurn,
     // so this only ever blocks seeds being proposed for the first time this turn.
-    const causallyValid = processed.filter(threat =>
-        validateThreatCausality(threat, dormantHooks, factionExposure, currentTurn, debugLogs, knownEntityNames, playerCharacterName)
-    );
+    //
+    // v1.9: During COMBAT, Origin Gate is BYPASSED entirely. The gate's purpose is
+    // to prevent phantom distant threats — but during active combat, threats come from
+    // entities physically present in the scene (archers shooting, cavalry charging,
+    // environmental hazards). Requiring a dormant hook or observer for "the lance is
+    // about to hit you" is nonsensical. ETA floors (now scene-aware) handle timing.
+    const causallyValid = sceneMode === 'COMBAT'
+        ? processed
+        : processed.filter(threat =>
+            validateThreatCausality(threat, dormantHooks, factionExposure, currentTurn, debugLogs, knownEntityNames, playerCharacterName)
+        );
 
     // Step 2: Filter out expired seeds (operates on gate-passed threats only)
     const active = causallyValid.filter(t => t.status !== 'expired' && t.status !== 'triggered');
@@ -1257,6 +1648,18 @@ const pendingLore: LoreItem[] = [];
         // ===================================================================
         let newHiddenRegistry = currentWorld.hiddenRegistry || '';
 
+        // v1.9 + v1.10: Compute scene mode early so all downstream validators can use it.
+        // v1.10: getEffectiveSceneMode() detects de facto combat from NPC actions.
+        // If the AI labels the scene TENSION but NPCs are shooting arrows and charging
+        // cavalry, the effective mode is upgraded to COMBAT. This ensures Origin Gate
+        // bypass and reduced ETA floors apply during actual combat.
+        const statedSceneMode = r.scene_mode ?? currentWorld.sceneMode ?? 'NARRATIVE';
+        const currentSceneMode = getEffectiveSceneMode(
+            statedSceneMode,
+            r.world_tick?.npc_actions ?? [],
+            debugLogs
+        );
+
         // v1.8: Validate hidden_update against threat ETAs before writing.
         // This closes the bypass where the AI uses hidden_update to narrate
         // threat entities as locally present despite their ETA being > 3.
@@ -1267,7 +1670,8 @@ const pendingLore: LoreItem[] = [];
                 r.hidden_update,
                 existingEmergingForHiddenCheck,
                 debugLogs,
-                character.name
+                character.name,
+                currentSceneMode  // v1.9
             );
             if (validatedHiddenUpdate.trim().length > 0) {
                 newHiddenRegistry += `\n[${newTime.display}] ${validatedHiddenUpdate}`;
@@ -1303,15 +1707,17 @@ const pendingLore: LoreItem[] = [];
 
             if (hasActivity) lastWorldTickTurn = currentTurn;
 
-            // v1.7: Validate NPC actions against emerging threat ETAs before logging.
+            // v1.7 + v1.9: Validate NPC actions against emerging threat ETAs before logging.
             // This prevents the AI from using npc_actions to teleport distant threats.
+            // v1.9: Scene-mode awareness — COMBAT skips coherence entirely.
             const existingEmergingForCoherence =
                 ((currentWorld as any).emergingThreats as WorldTickEvent[]) ?? [];
             const validatedNpcActions = validateNpcActionCoherence(
                 r.world_tick.npc_actions,
                 existingEmergingForCoherence,
                 currentTurn,
-                debugLogs
+                debugLogs,
+                currentSceneMode  // v1.9
             );
             // Overwrite so downstream processing (exposure scoring, etc.) uses validated set
             r.world_tick.npc_actions = validatedNpcActions;
@@ -1345,6 +1751,22 @@ const pendingLore: LoreItem[] = [];
                 });
             }
 
+            // v1.10: Allied NPC passivity detection — flag when bonded/companion NPCs
+            // are passive while hostile combat actions are occurring.
+            const passiveAllies = detectAlliedPassivity(
+                validatedNpcActions,
+                (currentWorld.knownEntities ?? []).map(e => ({
+                    name: e.name,
+                    role: e.role,
+                    relationship_level: e.relationship_level
+                })),
+                debugLogs
+            );
+            // Store for sectionReminders to fire the ALLIED_PROACTIVITY reminder
+            if (passiveAllies.length > 0) {
+                (currentWorld as any).__passiveAllies = passiveAllies;
+            }
+
             // v1.6: Exposure scoring runs before threat validation so same-turn exposure counts
             const updatedExposure = updateFactionExposure(
                 ((currentWorld as any).factionExposure as FactionExposure) ?? {},
@@ -1354,7 +1776,7 @@ const pendingLore: LoreItem[] = [];
             );
             (currentWorld as any).factionExposure = updatedExposure;
 
-            // v1.6 / v1.4 / v1.8: Threat seed state machine with Origin Gate + ETA floors + entity continuity
+            // v1.6 / v1.4 / v1.8 / v1.9: Threat seed state machine with Origin Gate + ETA floors + entity continuity + scene awareness
             const knownEntityNames = (currentWorld.knownEntities ?? []).map(e => e.name);
             const processedThreats = processThreatSeeds(
                 r.world_tick.emerging_threats,
@@ -1364,7 +1786,8 @@ const pendingLore: LoreItem[] = [];
                 ((currentWorld as any).dormantHooks as DormantHook[]) ?? [],
                 updatedExposure,
                 knownEntityNames,
-                character.name
+                character.name,
+                currentSceneMode  // v1.9
             );
 
             // v1.6: Activate dormant hooks referenced by processed threats
@@ -1519,7 +1942,9 @@ const pendingLore: LoreItem[] = [];
             ?? (currentWorld as any).emergingThreats
             ?? [];
 
-        let finalSceneMode: SceneMode = r.scene_mode || 'NARRATIVE';
+        // v1.10: Use effective scene mode for persistence. If de facto combat was
+        // detected, persist COMBAT so the AI sees it in context next turn.
+        let finalSceneMode: SceneMode = (currentSceneMode as SceneMode) || 'NARRATIVE';
         let finalTensionLevel = tensionLevel;
 
         const noThreatsRemain = nextThreats.length === 0 && finalEmergingThreats.length === 0;
@@ -1630,6 +2055,8 @@ const pendingLore: LoreItem[] = [];
                 factionExposure: ((currentWorld as any).factionExposure as FactionExposure) ?? {},
                 bannedNameMap: nameMap,
                 emergingThreats: finalEmergingThreats,
+                // v1.10: Flag for sectionReminders to fire allied proactivity every turn
+                passiveAlliesDetected: ((currentWorld as any).__passiveAllies ?? []).length > 0,
             } as GameWorld & { emergingThreats: WorldTickEvent[] },
             characterUpdate: {
                 ...character,
