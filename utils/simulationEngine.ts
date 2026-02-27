@@ -291,7 +291,7 @@ const validateThreatCausality = (
             // v1.8: Semantic overlap check — at least 2 significant words must overlap
             const hookWords = significantWords(hook.summary);
             const threatWords = significantWords(threat.description);
-            const overlap = hookWords.filter(w => threatWords.includes(w));
+            const overlap = [...hookWords].filter(w => threatWords.has(w));
             if (overlap.length >= 2) {
                 log(`[ORIGIN GATE ✓] "${desc}" — hook: ${hook.summary} (overlap: [${overlap.join(', ')}])`);
                 return true;
