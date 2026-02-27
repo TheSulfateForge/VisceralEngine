@@ -80,6 +80,49 @@ const ETA_FLOOR_INDIVIDUAL_NEUTRAL = 5;
 const ETA_FLOOR_INDIVIDUAL_HOME = 3;
 const ETA_FLOOR_ENVIRONMENTAL = 2;
 
+// v1.8: Anti-replacement-loop and plan-pivot constants
+const PIVOT_DELAY_TURNS = 2;             // Extra turns added when AI rewrites a threat's plan
+const ENTITY_NAME_MATCH_THRESHOLD = 1;   // Minimum shared entity names to consider continuity
+const PIVOT_JACCARD_THRESHOLD = 0.35;    // Below this = plan pivot detected (description changed too much)
+
+// ---------------------------------------------------------------------------
+// v1.8: Entity Name Extraction — prevents the AI from replacing threats by
+// rewriting descriptions until Jaccard similarity drops below 0.60
+// ---------------------------------------------------------------------------
+
+/**
+ * Extracts probable entity/NPC names from a threat description.
+ * Uses capitalized multi-word sequences and known entity names.
+ * Returns lowercase names for matching.
+ */
+const extractEntityNamesFromDescription = (
+    description: string,
+    knownEntityNames: string[] = []
+): string[] => {
+    const names: Set<string> = new Set();
+
+    // Match capitalized proper nouns (2+ chars, not sentence starters after periods)
+    // This catches "Kavar", "Zhentarim", "Black Network", etc.
+    const properNouns = description.match(/\b[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})*/g);
+    if (properNouns) {
+        for (const noun of properNouns) {
+            names.add(noun.toLowerCase());
+        }
+    }
+
+    // Also check against known entity names (case-insensitive substring match)
+    const descLower = description.toLowerCase();
+    for (const entityName of knownEntityNames) {
+        // Extract the primary name (before parenthetical like "Kavar (Zhentarim)")
+        const primary = entityName.split('(')[0].trim().toLowerCase();
+        if (primary.length >= 3 && descLower.includes(primary)) {
+            names.add(primary);
+        }
+    }
+
+    return Array.from(names);
+};
+
 // ---------------------------------------------------------------------------
 // Pure Helper Functions
 // ---------------------------------------------------------------------------
@@ -223,7 +266,8 @@ const validateThreatCausality = (
     dormantHooks: DormantHook[],
     factionExposure: FactionExposure,
     currentTurn: number,
-    debugLogs: DebugLogEntry[]
+    debugLogs: DebugLogEntry[],
+    knownEntityNames: string[] = []    // v1.8: for validating observer entities
 ): boolean => {
     const log = (msg: string) => debugLogs.push({
         timestamp: new Date().toISOString(),
@@ -239,20 +283,76 @@ const validateThreatCausality = (
     const desc = threat.description.substring(0, 80);
 
     // Gate 1: Dormant Hook reference
+    // v1.8: The hook's summary must have semantic overlap with the threat description.
+    // This prevents citing "wealth target" hook for a "magic tracking" threat.
     if (threat.dormantHookId) {
         const hook = dormantHooks.find(h => h.id === threat.dormantHookId);
         if (hook && hook.status !== 'resolved') {
-            log(`[ORIGIN GATE ✓] "${desc}" — hook: ${hook.summary}`);
-            return true;
+            // v1.8: Semantic overlap check — at least 2 significant words must overlap
+            const hookWords = significantWords(hook.summary);
+            const threatWords = significantWords(threat.description);
+            const overlap = hookWords.filter(w => threatWords.includes(w));
+            if (overlap.length >= 2) {
+                log(`[ORIGIN GATE ✓] "${desc}" — hook: ${hook.summary} (overlap: [${overlap.join(', ')}])`);
+                return true;
+            }
+            log(
+                `[ORIGIN GATE ✗ — v1.8 SEMANTIC MISMATCH] "${desc}" — ` +
+                `hook "${hook.id}" summary has insufficient overlap with threat description ` +
+                `(${overlap.length} shared words: [${overlap.join(', ')}]). ` +
+                `The hook topic doesn't match the threat topic. BLOCKED.`
+            );
+            return false;
         }
         log(`[ORIGIN GATE ✗] "${desc}" — dormantHookId "${threat.dormantHookId}" not found or resolved. BLOCKED.`);
         return false;
     }
 
     // Gate 2: Player action cause
+    // v1.8: The cause must reference a SPECIFIC, REGISTERED observer entity.
+    // Generic causes like "witnesses reported" or "the magical residue attracted attention"
+    // are insufficient — they create phantom observers. The AI must name an NPC
+    // who was physically present and is already in the entity registry.
     if (threat.playerActionCause && threat.playerActionCause.trim().length > 10) {
-        log(`[ORIGIN GATE ✓] "${desc}" — player action: "${threat.playerActionCause}"`);
-        return true;
+        const causeLower = threat.playerActionCause.toLowerCase();
+        const entityNamesLower = knownEntityNames.map(n => n.toLowerCase());
+
+        // Check if any registered entity name appears in the cause string
+        const observerFound = entityNamesLower.some(name => {
+            // Match full name or first significant word (handles "Kavar" from "Kavar (Zhentarim)")
+            const firstName = name.split(/[\s(]/)[0].trim();
+            return firstName.length >= 3 && causeLower.includes(firstName);
+        });
+
+        if (observerFound) {
+            log(`[ORIGIN GATE ✓] "${desc}" — player action: "${threat.playerActionCause}"`);
+            return true;
+        }
+
+        // Allow causes that describe self-evident player actions without a specific observer
+        // (e.g., "Camilla cast a loud spell on an open road" — the action itself is the cause)
+        // These must use language indicating the action was publicly observable.
+        const selfEvidentPatterns = [
+            /player|camilla|character/i,     // Names the player
+        ];
+        const publicityPatterns = [
+            /open road|public|trade way|street|market|gate|crowd/i,  // Public location
+            /loud|visible|flashy|bright|explosion|blast/i,            // Conspicuous action
+        ];
+        const hasSelfEvident = selfEvidentPatterns.some(p => p.test(threat.playerActionCause));
+        const hasPublicity = publicityPatterns.some(p => p.test(threat.playerActionCause));
+
+        if (hasSelfEvident && hasPublicity) {
+            log(`[ORIGIN GATE ✓] "${desc}" — player action (self-evident public): "${threat.playerActionCause}"`);
+            return true;
+        }
+
+        log(
+            `[ORIGIN GATE ✗ — v1.8 NO REGISTERED OBSERVER] "${desc}" — ` +
+            `playerActionCause "${threat.playerActionCause.substring(0, 80)}" does not reference ` +
+            `a registered entity from knownEntities. The observer must be an established NPC. BLOCKED.`
+        );
+        return false;
     }
 
     // Gate 3: Faction exposure
@@ -359,6 +459,79 @@ const validateNpcActionCoherence = (
     });
 };
 
+// ---------------------------------------------------------------------------
+// v1.8: Hidden Update Coherence — closes the hidden_update bypass vector
+// ---------------------------------------------------------------------------
+
+/**
+ * Validates that hidden_update text doesn't describe threat entities as locally
+ * present when their threat ETA is still > 3. The AI uses hidden_update to
+ * narrate threat progress (e.g., "Kavar has tracked Camilla to the shop") even
+ * when NPC actions would be blocked by the coherence check.
+ *
+ * Returns the sanitised hidden_update string with violating lines stripped.
+ */
+const validateHiddenUpdateCoherence = (
+    hiddenUpdate: string,
+    emergingThreats: WorldTickEvent[],
+    debugLogs: DebugLogEntry[]
+): string => {
+    if (!hiddenUpdate || hiddenUpdate.trim().length === 0) return hiddenUpdate;
+
+    // Build entity names from distant threats (ETA > 3)
+    const distantThreatEntityNames: Map<string, number> = new Map();
+    for (const threat of emergingThreats) {
+        const eta = threat.turns_until_impact ?? 0;
+        if (eta <= 3) continue;
+
+        // Use stored entity names if available, otherwise extract
+        const names = threat.entitySourceNames ??
+            extractEntityNamesFromDescription(threat.description);
+        for (const name of names) {
+            const existing = distantThreatEntityNames.get(name) ?? 0;
+            if (eta > existing) distantThreatEntityNames.set(name, eta);
+        }
+    }
+
+    if (distantThreatEntityNames.size === 0) return hiddenUpdate;
+
+    // Arrival/presence indicators that suggest the entity is at the player's location
+    const PRESENCE_INDICATORS = [
+        'tracked', 'found', 'located', 'spotted', 'identified',
+        'arrived', 'reached', 'entered', 'barged', 'searched',
+        'questioning', 'interrogat', 'demanding', 'confronting',
+        'surrounding', 'watching the', 'outside the shop',
+        'one curtain away', 'at the door', 'at the front',
+        'in the shop', 'in the tavern', 'in the building',
+        'currently question', 'currently search',
+    ];
+
+    // Split into lines and filter
+    const lines = hiddenUpdate.split('\n');
+    const filtered = lines.filter(line => {
+        const lineLower = line.toLowerCase();
+
+        for (const [entityName, eta] of distantThreatEntityNames.entries()) {
+            if (!lineLower.includes(entityName)) continue;
+
+            const hasPresence = PRESENCE_INDICATORS.some(p => lineLower.includes(p));
+            if (hasPresence) {
+                debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    message: `[HIDDEN UPDATE BLOCKED — v1.8 COHERENCE] "${line.substring(0, 100)}" — ` +
+                        `describes "${entityName}" as locally present, but threat ETA is ${eta}. ` +
+                        `Hidden updates cannot bypass threat ETAs.`,
+                    type: 'error'
+                });
+                return false;
+            }
+        }
+        return true;
+    });
+
+    return filtered.join('\n');
+};
+
 /**
  * Processes the emerging_threats array from the AI response:
  *   1. Assigns IDs and creation turns to new seeds.
@@ -369,6 +542,9 @@ const validateNpcActionCoherence = (
  *      bumped up automatically, not just logged.
  *   6. v1.6: Origin Gate filter applied after Step 1 — new seeds blocked if they
  *      cannot cite a dormant hook, a player action, or sufficient faction exposure.
+ *   7. v1.8: Entity-name-based continuity matching — prevents the AI from resetting
+ *      threat ETAs by rewriting descriptions. Plan-pivot delay enforced when the AI
+ *      substantially changes a threat's plan mid-countdown.
  */
 const processThreatSeeds = (
     incomingThreats: WorldTickEvent[],
@@ -376,7 +552,8 @@ const processThreatSeeds = (
     currentTurn: number,
     debugLogs: DebugLogEntry[],
     dormantHooks: DormantHook[] = [],       // v1.6: origin gate
-    factionExposure: FactionExposure = {}   // v1.6: origin gate
+    factionExposure: FactionExposure = {},  // v1.6: origin gate
+    knownEntityNames: string[] = []         // v1.8: entity-name continuity
 ): WorldTickEvent[] => {
     const log = (message: string, type: DebugLogEntry['type'] = 'warning') => {
         debugLogs.push({ timestamp: new Date().toISOString(), message, type });
@@ -386,8 +563,7 @@ const processThreatSeeds = (
     const processed: WorldTickEvent[] = incomingThreats.map(threat => {
         let existing = existingThreats.find(t => t.id && t.id === threat.id);
 
-        // v1.5: Enhanced re-submission detection
-        // If ID is missing, check for semantic duplicate in existing threats
+        // v1.5: Enhanced re-submission detection — Jaccard similarity
         if (!threat.id && !existing) {
              existing = existingThreats.find(t => {
                 const sim = jaccardSimilarity(
@@ -398,17 +574,54 @@ const processThreatSeeds = (
             });
         }
 
+        // v1.8: Entity-name-based continuity matching
+        // If Jaccard didn't match, check if the threat mentions the same NPC/faction
+        // names as an existing threat. This catches the "description rewrite" bypass
+        // where the AI changes the plan details but keeps the same threat actor.
+        let entityMatchUsed = false;
+        if (!existing) {
+            const incomingNames = extractEntityNamesFromDescription(
+                threat.description, knownEntityNames
+            );
+
+            if (incomingNames.length > 0) {
+                for (const existingThreat of existingThreats) {
+                    const existingNames = existingThreat.entitySourceNames ??
+                        extractEntityNamesFromDescription(
+                            existingThreat.description, knownEntityNames
+                        );
+
+                    const sharedNames = incomingNames.filter(n => existingNames.includes(n));
+                    if (sharedNames.length >= ENTITY_NAME_MATCH_THRESHOLD) {
+                        existing = existingThreat;
+                        entityMatchUsed = true;
+                        log(
+                            `[THREAT CONTINUITY — v1.8 ENTITY MATCH] "${threat.description.substring(0, 60)}" ` +
+                            `matched existing threat via shared entity name(s): [${sharedNames.join(', ')}]. ` +
+                            `Inheriting ID and turnCreated from existing threat (created T${existingThreat.turnCreated}).`,
+                            'warning'
+                        );
+                        break;
+                    }
+                }
+            }
+        }
+
         // Assign ID if new
         const id = threat.id || existing?.id || generateThreatId();
 
-        // Set creation turn if new
-        const turnCreated = threat.turnCreated ?? existing?.turnCreated ?? currentTurn;
+        // Set creation turn if new — v1.8: entity-matched threats ALWAYS inherit
+        const turnCreated = existing?.turnCreated ?? threat.turnCreated ?? currentTurn;
+
+        // v1.8: Extract and store entity names for future continuity matching
+        const entitySourceNames = existing?.entitySourceNames ??
+            extractEntityNamesFromDescription(threat.description, knownEntityNames);
 
         // Raw ETA from AI
         let currentEta = threat.turns_until_impact ?? 0;
 
         // v1.4: Enforce ETA floors on newly created threats
-        if (turnCreated === currentTurn) {
+        if (turnCreated === currentTurn && !existing) {
             const descLower = threat.description.toLowerCase();
             const isFactionThreat =
                 descLower.includes('circle') ||
@@ -436,8 +649,6 @@ const processThreatSeeds = (
 
         // v1.7: Enforce ETA countdown for existing threats.
         // If a threat existed last turn, its ETA must decrease by at least 1.
-        // This prevents the AI from holding threats at ETA 15 forever while
-        // advancing them through NPC actions.
         if (existing && existing.turns_until_impact !== undefined && turnCreated !== currentTurn) {
             const previousEta = existing.turns_until_impact;
             const expectedMaxEta = Math.max(0, previousEta - 1);
@@ -449,6 +660,67 @@ const processThreatSeeds = (
                     'warning'
                 );
                 currentEta = expectedMaxEta;
+            }
+        }
+
+        // v1.8: DESCRIPTION LOCK — The AI's primary retcon vector is rewriting
+        // the threat description every turn to inject new info the threat entity
+        // couldn't know (e.g., "even if her hair changed" when the player changed
+        // hair in a private room). When a continuation is detected (entity match
+        // or Jaccard match), the EXISTING description is preserved.
+        //
+        // Additionally, plan pivot detection: if the AI's new description has
+        // very low similarity, it's trying to change the threat's entire plan,
+        // which requires a reaction delay.
+        let lockedDescription = threat.description; // default: use AI's new desc
+        if (existing && turnCreated !== currentTurn) {
+            const descSimilarity = jaccardSimilarity(
+                significantWords(threat.description),
+                significantWords(existing.description)
+            );
+
+            if (entityMatchUsed) {
+                // Entity-matched continuation: ALWAYS lock description.
+                // The AI matched via shared entity names, meaning the descriptions
+                // diverged enough to defeat Jaccard. The new description is almost
+                // certainly a retcon/info-leak attempt. Keep the original.
+                lockedDescription = existing.description;
+                log(
+                    `[DESCRIPTION LOCKED — v1.8] "${threat.description.substring(0, 60)}" → ` +
+                    `keeping existing: "${existing.description.substring(0, 60)}" ` +
+                    `(entity-matched continuation, similarity ${descSimilarity.toFixed(2)})`,
+                    'warning'
+                );
+            } else if (descSimilarity >= 0.60) {
+                // Jaccard-matched continuation with high similarity: allow minor
+                // natural evolution of the description (e.g., "patrol spotted smoke"
+                // → "patrol is approaching the smoke"). But only if similarity is high
+                // enough that no substantial new information was injected.
+                lockedDescription = threat.description;
+            } else {
+                // Shouldn't reach here (existing was found by Jaccard >= 0.60 or entity),
+                // but defensive: lock description.
+                lockedDescription = existing.description;
+            }
+
+            // Plan pivot detection: if the AI tried to substantially rewrite the
+            // description (even though we're locking it), apply a reaction delay
+            // to the ETA to punish the pivot attempt.
+            const alreadyPenalized = existing.pivotPenaltyApplied === currentTurn ||
+                (existing.pivotPenaltyApplied !== undefined &&
+                 currentTurn - existing.pivotPenaltyApplied < PIVOT_DELAY_TURNS);
+
+            if (descSimilarity < PIVOT_JACCARD_THRESHOLD && !alreadyPenalized) {
+                const pivotEta = Math.max(currentEta, currentEta + PIVOT_DELAY_TURNS);
+                log(
+                    `[THREAT PIVOT DETECTED — v1.8] AI attempted: "${threat.description.substring(0, 60)}" — ` +
+                    `similarity ${descSimilarity.toFixed(2)} < ${PIVOT_JACCARD_THRESHOLD}. ` +
+                    `Description locked + adding ${PIVOT_DELAY_TURNS}-turn reaction delay: ` +
+                    `ETA ${currentEta} → ${pivotEta}.`,
+                    'warning'
+                );
+                currentEta = pivotEta;
+                (threat as any).pivotPenaltyApplied = currentTurn;
             }
         }
 
@@ -475,8 +747,11 @@ const processThreatSeeds = (
 
         return {
             ...threat,
+            description: lockedDescription,  // v1.8: Use locked description, not AI's rewrite
             id,
             turnCreated,
+            entitySourceNames,
+            pivotPenaltyApplied: (threat as any).pivotPenaltyApplied ?? existing?.pivotPenaltyApplied,
             consecutiveTurnsAtEtaOne,
             turns_until_impact: currentEta,
             status,
@@ -487,7 +762,7 @@ const processThreatSeeds = (
     // validateThreatCausality() auto-passes any threat with turnCreated < currentTurn,
     // so this only ever blocks seeds being proposed for the first time this turn.
     const causallyValid = processed.filter(threat =>
-        validateThreatCausality(threat, dormantHooks, factionExposure, currentTurn, debugLogs)
+        validateThreatCausality(threat, dormantHooks, factionExposure, currentTurn, debugLogs, knownEntityNames)
     );
 
     // Step 2: Filter out expired seeds (operates on gate-passed threats only)
@@ -773,8 +1048,20 @@ const pendingLore: LoreItem[] = [];
         // ===================================================================
         let newHiddenRegistry = currentWorld.hiddenRegistry || '';
 
+        // v1.8: Validate hidden_update against threat ETAs before writing.
+        // This closes the bypass where the AI uses hidden_update to narrate
+        // threat entities as locally present despite their ETA being > 3.
         if (r.hidden_update) {
-            newHiddenRegistry += `\n[${newTime.display}] ${r.hidden_update}`;
+            const existingEmergingForHiddenCheck =
+                ((currentWorld as any).emergingThreats as WorldTickEvent[]) ?? [];
+            const validatedHiddenUpdate = validateHiddenUpdateCoherence(
+                r.hidden_update,
+                existingEmergingForHiddenCheck,
+                debugLogs
+            );
+            if (validatedHiddenUpdate.trim().length > 0) {
+                newHiddenRegistry += `\n[${newTime.display}] ${validatedHiddenUpdate}`;
+            }
         }
 
         // ===================================================================
@@ -857,14 +1144,16 @@ const pendingLore: LoreItem[] = [];
             );
             (currentWorld as any).factionExposure = updatedExposure;
 
-            // v1.6 / v1.4: Threat seed state machine with Origin Gate + ETA floors
+            // v1.6 / v1.4 / v1.8: Threat seed state machine with Origin Gate + ETA floors + entity continuity
+            const knownEntityNames = (currentWorld.knownEntities ?? []).map(e => e.name);
             const processedThreats = processThreatSeeds(
                 r.world_tick.emerging_threats,
                 ((currentWorld as any).emergingThreats as WorldTickEvent[]) ?? [],
                 currentTurn,
                 debugLogs,
                 ((currentWorld as any).dormantHooks as DormantHook[]) ?? [],
-                updatedExposure
+                updatedExposure,
+                knownEntityNames
             );
 
             // v1.6: Activate dormant hooks referenced by processed threats

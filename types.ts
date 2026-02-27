@@ -209,6 +209,9 @@ export interface WorldTickEvent {
     // v1.6 additions — Origin Gate fields (AI-populated, engine-validated):
     dormantHookId?: string;      // Must match a DormantHook.id to pass origin gate
     playerActionCause?: string;  // Describes the specific player action this session that caused this
+    // v1.8 additions — Anti-replacement loop fields (engine-managed):
+    entitySourceNames?: string[];  // Entity names extracted from description at creation for continuity matching
+    pivotPenaltyApplied?: number;  // Turn when a plan-pivot penalty was last applied (prevents stacking)
 }
 
 // --- Faction Intelligence (v1.3) ---

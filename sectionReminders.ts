@@ -30,7 +30,7 @@ import { SceneMode } from './types';
 
 // Condensed reinforcements derived from SYSTEM_INSTRUCTIONS
 const REMINDERS = {
-    LOGISTICS_CHECK: `[SYSTEM REMINDER: LOGISTICS & DISTANCE VALIDATION v1.7]
+    LOGISTICS_CHECK: `[SYSTEM REMINDER: LOGISTICS & DISTANCE VALIDATION v1.8]
 Before writing NPC actions or advancing threats this turn, verify:
 
 1. WHERE IS EACH THREAT ENTITY RIGHT NOW?
@@ -51,6 +51,30 @@ Before writing NPC actions or advancing threats this turn, verify:
 5. LOCAL ASSETS ONLY for fast responses. If local agents exist in lore, THEY can
    act quickly — but limited to their pre-established capability. You cannot
    invent new local assets mid-crisis.
+
+[v1.8] 6. DESCRIPTION LOCK: The engine now LOCKS threat descriptions on continuation.
+   Do NOT rewrite the threat description each turn. The description you wrote when
+   the threat was first created IS the threat. Your rewrite WILL BE DISCARDED by the
+   engine. Only ETA countdown matters for progression.
+
+[v1.8] 7. INFORMATION ISOLATION: Threat entities CANNOT know about player actions they
+   did not witness. Specifically:
+   - Actions taken indoors, in private rooms, behind closed doors → NOT OBSERVABLE
+   - Disguise changes, spell casting in private → NOT OBSERVABLE
+   - Conversations with NPCs behind closed curtains → NOT OBSERVABLE
+   The threat description and hidden_update MUST NOT reference information from
+   private player actions. If the player changed their hair in a tailor's back room,
+   the pursuing NPC is STILL looking for the original appearance.
+
+[v1.8] 8. NO RETCON OF THREAT IDENTITY: Once a threat is established (e.g., "a Zhentarim
+   patrol investigating smoke"), you cannot retroactively assign it a named leader,
+   change who is pursuing, or upgrade the threat's capabilities. The entity you named
+   at creation is the entity. Period.
+
+[v1.8] 9. PLAN PIVOT PENALTY: If you substantially change what a threat is doing
+   (e.g., "searching Trades Ward" → "sent word to Black Network contacts"), the engine
+   detects this as a plan pivot and adds a 2-turn delay. The threat entity needs
+   REACTION TIME to change plans — just like the player does.
 
 REMEMBER: A realistic delayed response creates BETTER drama than an omniscient instant one.
 The player correctly identified the last logistics violation. Do not repeat it.`,
