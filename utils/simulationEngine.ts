@@ -47,7 +47,7 @@
 import {
     ModelResponseSchema, GameWorld, DebugLogEntry, LoreItem,
     Character, MemoryItem, SceneMode, WorldTime, WorldTickEvent,
-    DormantHook, FactionExposure, WorldTickAction
+    DormantHook, FactionExposure, WorldTickAction, ThreatArcHistory, ThreatArcEntry
 } from '../types';
 import { ReproductionSystem } from './reproductionSystem';
 import { BioEngine } from './bioEngine';
@@ -101,6 +101,20 @@ const ETA_FLOOR_TENSION_FACTION = 5;
 const PIVOT_DELAY_TURNS = 2;             // Extra turns added when AI rewrites a threat's plan
 const ENTITY_NAME_MATCH_THRESHOLD = 1;   // Minimum shared entity names to consider continuity
 const PIVOT_JACCARD_THRESHOLD = 0.35;    // Below this = plan pivot detected (description changed too much)
+
+// v1.11: Hook Cooldown — turns before a hook can source new threats after arc conclusion
+const HOOK_COOLDOWN_BASE = 8;             // Base cooldown after a threat arc expires
+const HOOK_COOLDOWN_ESCALATION = 4;       // Additional turns per previous threat from same hook
+const HOOK_COOLDOWN_MAX = 20;             // Hard cap on cooldown duration
+const HOOK_RATE_LIMIT_TURNS = 5;          // Min turns between new threats from the same hook
+const RESEED_BLOCK_TURNS = 10;            // Turns before expired threat entities can be reused
+const RESEED_ENTITY_OVERLAP_THRESHOLD = 1; // Shared entity names to trigger re-seed block
+
+// v1.11: Scaled overlap — dynamic minimum based on hook significant-word count
+const OVERLAP_MIN_DEFAULT = 2;            // For hooks with ≤10 significant words (existing behavior)
+const OVERLAP_MIN_MEDIUM = 3;             // For hooks with 11-15 significant words
+const OVERLAP_MIN_BROAD = 4;              // For hooks with 16+ significant words
+const WEAK_OVERLAP_WEIGHT = 0.5;          // Faction/setting words count half toward overlap
 
 // v1.10: De facto combat detection — verbs in NPC actions that indicate actual combat
 // regardless of the AI's stated scene_mode. If the scene contains these, it IS combat.
@@ -611,23 +625,84 @@ const validateThreatCausality = (
 
     // Gate 1: Dormant Hook reference
     // v1.8: The hook's summary must have semantic overlap with the threat description.
-    // This prevents citing "wealth target" hook for a "magic tracking" threat.
+    // v1.11: SCALED overlap — broad hooks require more matching words.
+    //        Faction/setting words count as half-weight toward the overlap score.
+    //        Hook cooldown blocks re-seeding after threat arc conclusion.
     if (threat.dormantHookId) {
         const hook = dormantHooks.find(h => h.id === threat.dormantHookId);
         if (hook && hook.status !== 'resolved') {
-            // v1.8: Semantic overlap check — at least 2 significant words must overlap
+            // v1.11 FIX 2: Hook Cooldown — check if hook is in cooldown period
+            if (hook.cooldownUntilTurn !== undefined && currentTurn < hook.cooldownUntilTurn) {
+                const remaining = hook.cooldownUntilTurn - currentTurn;
+                log(
+                    `[ORIGIN GATE ✗ — v1.11 HOOK COOLDOWN] "${desc}" — ` +
+                    `hook "${hook.id}" is in cooldown until turn ${hook.cooldownUntilTurn} ` +
+                    `(${remaining} turns remaining). Previous threat arc from this hook ` +
+                    `concluded recently. BLOCKED.`
+                );
+                return false;
+            }
+
+            // v1.11 FIX 1: Scaled semantic overlap based on hook breadth
             const hookWords = significantWords(hook.summary);
             const threatWords = significantWords(threat.description);
+            const hookWordCount = hookWords.size;
+
+            // Determine minimum overlap based on hook breadth
+            let overlapMinimum: number;
+            if (hookWordCount >= 16) {
+                overlapMinimum = OVERLAP_MIN_BROAD;  // 4 words for very broad hooks
+            } else if (hookWordCount >= 11) {
+                overlapMinimum = OVERLAP_MIN_MEDIUM;  // 3 words for medium hooks
+            } else {
+                overlapMinimum = OVERLAP_MIN_DEFAULT;  // 2 words for narrow hooks
+            }
+
+            // v1.11: Identify faction/setting words — words from involvedEntities
+            // or the player name. These match ANY threat from that faction, providing
+            // weak signal. They count as 0.5 instead of 1.0 toward overlap.
+            const factionWordsLower = new Set<string>();
+            for (const entity of hook.involvedEntities) {
+                for (const part of entity.toLowerCase().split(/\s+/)) {
+                    if (part.length > 2) factionWordsLower.add(part);
+                }
+            }
+            const playerNameParts = playerCharacterName.toLowerCase().split(/\s+/).filter(p => p.length >= 3);
+            for (const part of playerNameParts) {
+                factionWordsLower.add(part);
+            }
+
+            // Calculate weighted overlap score
             const overlap = [...hookWords].filter(w => threatWords.has(w));
-            if (overlap.length >= 2) {
-                log(`[ORIGIN GATE ✓] "${desc}" — hook: ${hook.summary} (overlap: [${overlap.join(', ')}])`);
+            let weightedScore = 0;
+            const strongOverlap: string[] = [];
+            const weakOverlap: string[] = [];
+
+            for (const word of overlap) {
+                if (factionWordsLower.has(word)) {
+                    weightedScore += WEAK_OVERLAP_WEIGHT;
+                    weakOverlap.push(word);
+                } else {
+                    weightedScore += 1.0;
+                    strongOverlap.push(word);
+                }
+            }
+
+            if (weightedScore >= overlapMinimum) {
+                log(
+                    `[ORIGIN GATE ✓] "${desc}" — hook: ${hook.summary} ` +
+                    `(weighted overlap: ${weightedScore.toFixed(1)}/${overlapMinimum}, ` +
+                    `strong: [${strongOverlap.join(', ')}], ` +
+                    `weak/faction: [${weakOverlap.join(', ')}])`
+                );
                 return true;
             }
             log(
-                `[ORIGIN GATE ✗ — v1.8 SEMANTIC MISMATCH] "${desc}" — ` +
-                `hook "${hook.id}" summary has insufficient overlap with threat description ` +
-                `(${overlap.length} shared words: [${overlap.join(', ')}]). ` +
-                `The hook topic doesn't match the threat topic. BLOCKED.`
+                `[ORIGIN GATE ✗ — v1.11 SCALED MISMATCH] "${desc}" — ` +
+                `hook "${hook.id}" has ${hookWordCount} significant words → ` +
+                `requires ${overlapMinimum} weighted overlap. Got ${weightedScore.toFixed(1)} ` +
+                `(strong: [${strongOverlap.join(', ')}], weak/faction: [${weakOverlap.join(', ')}]). ` +
+                `Faction words [${[...factionWordsLower].join(', ')}] count as ${WEAK_OVERLAP_WEIGHT} each. BLOCKED.`
             );
             return false;
         }
@@ -973,7 +1048,8 @@ const processThreatSeeds = (
     factionExposure: FactionExposure = {},  // v1.6: origin gate
     knownEntityNames: string[] = [],        // v1.8: entity-name continuity
     playerCharacterName: string = '',       // v1.8: exclude player name from entity matching
-    sceneMode: string = 'NARRATIVE'         // v1.9: scene-aware floors + origin gate bypass
+    sceneMode: string = 'NARRATIVE',        // v1.9: scene-aware floors + origin gate bypass
+    threatArcHistory: ThreatArcHistory = {} // v1.11: for re-seed detection
 ): WorldTickEvent[] => {
     const log = (message: string, type: DebugLogEntry['type'] = 'warning') => {
         debugLogs.push({ timestamp: new Date().toISOString(), message, type });
@@ -1203,6 +1279,8 @@ const processThreatSeeds = (
             consecutiveTurnsAtEtaOne,
             turns_until_impact: currentEta,
             status,
+            // v1.11: Lock the originating hook ID at creation for cooldown tracking
+            originHookId: existing?.originHookId ?? threat.dormantHookId,
         };
     });
 
@@ -1215,11 +1293,68 @@ const processThreatSeeds = (
     // entities physically present in the scene (archers shooting, cavalry charging,
     // environmental hazards). Requiring a dormant hook or observer for "the lance is
     // about to hit you" is nonsensical. ETA floors (now scene-aware) handle timing.
-    const causallyValid = sceneMode === 'COMBAT'
+    const gatePassed = sceneMode === 'COMBAT'
         ? processed
         : processed.filter(threat =>
             validateThreatCausality(threat, dormantHooks, factionExposure, currentTurn, debugLogs, knownEntityNames, playerCharacterName)
         );
+
+    // v1.11 FIX 5: Conceptual Re-Seed Detection — block threats reusing expired entity actors
+    const reseedFiltered = gatePassed.filter(threat => {
+        if (threat.turnCreated !== currentTurn) return true; // Only check new threats
+        const incomingNames = extractEntityNamesFromDescription(
+            threat.description, knownEntityNames, playerCharacterName
+        );
+        if (incomingNames.length === 0) return true;
+
+        for (const [sourceKey, entries] of Object.entries(threatArcHistory)) {
+            for (const entry of entries) {
+                const turnsSinceExpiry = currentTurn - entry.expiredTurn;
+                if (turnsSinceExpiry > RESEED_BLOCK_TURNS) continue;
+                const sharedNames = incomingNames.filter(n => entry.entityNames.includes(n));
+                if (sharedNames.length >= RESEED_ENTITY_OVERLAP_THRESHOLD) {
+                    log(
+                        `[ORIGIN GATE ✗ — v1.11 RE-SEED BLOCKED] ` +
+                        `"${threat.description.substring(0, 80)}" — shares entity name(s) ` +
+                        `[${sharedNames.join(', ')}] with recently expired threat ` +
+                        `"${entry.descriptionSnippet}" (expired turn ${entry.expiredTurn}, ` +
+                        `${turnsSinceExpiry} turns ago, block window: ${RESEED_BLOCK_TURNS}). ` +
+                        `New threats using the same actors are blocked for ${RESEED_BLOCK_TURNS} turns.`,
+                        'warning'
+                    );
+                    return false;
+                }
+            }
+        }
+        return true;
+    });
+
+    // v1.11 FIX 3: Per-Hook Rate Limiting — min turns between threats from same hook
+    const hookLastCreated: Map<string, number> = new Map();
+    for (const t of existingThreats) {
+        const hookId = t.originHookId ?? t.dormantHookId;
+        if (!hookId) continue;
+        const existing = hookLastCreated.get(hookId) ?? 0;
+        if ((t.turnCreated ?? 0) > existing) hookLastCreated.set(hookId, t.turnCreated ?? 0);
+    }
+    const causallyValid = reseedFiltered.filter(threat => {
+        if (threat.turnCreated !== currentTurn) return true;
+        const hookId = threat.dormantHookId;
+        if (!hookId) return true;
+        const lastCreated = hookLastCreated.get(hookId);
+        if (lastCreated === undefined) return true;
+        const gap = currentTurn - lastCreated;
+        if (gap < HOOK_RATE_LIMIT_TURNS) {
+            log(
+                `[HOOK RATE LIMIT — v1.11] "${threat.description.substring(0, 60)}" — ` +
+                `hook "${hookId}" already sourced a threat ${gap} turns ago ` +
+                `(turn ${lastCreated}). Minimum gap: ${HOOK_RATE_LIMIT_TURNS} turns. BLOCKED.`,
+                'warning'
+            );
+            return false;
+        }
+        return true;
+    });
 
     // Step 2: Filter out expired seeds (operates on gate-passed threats only)
     const active = causallyValid.filter(t => t.status !== 'expired' && t.status !== 'triggered');
@@ -1233,6 +1368,241 @@ const processThreatSeeds = (
     }
 
     return active;
+};
+
+// ---------------------------------------------------------------------------
+// v1.11: Phantom Entity Detection — blocks unregistered hostile NPC actions
+// ---------------------------------------------------------------------------
+
+const GENERIC_ROLE_WORDS = new Set([
+    'agent', 'scout', 'guard', 'captain', 'leader', 'archer', 'tracker',
+    'buyer', 'seller', 'merchant', 'soldier', 'warrior', 'mage', 'priest',
+    'hunter', 'spy', 'thief', 'assassin', 'knight', 'sergeant', 'commander',
+    'dead', 'alive', 'former', 'current', 'surviving', 'escaped', 'backup',
+]);
+
+/**
+ * v1.11: Extract hostile faction keywords from knownEntities.
+ * Any entity with NEMESIS or HOSTILE relationship contributes its role's
+ * significant words (excluding generic role words) as faction identifiers.
+ */
+const extractHostileFactionKeywords = (
+    knownEntities: Array<{ name: string; role: string; relationship_level: string }>
+): Set<string> => {
+    const keywords = new Set<string>();
+    const hostileLevels = new Set(['NEMESIS', 'HOSTILE']);
+
+    for (const entity of knownEntities) {
+        if (!hostileLevels.has(entity.relationship_level)) continue;
+        const roleParts = entity.role.toLowerCase().split(/[\s()\-_,]/);
+        for (const part of roleParts) {
+            if (part.length >= 4 && !GENERIC_ROLE_WORDS.has(part)) {
+                keywords.add(part);
+            }
+        }
+    }
+
+    return keywords;
+};
+
+/**
+ * v1.11 FIX 4: Blocks NPC actions from entities that are NOT in the
+ * knownEntities registry AND whose names contain hostile faction identifiers.
+ * Closes the gap where the AI invents brand-new hostile NPCs that bypass
+ * coherence checks because they aren't linked to any existing threat.
+ */
+const validateNpcEntityRegistration = (
+    npcActions: WorldTickAction[],
+    knownEntityNames: string[],
+    emergingThreats: WorldTickEvent[],
+    hostileFactionKeywords: Set<string>,
+    debugLogs: DebugLogEntry[],
+    sceneMode: string = 'NARRATIVE'
+): WorldTickAction[] => {
+    if (sceneMode === 'COMBAT') return npcActions;
+    if (hostileFactionKeywords.size === 0) return npcActions;
+
+    const knownNamesLower = knownEntityNames.map(n => n.toLowerCase());
+    const knownFirstNames = new Set<string>();
+    for (const name of knownNamesLower) {
+        for (const part of name.split(/[\s(']/)) {
+            if (part.length >= 3) knownFirstNames.add(part.trim());
+        }
+    }
+
+    const threatEntityNames = new Set<string>();
+    for (const threat of emergingThreats) {
+        for (const name of (threat.entitySourceNames ?? [])) {
+            threatEntityNames.add(name);
+        }
+    }
+
+    return npcActions.filter(action => {
+        const npcNameLower = action.npc_name.toLowerCase();
+
+        // Is this NPC in the known entities registry?
+        const isKnown = knownNamesLower.some(known => {
+            const firstName = known.split(/[\s(']/)[0].trim();
+            return firstName.length >= 3 && (
+                npcNameLower.includes(firstName) || firstName.includes(npcNameLower.split(/[\s(']/)[0])
+            );
+        });
+        if (isKnown) return true;
+
+        // Is this NPC listed in an active threat's entity names?
+        const isInThreat = [...threatEntityNames].some(tn => npcNameLower.includes(tn));
+        if (isInThreat) return true;
+
+        // Does this NPC's name contain hostile faction keywords?
+        const npcNameParts = npcNameLower.split(/[\s()\-_]/);
+        const hasHostileFactionId = npcNameParts.some(part =>
+            part.length >= 3 && hostileFactionKeywords.has(part)
+        );
+
+        if (hasHostileFactionId) {
+            debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[NPC ACTION BLOCKED — v1.11 PHANTOM ENTITY] "${action.npc_name}: ` +
+                    `${action.action.substring(0, 100)}" — NPC is not in knownEntities ` +
+                    `registry and name contains hostile faction keyword. Unregistered ` +
+                    `hostile entities cannot take actions. Register via known_entity_updates first.`,
+                type: 'error'
+            });
+            return false;
+        }
+
+        return true;
+    });
+};
+
+// ---------------------------------------------------------------------------
+// v1.11: Hook Cooldown + Threat Arc History Management
+// ---------------------------------------------------------------------------
+
+/**
+ * v1.11 FIX 2: After processing threats, check for hooks whose threat arcs
+ * have concluded (all threats sourced from the hook are now expired/resolved).
+ * Apply cooldown to prevent immediate re-seeding. Also records expired threats
+ * in threatArcHistory for re-seed detection (FIX 5).
+ */
+const updateHookCooldowns = (
+    hooks: DormantHook[],
+    previousThreats: WorldTickEvent[],
+    currentThreats: WorldTickEvent[],
+    currentTurn: number,
+    threatArcHistory: ThreatArcHistory,
+    debugLogs: DebugLogEntry[]
+): { updatedHooks: DormantHook[]; updatedArcHistory: ThreatArcHistory } => {
+    const updatedHistory = { ...threatArcHistory };
+
+    // Find threats that existed last turn but are gone now
+    const currentIds = new Set(currentThreats.map(t => t.id).filter(Boolean));
+    const expiredThreats = previousThreats.filter(t => t.id && !currentIds.has(t.id));
+
+    // Record expired threats in arc history
+    for (const expired of expiredThreats) {
+        const sourceKey = expired.originHookId ?? expired.dormantHookId ?? 'unknown';
+        if (!updatedHistory[sourceKey]) updatedHistory[sourceKey] = [];
+        updatedHistory[sourceKey].push({
+            entityNames: expired.entitySourceNames ?? [],
+            expiredTurn: currentTurn,
+            descriptionSnippet: expired.description.substring(0, 80),
+        });
+        if (updatedHistory[sourceKey].length > 10) {
+            updatedHistory[sourceKey] = updatedHistory[sourceKey].slice(-10);
+        }
+    }
+
+    // Prune stale arc history entries
+    const pruneThreshold = currentTurn - (RESEED_BLOCK_TURNS * 2);
+    for (const key of Object.keys(updatedHistory)) {
+        updatedHistory[key] = updatedHistory[key].filter(e => e.expiredTurn > pruneThreshold);
+        if (updatedHistory[key].length === 0) delete updatedHistory[key];
+    }
+
+    // Check each activated hook — if ALL its sourced threats are gone, apply cooldown
+    const updatedHooks = hooks.map(hook => {
+        if (hook.status !== 'activated') return hook;
+
+        const hasActiveThreats = currentThreats.some(t =>
+            (t.originHookId === hook.id || t.dormantHookId === hook.id)
+        );
+        if (hasActiveThreats) return hook;
+
+        const justExpired = expiredThreats.some(t =>
+            (t.originHookId === hook.id || t.dormantHookId === hook.id)
+        );
+        if (!justExpired) return hook;
+
+        const prevCount = hook.totalThreatsSourced ?? 0;
+        const cooldownDuration = Math.min(
+            HOOK_COOLDOWN_MAX,
+            HOOK_COOLDOWN_BASE + (prevCount * HOOK_COOLDOWN_ESCALATION)
+        );
+        const cooldownUntil = currentTurn + cooldownDuration;
+
+        debugLogs.push({
+            timestamp: new Date().toISOString(),
+            message: `[HOOK COOLDOWN — v1.11] Hook "${hook.id}" — all sourced threats ` +
+                `have expired/resolved. Applying ${cooldownDuration}-turn cooldown ` +
+                `(until turn ${cooldownUntil}). Previous threats sourced: ${prevCount}.`,
+            type: 'warning'
+        });
+
+        return {
+            ...hook,
+            cooldownUntilTurn: cooldownUntil,
+            lastThreatExpiredTurn: currentTurn,
+            totalThreatsSourced: prevCount + 1,
+        };
+    });
+
+    return { updatedHooks, updatedArcHistory: updatedHistory };
+};
+
+/**
+ * v1.11 FIX 7: When ALL threats from a faction expire and no threat entities
+ * from that faction remain active, aggressively decay faction exposure.
+ */
+const decayFactionExposureOnArcConclusion = (
+    factionExposure: FactionExposure,
+    previousThreats: WorldTickEvent[],
+    currentThreats: WorldTickEvent[],
+    currentTurn: number,
+    debugLogs: DebugLogEntry[]
+): FactionExposure => {
+    const updated = { ...factionExposure };
+
+    const currentFactions = new Set(
+        currentThreats.map(t => t.factionSource).filter(Boolean)
+    );
+    const expiredFactions = new Set(
+        previousThreats
+            .filter(t => t.factionSource && !currentFactions.has(t.factionSource))
+            .map(t => t.factionSource!)
+    );
+
+    for (const faction of expiredFactions) {
+        const stillActive = currentThreats.some(t =>
+            t.description.toLowerCase().includes(faction.toLowerCase())
+        );
+        if (stillActive) continue;
+
+        const entry = updated[faction];
+        if (!entry || entry.exposureScore <= 5) continue;
+
+        const newScore = Math.min(entry.exposureScore, 10);
+        debugLogs.push({
+            timestamp: new Date().toISOString(),
+            message: `[EXPOSURE DECAY — v1.11] ${faction}: ${entry.exposureScore} → ${newScore} ` +
+                `(all threats from this faction have expired — aggressive decay below threshold)`,
+            type: 'info'
+        });
+
+        updated[faction] = { ...entry, exposureScore: newScore };
+    }
+
+    return updated;
 };
 
 // ---------------------------------------------------------------------------
@@ -1722,12 +2092,31 @@ const pendingLore: LoreItem[] = [];
             // Overwrite so downstream processing (exposure scoring, etc.) uses validated set
             r.world_tick.npc_actions = validatedNpcActions;
 
-            const hiddenActions = validatedNpcActions.filter(a => !a.player_visible);
+            // v1.11 FIX 4: Phantom Entity Detection — block NPC actions from
+            // unregistered entities whose names contain hostile faction keywords.
+            const hostileFactionKws = extractHostileFactionKeywords(
+                (currentWorld.knownEntities ?? []).map(e => ({
+                    name: e.name,
+                    role: e.role,
+                    relationship_level: e.relationship_level
+                }))
+            );
+            const knownEntityNames = (currentWorld.knownEntities ?? []).map(e => e.name);
+            r.world_tick.npc_actions = validateNpcEntityRegistration(
+                r.world_tick.npc_actions,
+                knownEntityNames,
+                ((currentWorld as any).emergingThreats as WorldTickEvent[]) ?? [],
+                hostileFactionKws,
+                debugLogs,
+                currentSceneMode
+            );
+
+            const hiddenActions = r.world_tick.npc_actions.filter(a => !a.player_visible);
             for (const action of hiddenActions) {
                 newHiddenRegistry += `\n[${newTime.display}] [WORLD-TICK] ${action.npc_name}: ${action.action}`;
             }
 
-            const visibleActions = validatedNpcActions.filter(a => a.player_visible);
+            const visibleActions = r.world_tick.npc_actions.filter(a => a.player_visible);
             for (const action of visibleActions) {
                 debugLogs.push({
                     timestamp: new Date().toISOString(),
@@ -1754,7 +2143,7 @@ const pendingLore: LoreItem[] = [];
             // v1.10: Allied NPC passivity detection — flag when bonded/companion NPCs
             // are passive while hostile combat actions are occurring.
             const passiveAllies = detectAlliedPassivity(
-                validatedNpcActions,
+                r.world_tick.npc_actions,
                 (currentWorld.knownEntities ?? []).map(e => ({
                     name: e.name,
                     role: e.role,
@@ -1776,8 +2165,7 @@ const pendingLore: LoreItem[] = [];
             );
             (currentWorld as any).factionExposure = updatedExposure;
 
-            // v1.6 / v1.4 / v1.8 / v1.9: Threat seed state machine with Origin Gate + ETA floors + entity continuity + scene awareness
-            const knownEntityNames = (currentWorld.knownEntities ?? []).map(e => e.name);
+            // v1.6 / v1.4 / v1.8 / v1.9 / v1.11: Threat seed state machine with Origin Gate + ETA floors + entity continuity + scene awareness + re-seed detection
             const processedThreats = processThreatSeeds(
                 r.world_tick.emerging_threats,
                 ((currentWorld as any).emergingThreats as WorldTickEvent[]) ?? [],
@@ -1787,7 +2175,8 @@ const pendingLore: LoreItem[] = [];
                 updatedExposure,
                 knownEntityNames,
                 character.name,
-                currentSceneMode  // v1.9
+                currentSceneMode,  // v1.9
+                ((currentWorld as any).threatArcHistory as ThreatArcHistory) ?? {} // v1.11
             );
 
             // v1.6: Activate dormant hooks referenced by processed threats
@@ -1808,6 +2197,29 @@ const pendingLore: LoreItem[] = [];
             }
             (currentWorld as any).dormantHooks = currentHooks;
 
+            // v1.11 FIX 2 + FIX 5: Hook Cooldown + Threat Arc History
+            // Use the snapshot taken before processing for comparison
+            const previousEmergingThreats = existingEmergingForCoherence;
+            const { updatedHooks: cooldownHooks, updatedArcHistory } = updateHookCooldowns(
+                currentHooks,
+                previousEmergingThreats,
+                processedThreats,
+                currentTurn,
+                ((currentWorld as any).threatArcHistory as ThreatArcHistory) ?? {},
+                debugLogs
+            );
+            (currentWorld as any).dormantHooks = cooldownHooks;
+            (currentWorld as any).threatArcHistory = updatedArcHistory;
+
+            // v1.11 FIX 7: Aggressive exposure decay when faction threat arcs conclude
+            (currentWorld as any).factionExposure = decayFactionExposureOnArcConclusion(
+                (currentWorld as any).factionExposure as FactionExposure ?? {},
+                previousEmergingThreats,
+                processedThreats,
+                currentTurn,
+                debugLogs
+            );
+
             // v1.7: Only write NEW threats to hidden registry. Existing threats
             // get a single consolidated status line. This prevents the feedback
             // loop where 30+ [EMERGING] entries cause the AI to escalate faster.
@@ -1822,12 +2234,34 @@ const pendingLore: LoreItem[] = [];
                 const eta = threat.turns_until_impact !== undefined
                     ? ` (ETA: ~${threat.turns_until_impact} turns)`
                     : '';
-                newHiddenRegistry += `\n[${newTime.display}] [NEW THREAT] ${threat.description}${eta}`;
+                // v1.11 FIX 6: Tag registry entries with threat ID for tracking
+                const tag = threat.id ? `[THREAT:${threat.id}] ` : '';
+                newHiddenRegistry += `\n[${newTime.display}] ${tag}[NEW THREAT] ${threat.description}${eta}`;
                 debugLogs.push({
                     timestamp: new Date().toISOString(),
                     message: `[NEW THREAT SEED] ${threat.description}${eta}`,
                     type: 'warning'
                 });
+            }
+
+            // v1.11 FIX 6: Write expiry markers for threats that just disappeared.
+            // This tells the AI (and future context) that the threat is over.
+            const previousThreatIds = new Set(
+                (previousEmergingThreats ?? []).map(t => t.id).filter(Boolean)
+            );
+            const currentThreatIds = new Set(
+                processedThreats.map(t => t.id).filter(Boolean)
+            );
+            for (const prev of (previousEmergingThreats ?? [])) {
+                if (prev.id && !currentThreatIds.has(prev.id)) {
+                    const reason = prev.status === 'expired' ? 'auto-expired (ETA ~1 timeout)'
+                        : prev.status === 'triggered' ? 'triggered (became active scene)'
+                        : 'blocked/removed by engine validation';
+                    const tag = `[THREAT:${prev.id}] `;
+                    newHiddenRegistry += `\n[${newTime.display}] ${tag}[THREAT EXPIRED] ` +
+                        `"${prev.description.substring(0, 60)}" — ${reason}. ` +
+                        `Prior registry entries for this threat are HISTORICAL ONLY.`;
+                }
             }
 
             // Single consolidated line for continuing threats — no per-threat spam
@@ -2057,6 +2491,8 @@ const pendingLore: LoreItem[] = [];
                 emergingThreats: finalEmergingThreats,
                 // v1.10: Flag for sectionReminders to fire allied proactivity every turn
                 passiveAlliesDetected: ((currentWorld as any).__passiveAllies ?? []).length > 0,
+                // v1.11: Threat arc history for re-seed detection
+                threatArcHistory: ((currentWorld as any).threatArcHistory as ThreatArcHistory) ?? {},
             } as GameWorld & { emergingThreats: WorldTickEvent[] },
             characterUpdate: {
                 ...character,

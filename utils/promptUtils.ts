@@ -191,12 +191,22 @@ const buildDormantHooksContext = (
     if (dormantHooks.length > 0) {
         lines.push('DORMANT HOOKS (pre-existing tension vectors from character background):');
         lines.push('To pass Origin Test A, set dormant_hook_id to the exact ID shown below.');
+        // v1.11: Inform AI about scaled overlap requirements
+        lines.push('NOTE: Broad hooks require MORE thematic overlap words (not just faction names).');
+        lines.push('Faction/setting words (e.g., a faction name) count as HALF weight toward overlap.');
         lines.push('');
         for (const hook of dormantHooks) {
             const statusMark =
                 hook.status === 'dormant'   ? '◆ DORMANT'   :
                 hook.status === 'activated' ? '▶ ACTIVE'    : '✓ RESOLVED';
-            lines.push(`  ${statusMark} [${hook.id}]`);
+
+            // v1.11: Show cooldown status
+            let cooldownNote = '';
+            if (hook.cooldownUntilTurn !== undefined && hook.cooldownUntilTurn > 0) {
+                cooldownNote = ` ⏸ COOLDOWN (cannot source new threats yet)`;
+            }
+
+            lines.push(`  ${statusMark}${cooldownNote} [${hook.id}]`);
             lines.push(`    ${hook.summary}`);
             lines.push(`    Activates when: ${hook.activationConditions}`);
             if (hook.involvedEntities.length > 0) {

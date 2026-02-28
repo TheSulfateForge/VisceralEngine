@@ -174,6 +174,10 @@ export interface DormantHook {
     status: HookStatus;
     activatedTurn?: number;
     resolvedTurn?: number;
+    // v1.11: Hook Cooldown — prevents infinite threat re-seeding from broad hooks
+    cooldownUntilTurn?: number;       // Hook cannot source new threats until this turn
+    lastThreatExpiredTurn?: number;   // When the most recent threat from this hook expired
+    totalThreatsSourced?: number;     // Lifetime count — used for escalating cooldowns
 }
 
 // --- v1.6: Faction Exposure Scoring ---
@@ -195,6 +199,20 @@ export interface FactionExposureEntry {
 /** Keyed by faction name or NPC name for individuals. */
 export type FactionExposure = Record<string, FactionExposureEntry>;
 
+// --- v1.11: Threat Arc History ---
+// Tracks entity names from expired/blocked threats to prevent re-seeding.
+// When a threat expires, its actors are recorded here so the AI can't
+// immediately create a "new" threat with the same entity names.
+
+export interface ThreatArcEntry {
+    entityNames: string[];          // lowercase entity names from the expired threat
+    expiredTurn: number;            // when this threat expired/was blocked
+    descriptionSnippet: string;     // first 80 chars for debug logging
+}
+
+/** Keyed by hookId, "playerAction", or "factionExposure". */
+export type ThreatArcHistory = Record<string, ThreatArcEntry[]>;
+
 export interface WorldTickEvent {
     description: string;
     turns_until_impact?: number;
@@ -212,6 +230,10 @@ export interface WorldTickEvent {
     // v1.8 additions — Anti-replacement loop fields (engine-managed):
     entitySourceNames?: string[];  // Entity names extracted from description at creation for continuity matching
     pivotPenaltyApplied?: number;  // Turn when a plan-pivot penalty was last applied (prevents stacking)
+    // v1.9 addition:
+    originalEta?: number;          // ETA at creation, for tracking progression vs retcon
+    // v1.11: Track which hook sourced this threat (immutable after creation)
+    originHookId?: string;         // Set once at creation; used for cooldown + re-seed detection
 }
 
 // --- Faction Intelligence (v1.3) ---
@@ -447,6 +469,9 @@ export interface GameWorld {
     // v1.6 — Dormant Hook Registry + Exposure Scoring
     dormantHooks: DormantHook[];
     factionExposure: FactionExposure;
+
+    // v1.11 — Threat Arc History for re-seed detection
+    threatArcHistory?: ThreatArcHistory;
 }
 
 export interface WorldTime {
