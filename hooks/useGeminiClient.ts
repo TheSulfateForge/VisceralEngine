@@ -7,7 +7,7 @@ import { constructGeminiPrompt } from '../utils/promptUtils';
 import { GeminiService } from '../geminiService';
 import { useGameStore } from '../store';
 import { SimulationEngine } from '../utils/simulationEngine';
-import { getSectionReminder } from '../sectionReminders';
+import { getSectionReminders } from '../sectionReminders';
 
 // Extracted Hooks & Utils
 import { useGeminiService } from './useGeminiService';
@@ -16,6 +16,7 @@ import { useScenarioGen } from './useScenarioGen';
 import { useCharacterGen } from './useCharacterGen';
 import { processCharacterUpdates } from '../utils/characterDelta';
 import { deduplicateConditions } from '../utils/characterUtils';
+import { significantWords } from '../utils/contentValidation';
 
 const SUMMARIZATION_INTERVAL = 20;
 
@@ -74,6 +75,67 @@ export const useGeminiClient = () => {
       timestamp: new Date().toISOString()
     };
 
+    // v1.12 FIX UI-1: Detect player rejection of AI fabrications
+    // When the player writes CANCEL/DELETE/REMOVE, extract the rejected
+    // concept and add it to bannedMechanisms so the engine blocks re-use.
+    const REJECTION_MARKERS = ['CANCEL', 'DELETE', 'REMOVE', 'bullshit', 'doesn\'t exist', 'does not exist'];
+    const hasRejection = REJECTION_MARKERS.some(marker => 
+        text.toUpperCase().includes(marker.toUpperCase())
+    );
+    
+    if (hasRejection) {
+        const currentWorld = useGameStore.getState().gameWorld;
+        const currentBanned = ((currentWorld as any).bannedMechanisms as string[][]) ?? [];
+        
+        // Extract the rejected concept keywords from the player's message
+        // Look for threat descriptions in the CANCEL text (between quotes or after keywords)
+        const threatDescMatch = text.match(/(?:CANCEL|DELETE|REMOVE)[^"]*"([^"]+)"/i) 
+            ?? text.match(/(?:CANCEL|DELETE|REMOVE)\s+(?:THIS\s+)?(.+?)(?:\.|$)/im);
+        
+        if (threatDescMatch) {
+            const rejectedText = threatDescMatch[1];
+            const rejectedWords = [...significantWords(rejectedText)];
+            
+            if (rejectedWords.length >= 3) {
+                const updatedBanned = [...currentBanned, rejectedWords];
+                // Cap at 20 banned mechanisms to prevent unbounded growth
+                const trimmedBanned = updatedBanned.slice(-20);
+                
+                useGameStore.getState().setGameWorld({
+                    ...currentWorld,
+                    bannedMechanisms: trimmedBanned
+                } as any);
+                
+                console.log('[v1.12] Banned mechanism added:', rejectedWords);
+            }
+        }
+        
+        // Also check for specific mechanism rejections stated in natural language
+        // e.g., "Hucows do not produce a trackable pheromone"
+        const MECHANISM_DENIAL_PATTERNS = [
+            /(?:does?\s+not?|doesn'?t|don'?t|cannot|can'?t)\s+(?:have|carry|produce|emit|use|possess)\s+(.+?)(?:\.|$)/gi,
+            /(?:such a thing|no such thing|that)\s+(?:does\s+not|doesn'?t)\s+exist/gi,
+        ];
+        
+        for (const pattern of MECHANISM_DENIAL_PATTERNS) {
+            let match;
+            while ((match = pattern.exec(text)) !== null) {
+                if (match[1]) {
+                    const deniedWords = [...significantWords(match[1])];
+                    if (deniedWords.length >= 2) {
+                        const currentBannedNow = ((useGameStore.getState().gameWorld as any).bannedMechanisms as string[][]) ?? [];
+                        const updatedBannedNow = [...currentBannedNow, deniedWords].slice(-20);
+                        useGameStore.getState().setGameWorld({
+                            ...useGameStore.getState().gameWorld,
+                            bannedMechanisms: updatedBannedNow
+                        } as any);
+                        console.log('[v1.12] Mechanism denial banned:', deniedWords);
+                    }
+                }
+            }
+        }
+    }
+
     setGameHistory(prev => ({
         ...prev,
         history: [...prev.history, userMsg],
@@ -101,17 +163,21 @@ export const useGeminiClient = () => {
         
         // Debug Log the injected reminder if active
         // v1.5: Pass entityCount and goalCount to match updated signature.
-        const activeReminder = getSectionReminder(
+        const activeReminders = getSectionReminders(
             preCallState.gameHistory.turnCount,
             preCallState.gameWorld.sceneMode,
             preCallState.gameWorld.lastBargainTurn ?? 0,
             preCallState.gameWorld.turnCount ?? 0,
             preCallState.character.conditions.length,
-            (preCallState.gameWorld.knownEntities ?? []).length,   // FIX 6
-            (preCallState.character.goals ?? []).length,           // FIX 11
-            ((preCallState.gameWorld as any).emergingThreats ?? []).length,  // v1.7
-            !!(preCallState.gameWorld as any).passiveAlliesDetected          // v1.10
+            (preCallState.gameWorld.knownEntities ?? []).length,
+            (preCallState.character.goals ?? []).length,
+            ((preCallState.gameWorld as any).emergingThreats ?? []).length,
+            !!((preCallState.gameWorld as any).__passiveAllies as string[] | undefined)?.length
         );
+        // Join multiple reminders into a single string for the prompt
+        const activeReminder = activeReminders.length > 0 
+            ? activeReminders.join('\n\n---\n\n') 
+            : null;
         let requestLogs = [...preCallState.gameHistory.debugLog];
         
         

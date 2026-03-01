@@ -189,7 +189,7 @@ const STOP_WORDS = new Set([
     'his','her','their','its','is','are','was','were','has','have','had',
     'that','this','it','he','she','they','we','i','you','be','been','being',
 ]);
-const SIMILARITY_THRESHOLD = 0.65;
+const SIMILARITY_THRESHOLD = 0.55;
 const LORE_SIMILARITY_THRESHOLD = 0.60;
 // v1.5 FIX 8: Tighter threshold applied when two lore entries share a topic prefix.
 const LORE_SHARED_PREFIX_THRESHOLD = 0.40;
@@ -206,6 +206,33 @@ export const significantWords = (text: string): Set<string> => {
 export const jaccardSimilarity = (a: Set<string>, b: Set<string>): number => {
     const intersection = new Set([...a].filter(w => b.has(w)));
     const union = new Set([...a, ...b]);
+    return union.size === 0 ? 0 : intersection.size / union.size;
+};
+
+/**
+ * v1.12: Bi-gram Jaccard similarity — catches keyword-synonym variations that
+ * word-level Jaccard misses. "Floor 1 Acoustics" vs "Acoustics of Floor 1"
+ * have low word-Jaccard because "of" is a stop word, but high bi-gram overlap.
+ * 
+ * Also handles synonym pairs like "Gear" / "Specs", "Infiltration" / "Guild Infiltration"
+ * by extracting consecutive word pairs and comparing overlap.
+ */
+export const bigramJaccardSimilarity = (a: string, b: string): number => {
+    const toBigrams = (text: string): Set<string> => {
+        const words = text.toLowerCase().replace(/[^a-z0-9 ]/g, '').split(/\s+/).filter(w => w.length > 1);
+        const bigrams = new Set<string>();
+        for (let i = 0; i < words.length - 1; i++) {
+            bigrams.add(`${words[i]}_${words[i + 1]}`);
+        }
+        // Also add individual significant words (length > 3) as unigrams
+        // This ensures single-keyword overlap still counts
+        words.filter(w => w.length > 3).forEach(w => bigrams.add(w));
+        return bigrams;
+    };
+    const bigramsA = toBigrams(a);
+    const bigramsB = toBigrams(b);
+    const intersection = new Set([...bigramsA].filter(b => bigramsB.has(b)));
+    const union = new Set([...bigramsA, ...bigramsB]);
     return union.size === 0 ? 0 : intersection.size / union.size;
 };
 
@@ -226,6 +253,79 @@ export const checkMemoryDuplicate = (
     }
 
     return { isDuplicate: false, isUpdate: false, existingIndex: -1 };
+};
+
+/**
+ * v1.12: Auto-consolidate memory when cap is hit.
+ * Groups memories by significant word overlap (clusters), then replaces each
+ * cluster with the single longest/most-recent entry. Frees slots for new memories.
+ *
+ * Returns a new array with clusters consolidated.
+ */
+export const autoConsolidateMemory = (
+    memory: MemoryItem[],
+    debugLogs: { push: (log: { timestamp: string; message: string; type: string }) => void }
+): MemoryItem[] => {
+    if (memory.length < 30) return memory; // Only consolidate when getting close to cap
+
+    // Build adjacency clusters using a lower threshold (0.40) than dedup (0.55)
+    // This catches "near-related" memories about the same event
+    const CLUSTER_THRESHOLD = 0.40;
+    const visited = new Set<number>();
+    const clusters: number[][] = [];
+
+    for (let i = 0; i < memory.length; i++) {
+        if (visited.has(i)) continue;
+        const cluster = [i];
+        visited.add(i);
+        const wordsI = significantWords(memory[i].fact);
+
+        for (let j = i + 1; j < memory.length; j++) {
+            if (visited.has(j)) continue;
+            const wordsJ = significantWords(memory[j].fact);
+            const sim = jaccardSimilarity(wordsI, wordsJ);
+            if (sim >= CLUSTER_THRESHOLD) {
+                cluster.push(j);
+                visited.add(j);
+            }
+        }
+
+        if (cluster.length > 1) {
+            clusters.push(cluster);
+        }
+    }
+
+    if (clusters.length === 0) return memory;
+
+    // For each cluster, keep the longest entry (most information)
+    const toRemove = new Set<number>();
+    let freedCount = 0;
+
+    for (const cluster of clusters) {
+        // Sort by fact length descending — keep the longest
+        const sorted = [...cluster].sort((a, b) => memory[b].fact.length - memory[a].fact.length);
+        const keeper = sorted[0];
+        for (let k = 1; k < sorted.length; k++) {
+            toRemove.add(sorted[k]);
+            freedCount++;
+        }
+
+        debugLogs.push({
+            timestamp: new Date().toISOString(),
+            message: `[MEMORY CONSOLIDATION — v1.12] Cluster of ${cluster.length} merged → keeping: "${memory[keeper].fact.substring(0, 60)}" | Removed ${cluster.length - 1} near-duplicates`,
+            type: 'info'
+        });
+    }
+
+    const consolidated = memory.filter((_, i) => !toRemove.has(i));
+
+    debugLogs.push({
+        timestamp: new Date().toISOString(),
+        message: `[MEMORY CONSOLIDATION — v1.12] Freed ${freedCount} slots (${memory.length} → ${consolidated.length})`,
+        type: 'success'
+    });
+
+    return consolidated;
 };
 
 // ---------------------------------------------------------------------------
@@ -281,6 +381,25 @@ export const checkLoreDuplicate = (
         }
     }
 
+    // v1.12 FIX CV-3: Bi-gram fallback for keyword-synonym variations
+    // Only triggers for entries with shared topic prefix that escaped word-Jaccard
+    for (let i = 0; i < existingLore.length; i++) {
+        const existingPrefix = existingLore[i].keyword.trim().split(/\s+/)[0].toLowerCase();
+        const sharedPrefix = newPrefix === existingPrefix && newPrefix.length >= 4;
+        if (!sharedPrefix) continue;
+
+        const bigramSim = bigramJaccardSimilarity(
+            `${newKeyword} ${newContent}`,
+            `${existingLore[i].keyword} ${existingLore[i].content}`
+        );
+
+        // Lower threshold for bi-gram: 0.30 catches "Syndicate Tracking Gear" vs "Syndicate Tracking Specs"
+        if (bigramSim >= 0.30) {
+            const isUpdate = newContent.length > existingLore[i].content.length * 1.25;
+            return { isDuplicate: !isUpdate, isUpdate, existingIndex: i };
+        }
+    }
+
     return { isDuplicate: false, isUpdate: false, existingIndex: -1 };
 };
 
@@ -301,6 +420,47 @@ export const checkConditionDuplicate = (
             return { isDuplicate: true, existingIndex: i };
         }
     }
+    return { isDuplicate: false, existingIndex: -1 };
+};
+
+/**
+ * v1.12: Extracts the mechanical effect from a condition's parenthetical modifier.
+ * "Heavy Breathing (Stamina Recovery -5%)" → "stamina recovery -5%"
+ * "Winded (Stamina Recovery -5%)" → "stamina recovery -5%"
+ * 
+ * Two conditions with identical mechanical effects are duplicates regardless
+ * of their display names.
+ */
+export const extractMechanicalEffect = (condition: string): string | null => {
+    const match = /\(([^)]+)\)/.exec(condition);
+    if (!match) return null;
+    return match[1].toLowerCase().trim();
+};
+
+/**
+ * v1.12: Enhanced condition dedup that also checks mechanical effects.
+ * If two conditions have different names but identical parenthetical effects,
+ * the newer one is a duplicate.
+ */
+export const checkConditionDuplicateEnhanced = (
+    newCondition: string,
+    existingConditions: string[]
+): { isDuplicate: boolean; existingIndex: number } => {
+    // First: standard semantic check
+    const baseResult = checkConditionDuplicate(newCondition, existingConditions);
+    if (baseResult.isDuplicate) return baseResult;
+
+    // Second: mechanical effect check
+    const newEffect = extractMechanicalEffect(newCondition);
+    if (!newEffect) return { isDuplicate: false, existingIndex: -1 };
+
+    for (let i = 0; i < existingConditions.length; i++) {
+        const existingEffect = extractMechanicalEffect(existingConditions[i]);
+        if (existingEffect && existingEffect === newEffect) {
+            return { isDuplicate: true, existingIndex: i };
+        }
+    }
+
     return { isDuplicate: false, existingIndex: -1 };
 };
 
@@ -341,8 +501,18 @@ const TRANSIENT_PREFIXES = [
     'Catharsis',
     'Focused',
     'Tactical Advantage',
+    'Tactical Dominance',
+    'Tactical Overwatch',
+    'Tactical',          // v1.12: catches "Tactical X" variants
     'Rested',
+    'Refreshed',         // v1.12 FIX: was missing — "Refreshed" ≠ "Rested"
     'Well-Fed',
+    'Heightened',        // v1.12 FIX: catches "Heightened Hearing", "Heightened Senses"
+    'Arcane Ready',      // v1.12 FIX: transient magic prep state
+    'Sated',             // v1.12 FIX: catches "Sated Glow", "Sated"
+    'Cold-Blooded',      // v1.12: combat aftermath adrenaline variant
+    'Vermin-Slayer',     // v1.12: post-combat buff
+    'Alpha Slayer',      // v1.12: post-combat buff
 ];
 
 /** In-game minutes after which a named transient auto-expires. */

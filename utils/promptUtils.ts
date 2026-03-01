@@ -1,6 +1,6 @@
 import { GameHistory, GameWorld, Character, SceneMode, MemoryItem, LoreItem, KnownEntity, BioMonitor, ActiveThreat, DormantHook, FactionExposure } from '../types';
 import { retrieveRelevantContext, RAGResult } from './ragEngine';
-import { getSectionReminder } from '../sectionReminders';
+import { getSectionReminders } from '../sectionReminders';
 import { partitionConditions } from './contentValidation';
 import { applyExistingMap } from './nameResolver';
 
@@ -294,7 +294,7 @@ export const constructGeminiPrompt = (
 
   // 5. Section Reminders
   // v1.5: Pass entityCount and goalCount for FIX 6 (entity density) and FIX 11 (goal staleness).
-  const sectionRefresh = getSectionReminder(
+  const sectionRefreshes = getSectionReminders(
     gameHistory.turnCount,
     currentMode as SceneMode,
     gameWorld.lastBargainTurn,
@@ -305,6 +305,7 @@ export const constructGeminiPrompt = (
     ((gameWorld as any).emergingThreats as any[] ?? []).length, // v1.7: logistics check
     !!(gameWorld as any).passiveAlliesDetected         // v1.10: allied passivity
   );
+  const sectionRefresh = sectionRefreshes.length > 0 ? sectionRefreshes.join('\n\n') : null;
   
   // 6. World Pressure (v1.1)
   const worldPressure = buildWorldPressure(

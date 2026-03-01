@@ -302,6 +302,107 @@ const entityDensityViolated = (currentTurnCount: number, entityCount: number): b
 };
 
 /**
+ * v1.12 FIX SR-1: Returns up to 2 section reminders per turn.
+ * 
+ * The v1.10 system only returned one reminder, which meant CONDITION_AUDIT
+ * (when conditions > 30, fires every turn at Priority -1) would permanently
+ * block BARGAIN_CHECK from ever firing. Similarly, allied passivity detection
+ * would block threat integrity checks.
+ *
+ * The new system returns a PRIMARY reminder (highest priority) and optionally
+ * a SECONDARY reminder from a different priority band.
+ */
+export const getSectionReminders = (
+    turnCount: number,
+    mode: SceneMode,
+    lastBargainTurn: number = 0,
+    currentTurnCount: number = 0,
+    conditionsCount: number = 0,
+    entityCount: number = 0,
+    goalCount: number = 999,
+    emergingThreatsCount: number = 0,
+    passiveAlliesDetected: boolean = false
+): string[] => {
+    const reminders: string[] = [];
+
+    // -----------------------------------------------------------------------
+    // BAND 1: Critical (max 1) — conditions that demand immediate attention
+    // -----------------------------------------------------------------------
+    if (conditionsCount > 30) {
+        reminders.push(REMINDERS.CONDITION_AUDIT);
+    } else if (passiveAlliesDetected) {
+        reminders.push(REMINDERS.LOGISTICS_CHECK);
+    }
+
+    // -----------------------------------------------------------------------
+    // BAND 2: Overdue clocks (max 1) — fires alongside Band 1 if applicable
+    // -----------------------------------------------------------------------
+    const turnsSinceLastBargain = currentTurnCount - lastBargainTurn;
+    if (turnsSinceLastBargain >= 25 && currentTurnCount > 0) {
+        // Only add if Band 1 didn't already grab a slot, or if stacking is allowed
+        if (reminders.length < 2) {
+            reminders.push(REMINDERS.BARGAIN_CHECK);
+        }
+    }
+
+    // If Band 1 + Band 2 already filled both slots, return early
+    if (reminders.length >= 2) return reminders.slice(0, 2);
+
+    if (turnCount < 3) return reminders;
+
+    // -----------------------------------------------------------------------
+    // BAND 3: Structural obligations (entity density, threat integrity)
+    // -----------------------------------------------------------------------
+    if (entityDensityViolated(currentTurnCount, entityCount)) {
+        if (reminders.length < 2) reminders.push(REMINDERS.ENTITY_DENSITY);
+    }
+
+    if (reminders.length >= 2) return reminders.slice(0, 2);
+
+    // -----------------------------------------------------------------------
+    // BAND 4: Rotating reminders (fills remaining slot)
+    // -----------------------------------------------------------------------
+    let rotatingReminder: string | null = null;
+
+    if (emergingThreatsCount > 0 && turnCount % 2 === 0) {
+        rotatingReminder = REMINDERS.LOGISTICS_CHECK;
+    } else if (turnCount % 4 === 0) {
+        rotatingReminder = REMINDERS.VOCABULARY;
+    } else if (mode === 'SOCIAL' && turnCount % 3 === 0) {
+        rotatingReminder = REMINDERS.INTIMATE;
+    } else if (mode === 'COMBAT' && turnCount % 3 === 0) {
+        rotatingReminder = REMINDERS.COMBAT;
+    } else if (turnCount % 5 === 0) {
+        rotatingReminder = REMINDERS.CONDITION_AUDIT;
+    } else if ((mode === 'TENSION' || mode === 'COMBAT') && turnCount % 6 === 0) {
+        rotatingReminder = REMINDERS.THREAT_SEED_INTEGRITY;
+    } else if (turnCount % 10 === 0) {
+        rotatingReminder = REMINDERS.THREAT_SEED_INTEGRITY;
+    } else if ((turnCount - 4) % 8 === 0 && turnCount >= 4) {
+        rotatingReminder = REMINDERS.WORLD_NORMALCY;
+    } else if (turnCount % 6 === 1) {
+        rotatingReminder = REMINDERS.FIDELITY;
+    } else if (currentTurnCount > 10 && goalCount < 2) {
+        rotatingReminder = REMINDERS.GOAL_LIFECYCLE;
+    } else if (mode === 'NARRATIVE' && turnCount % 3 === 0 && goalCount < 3) {
+        rotatingReminder = REMINDERS.GOAL_LIFECYCLE;
+    } else if ((turnCount - 2) % 8 === 0 && turnCount >= 2) {
+        rotatingReminder = REMINDERS.GOAL_LIFECYCLE;
+    } else if (turnCount % 7 === 0) {
+        rotatingReminder = REMINDERS.NARRATIVE_INTEGRITY;
+    }
+
+    if (rotatingReminder && reminders.length < 2) {
+        // Don't duplicate a reminder already in the list
+        if (!reminders.includes(rotatingReminder)) {
+            reminders.push(rotatingReminder);
+        }
+    }
+
+    return reminders;
+};
+
+/**
  * Returns the appropriate section reminder for this turn, or null if none applies.
  *
  * v1.6: THREAT_SEED_INTEGRITY now leads with the Origin Gate checklist.

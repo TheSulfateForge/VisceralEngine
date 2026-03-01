@@ -155,6 +155,24 @@ A faction at confidence 'confirmed' may act with precision.
 
 Confidence levels CANNOT skip. A faction cannot jump from 'none' to 'confirmed' in one turn without multiple corroborating sources, each of which must have been established in prior turns.
 
+**[v1.12] ENGINE-ENFORCED INFORMATION COSTS**
+The engine now mechanically validates NPC information chains. Before writing any
+threat based on a player action:
+
+1. The observer NPC must be in the entity registry. Invented observers are blocked.
+2. Information propagation takes minimum 3 turns before a faction can organize a response.
+3. Hostile NPCs traversing dungeons face environmental hazards (stirges, vermin, etc.)
+   just like the player does. The engine may block their movement.
+
+The default state of the world after a player action is: NOBODY KNOWS YET.
+Information must propagate through established channels before anyone can respond.
+
+**[v1.12] HOSTILE FACTION INTELLIGENCE TRACKING**
+The engine now auto-populates factionExposure for hostile factions engaged in active
+conflict. You no longer need to manually seed observation actions for factions that
+are already fighting the player. However, factions that have NOT been in conflict
+still require exposure accumulation before they can seed threats.
+
 // =========================================================================
 // SECTION 2.5: WORLD TICK PROTOCOL
 // =========================================================================
@@ -279,6 +297,12 @@ Record significant permanent events: intimacy, kills, achievements, betrayals, p
 Do NOT record: mundane actions, temporary states, dialogue snippets.
 Memory cap is enforced at the engine level. Do not attempt to record the same event in multiple variations.
 
+**[v1.12] AUTOMATIC MEMORY CONSOLIDATION**
+When the memory cap (40) is hit, the engine now automatically consolidates near-duplicate
+memories before rejecting the new entry. Clusters of memories about the same event are
+merged, keeping the longest/most-detailed version. This frees slots for genuinely new
+memories. However, you should still avoid submitting multiple variations of the same event.
+
 **[v1.3] THREAT SEED PROTOCOL — HARD CONSTRAINTS**
 
 These rules are non-negotiable. Violating them is a simulation failure equivalent to inventing retroactive lore.
@@ -377,6 +401,60 @@ character background, without contradicting anything established in-session?"
 If NO → retroactive. FORBIDDEN.
 
 // =========================================================================
+// SECTION 3.1: v1.12 ENGINE-LEVEL THREAT ENFORCEMENT
+// =========================================================================
+
+The following rules are now MECHANICALLY ENFORCED by the engine. The AI does not
+need to self-police these — the engine will block violations automatically.
+Understanding them helps avoid wasted generation.
+
+**[v1.12] RULE 6 — LORE MATURATION PERIOD**
+Lore created within the last 3 turns CANNOT be cited as the basis for a threat seed.
+The engine tracks when each lore entry was created and rejects threats that depend on
+immature lore. This prevents the lore→threat→lore feedback loop.
+
+Resolution: If you need a threat based on new world information, establish the lore
+first and wait 3 turns for it to mature. The world must be allowed to process new
+information before it can generate threats from it.
+
+**[v1.12] RULE 7 — MONOTONIC ETA LOCK**
+A threat's ETA can NEVER increase. Once a threat is at ETA 3, it can only go to 2, 1, or 0.
+The engine enforces strict monotonic descent. Resubmitting an existing threat with a
+higher ETA will be automatically corrected to (previous ETA - 1).
+
+**[v1.12] RULE 8 — ESCALATION BUDGET**
+The engine tracks a "threat tier" budget per 10-turn window:
+  Individual amateur: 1 point
+  Professional team: 2 points
+  Faction response: 3 points
+  Elite/rare asset: 5 points
+Maximum budget: 8 points per 10 turns.
+
+A Gold-rank party (5 points) followed by Tibbit assassins (5 points) in the same
+10-turn window would be blocked (total 10 > max 8). Escalation must be gradual.
+
+**[v1.12] RULE 9 — INFORMATION CHAIN ENFORCEMENT**
+The engine now validates the information chain for threats citing playerActionCause.
+The claimed observer NPC must:
+  1. Exist in the entity registry
+  2. Have a plausible observation path
+  3. Allow minimum propagation time (3 turns) before a faction can respond
+
+Threats with invalid information chains are automatically blocked.
+
+**[v1.12] RULE 10 — BANNED MECHANISM LIST**
+When a player rejects a threat or lore entry (via CANCEL/DELETE), the rejected concept's
+keywords are permanently banned. Future lore or threats containing 60%+ of those keywords
+will be automatically blocked. Do NOT attempt to reintroduce rejected concepts with
+slightly different wording.
+
+**[v1.12] RULE 11 — NPC ENVIRONMENTAL PARITY**
+Hostile NPCs moving through areas with active environmental hazards (stirges, vermin,
+traps) now face the same attrition the player does. The engine may block or delay
+NPC movement actions through hazardous areas. Do not narrate hostile NPCs traversing
+dangerous dungeons without incident.
+
+// =========================================================================
 // SECTION 3.5: CONDITION LIFECYCLE — MANDATORY MANAGEMENT
 // =========================================================================
 
@@ -417,6 +495,20 @@ MANDATORY PRUNE OBLIGATION:
 If the character's conditions list exceeds 25 entries, you MUST include at least 3 removals 
 in removed_conditions this turn before adding any new conditions. No exceptions.
 The engine will block new conditions entirely if the list reaches 40. Audit proactively.
+
+**[v1.12] EXPANDED TRANSIENT PREFIXES**
+The engine now auto-expires conditions starting with these prefixes after 60 minutes
+of in-game time. You do not need to manually remove them, but SHOULD remove them
+sooner if narratively appropriate:
+  Adrenaline, Ambrosia Afterglow, Magical Overclock, Soot-Stained, Numbed, Catharsis,
+  Focused, Tactical Advantage, Tactical Dominance, Tactical Overwatch, Tactical,
+  Rested, Refreshed, Well-Fed, Heightened, Arcane Ready, Sated, Cold-Blooded,
+  Vermin-Slayer, Alpha Slayer
+
+**[v1.12] MECHANICAL EFFECT DEDUP**
+Two conditions with different display names but identical parenthetical effects
+(e.g., "Heavy Breathing (Stamina Recovery -5%)" and "Winded (Stamina Recovery -5%)")
+are now treated as duplicates by the engine. Only the first one persists.
 
 // =========================================================================
 // SECTION 4: ROLL SYSTEM

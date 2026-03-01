@@ -62,8 +62,11 @@ import {
     findExistingLore,
     containsRenameMarker,
     checkConditionDuplicate,
+    checkConditionDuplicateEnhanced,  // v1.12
     significantWords,
     jaccardSimilarity,
+    bigramJaccardSimilarity,          // v1.12
+    autoConsolidateMemory,            // v1.12
 } from './contentValidation';
 import { resolveAllBannedNames } from './nameResolver';
 
@@ -83,6 +86,26 @@ const TIME_CAPS = { AWAKE_MAX: 120, SLEEP_MAX: 540, COMBAT_MAX: 30 };
 const MEMORY_CAP = 40;
 const THREAT_SEED_CAP = 3;
 const MAX_CONSECUTIVE_ETA_ONE = 3; // turns before auto-expiry
+
+/** v1.12 FIX SE-6: Minimum turns a lore entry must exist before it can be cited
+ *  as the basis for a threat seed. Prevents same-turn lore→threat exploitation. */
+const LORE_MATURATION_TURNS = 3;
+
+/** v1.12 FIX SE-10: Maximum total threat-tier points allowed per sliding window.
+ *  Individual=1, Professional=2, Faction=3, Elite=5.
+ *  Window = ESCALATION_WINDOW_TURNS turns. */
+const ESCALATION_BUDGET_MAX = 8;
+const ESCALATION_WINDOW_TURNS = 10;
+
+/** v1.12 FIX SE-7: Minimum turns for information to propagate between entities
+ *  when no direct observation occurred. */
+const INFO_PROPAGATION_MIN_TURNS = 3;
+
+/** v1.12 FIX SE-9: Probability that an NPC traversing a hostile area suffers attrition. */
+const NPC_ATTRITION_CHANCE = 0.35;
+
+/** v1.12 FIX SE-4: Number of consequent hooks generated when a hook is consumed. */
+const CONSEQUENT_HOOKS_PER_RESOLUTION = 2;
 
 // Minimum ETA floors by faction type
 // v1.4: These are now ENFORCED in processThreatSeeds(), not just logged.
@@ -533,11 +556,14 @@ const EXPOSURE_DECAY_PER_TURN = 2;
  * Updates the faction exposure registry each turn based on world_tick NPC actions.
  * Called BEFORE processThreatSeeds so same-turn exposure is available for validation.
  */
-const updateFactionExposure = (
+const updateFactionExposure_v112 = (
     currentExposure: FactionExposure,
     npcActions: WorldTickAction[],
     currentTurn: number,
-    debugLogs: DebugLogEntry[]
+    debugLogs: DebugLogEntry[],
+    // v1.12: New parameters for hostile faction tracking
+    knownEntities: { name: string; role: string; relationship_level: string }[] = [],
+    emergingThreats: WorldTickEvent[] = []
 ): FactionExposure => {
     const updated: FactionExposure = { ...currentExposure };
 
@@ -583,6 +609,115 @@ const updateFactionExposure = (
                 message: `[EXPOSURE] ${key}: +${EXPOSURE_DIRECT_OBSERVATION} → ${newScore} (direct observation)`,
                 type: 'info'
             });
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // v1.12 FIX SE-2: Auto-grant exposure to hostile factions engaged in combat
+    // -----------------------------------------------------------------------
+    // When the player fights entities belonging to a hostile faction, that faction
+    // gains exposure through the combat itself (the player is demonstrating
+    // capabilities in front of faction members). This closes the gap where
+    // factionExposure stayed empty despite extensive conflict.
+
+    // Build a map of hostile faction keywords from knownEntities
+    const hostileFactions: Map<string, string> = new Map(); // keyword → faction display name
+    for (const entity of knownEntities) {
+        if (['HOSTILE', 'NEMESIS'].includes(entity.relationship_level)) {
+            const roleLower = entity.role.toLowerCase();
+            // Extract faction-like keywords from the role
+            const factionKeywords = ['syndicate', 'vanguard', 'dominion', 'tharnic',
+                'guild', 'order', 'company', 'circle', 'cartel', 'brotherhood',
+                'sisterhood', 'clan', 'house', 'cult', 'legion', 'cabal'];
+            for (const kw of factionKeywords) {
+                if (roleLower.includes(kw) || entity.name.toLowerCase().includes(kw)) {
+                    // Use the keyword as the faction identifier
+                    const factionName = entity.name.split('(')[0].trim();
+                    hostileFactions.set(kw, factionName);
+                }
+            }
+        }
+    }
+
+    // Check if any threat descriptions or NPC actions reference hostile factions
+    for (const threat of emergingThreats) {
+        if (threat.factionSource) {
+            // Ensure the factionSource has an exposure entry
+            if (!updated[threat.factionSource]) {
+                updated[threat.factionSource] = {
+                    exposureScore: 0,
+                    lastObservedAction: null,
+                    lastObservedTurn: 0,
+                    observedCapabilities: []
+                };
+            }
+        }
+        // Auto-grant exposure when a threat from this faction is actively building
+        const descLower = threat.description.toLowerCase();
+        for (const [kw, factionName] of hostileFactions) {
+            if (descLower.includes(kw)) {
+                const key = threat.factionSource || factionName;
+                const existing = updated[key] ?? {
+                    exposureScore: 0,
+                    lastObservedAction: null,
+                    lastObservedTurn: 0,
+                    observedCapabilities: []
+                };
+                // Only auto-grant if below threshold — don't keep inflating
+                if (existing.exposureScore < EXPOSURE_THRESHOLD_FOR_THREAT) {
+                    const grant = EXPOSURE_PUBLIC_ACTION;
+                    const newScore = Math.min(100, existing.exposureScore + grant);
+                    updated[key] = {
+                        ...existing,
+                        exposureScore: newScore,
+                        lastObservedAction: `Hostile faction active: ${threat.description.substring(0, 60)}`,
+                        lastObservedTurn: currentTurn
+                    };
+                    debugLogs.push({
+                        timestamp: new Date().toISOString(),
+                        message: `[EXPOSURE — v1.12] ${key}: +${grant} → ${newScore} (hostile faction active in threats)`,
+                        type: 'info'
+                    });
+                }
+            }
+        }
+    }
+
+    // Also grant exposure from hostile NPC actions (hidden or visible) that
+    // describe intelligence gathering, reporting, or tracking
+    const INTEL_VERBS = ['track', 'report', 'scout', 'surveil', 'dispatch', 'alert',
+        'signal', 'inform', 'relay', 'mark', 'log', 'document', 'photograph'];
+    for (const action of npcActions) {
+        const actionLower = action.action.toLowerCase();
+        const npcNameLower = action.npc_name.toLowerCase();
+
+        // Check if this NPC belongs to a known hostile faction
+        for (const [kw, factionName] of hostileFactions) {
+            if (npcNameLower.includes(kw) || actionLower.includes(kw)) {
+                const hasIntelVerb = INTEL_VERBS.some(v => actionLower.includes(v));
+                if (hasIntelVerb) {
+                    const key = factionName;
+                    const existing = updated[key] ?? {
+                        exposureScore: 0,
+                        lastObservedAction: null,
+                        lastObservedTurn: 0,
+                        observedCapabilities: []
+                    };
+                    const grant = 5; // Smaller than direct observation
+                    const newScore = Math.min(100, existing.exposureScore + grant);
+                    updated[key] = {
+                        ...existing,
+                        exposureScore: newScore,
+                        lastObservedAction: action.action,
+                        lastObservedTurn: currentTurn
+                    };
+                    debugLogs.push({
+                        timestamp: new Date().toISOString(),
+                        message: `[EXPOSURE — v1.12] ${key}: +${grant} → ${newScore} (hostile NPC intel action: ${action.npc_name})`,
+                        type: 'info'
+                    });
+                }
+            }
         }
     }
 
@@ -689,6 +824,20 @@ const validateThreatCausality = (
             }
 
             if (weightedScore >= overlapMinimum) {
+                // v1.12 FIX SE-6: Lore Maturation Check
+                // If the hook was activated THIS session and was derived from lore created
+                // fewer than LORE_MATURATION_TURNS ago, block it. Prevents the AI from
+                // creating lore on turn N and citing it as threat basis on turn N+1.
+                if (hook.activatedTurn !== undefined && 
+                    hook.activatedTurn >= currentTurn - 1 &&
+                    hook.sourceField === 'consequent_hook') {
+                    // Consequent hooks from just-resolved arcs get a grace period
+                    // But hooks derived from newly-created lore do not
+                    log(`[ORIGIN GATE — v1.12 MATURATION] "${desc}" — hook "${hook.id}" was just activated. ` +
+                        `Consequent hooks require ${LORE_MATURATION_TURNS} turns to mature. BLOCKED.`);
+                    return false;
+                }
+
                 log(
                     `[ORIGIN GATE ✓] "${desc}" — hook: ${hook.summary} ` +
                     `(weighted overlap: ${weightedScore.toFixed(1)}/${overlapMinimum}, ` +
@@ -1049,7 +1198,12 @@ const processThreatSeeds = (
     knownEntityNames: string[] = [],        // v1.8: entity-name continuity
     playerCharacterName: string = '',       // v1.8: exclude player name from entity matching
     sceneMode: string = 'NARRATIVE',        // v1.9: scene-aware floors + origin gate bypass
-    threatArcHistory: ThreatArcHistory = {} // v1.11: for re-seed detection
+    threatArcHistory: ThreatArcHistory = {}, // v1.11: for re-seed detection
+    // v1.12: New parameters
+    lore: LoreItem[] = [],                    // FIX SE-6: for lore maturation
+    bannedMechanisms: string[][] = [],         // FIX SE-8: player rejection list
+    knownEntities: { name: string; location: string; relationship_level: string }[] = [],  // FIX SE-7
+    playerLocation: string = ''                // FIX SE-7: for info chain validation
 ): WorldTickEvent[] => {
     const log = (message: string, type: DebugLogEntry['type'] = 'warning') => {
         debugLogs.push({ timestamp: new Date().toISOString(), message, type });
@@ -1153,17 +1307,27 @@ const processThreatSeeds = (
             }
         }
 
-        // v1.7: Enforce ETA countdown for existing threats.
-        // If a threat existed last turn, its ETA must decrease by at least 1.
+        // v1.7 + v1.12 FIX SE-1: Enforce MONOTONIC ETA countdown for existing threats.
+        // ETA must decrease by at least 1 each turn. ETA can NEVER increase.
+        // The v1.7 version only checked expectedMaxEta but the AI could exploit
+        // entity-matched threats by resubmitting with higher ETA. Now we enforce
+        // strict monotonic descent: currentEta <= previousEta - 1, always.
         if (existing && existing.turns_until_impact !== undefined && turnCreated !== currentTurn) {
             const previousEta = existing.turns_until_impact;
             const expectedMaxEta = Math.max(0, previousEta - 1);
+
             if (currentEta > expectedMaxEta) {
+                // v1.12: Distinguish between stall (same ETA) and increase (higher ETA)
+                const isIncrease = currentEta > previousEta;
+                const logLevel = isIncrease ? 'error' : 'warning';
+                const violationType = isIncrease ? 'MONOTONIC VIOLATION — ETA INCREASED' : 'ETA COUNTDOWN ENFORCED';
+
                 log(
-                    `[THREAT ETA COUNTDOWN ENFORCED] "${threat.description.substring(0, 60)}" — ` +
+                    `[THREAT ${violationType}] "${threat.description.substring(0, 60)}" — ` +
                     `AI submitted ETA ${currentEta}, previous was ${previousEta}. ` +
-                    `Forced to ${expectedMaxEta}.`,
-                    'warning'
+                    `Forced to ${expectedMaxEta}.` +
+                    (isIncrease ? ` AI attempted to BUY TIME by increasing ETA — this is always blocked.` : ''),
+                    logLevel
                 );
                 currentEta = expectedMaxEta;
             }
@@ -1295,9 +1459,45 @@ const processThreatSeeds = (
     // about to hit you" is nonsensical. ETA floors (now scene-aware) handle timing.
     const gatePassed = sceneMode === 'COMBAT'
         ? processed
-        : processed.filter(threat =>
-            validateThreatCausality(threat, dormantHooks, factionExposure, currentTurn, debugLogs, knownEntityNames, playerCharacterName)
-        );
+        : processed.filter(threat => {
+            if (threat.turnCreated !== currentTurn) return true; // existing threats pass
+
+            if (!validateThreatCausality(threat, dormantHooks, factionExposure, currentTurn, debugLogs, knownEntityNames, playerCharacterName)) {
+                return false;
+            }
+
+            // v1.12 FIX SE-6: Lore Maturation Check
+            // Block threats that cite lore created too recently
+            if (citesImmatureLore(threat.description, lore, currentTurn, 1, debugLogs)) {
+                log(
+                    `[LORE MATURATION BLOCK — v1.12] "${threat.description.substring(0, 60)}" — ` +
+                    `relies on lore created within last ${LORE_MATURATION_TURNS} turns. ` +
+                    `Lore must mature before it can source threats.`,
+                    'error'
+                );
+                return false;
+            }
+
+            // v1.12 FIX SE-8: Banned Mechanism Check
+            // Block threats that reintroduce player-rejected concepts
+            if (checkBannedMechanisms(threat.description, bannedMechanisms, debugLogs)) {
+                return false;
+            }
+
+            // v1.12 FIX SE-7: Information Chain Validation
+            // Validates that the threat's claimed observer exists and timing is plausible
+            if (!validateInformationChain(threat, knownEntities, playerLocation, currentTurn, debugLogs)) {
+                return false;
+            }
+
+            // v1.12 FIX SE-10: Escalation Budget Check
+            // Block threats that would push the escalation rate over budget
+            if (checkEscalationBudget(threat, existingThreats, currentTurn, debugLogs)) {
+                return false;
+            }
+
+            return true;
+        });
 
     // v1.11 FIX 5: Conceptual Re-Seed Detection — block threats reusing expired entity actors
     const reseedFiltered = gatePassed.filter(threat => {
@@ -1558,6 +1758,483 @@ const updateHookCooldowns = (
     });
 
     return { updatedHooks, updatedArcHistory: updatedHistory };
+};
+
+/**
+ * v1.12 FIX SE-4: When a dormant hook is consumed (status = 'resolved' or all
+ * its sourced threats have concluded), generate 1-2 consequent hooks derived
+ * from the narrative outcome. This prevents the dormantHooks array from being
+ * permanently exhausted.
+ *
+ * Consequent hooks are derived from the original hook's summary + the threat
+ * outcome, creating new but related tension vectors.
+ */
+const regenerateConsequentHooks = (
+    hooks: DormantHook[],
+    resolvedThreats: WorldTickEvent[],
+    currentTurn: number,
+    debugLogs: DebugLogEntry[],
+    lore: LoreItem[] = []
+): DormantHook[] => {
+    const updatedHooks = [...hooks];
+    const activatedHooks = hooks.filter(h => h.status === 'activated');
+
+    for (const hook of activatedHooks) {
+        // Check if all threats from this hook have expired
+        const hasActiveThreats = resolvedThreats.some(t =>
+            t.originHookId === hook.id || t.dormantHookId === hook.id
+        );
+        // We only regenerate for hooks where the threat arc concluded
+        // (handled by cooldown system) — check if hook just got cooldown applied
+        if (hook.cooldownUntilTurn && hook.cooldownUntilTurn === currentTurn + (hook.totalThreatsSourced ?? 1) * 3 + 5) {
+            // This hook JUST had cooldown applied — generate consequent hooks
+
+            // Derive consequent tension from the hook's context
+            const consequentHooks: DormantHook[] = [];
+
+            // Consequent 1: Retaliation vector — the faction responds to the outcome
+            const retaliationHook: DormantHook = {
+                id: `hook_consequent_${hook.id}_retaliation_t${currentTurn}`,
+                summary: `Consequences of resolving "${hook.summary}" — affected parties may respond`,
+                category: 'backstory',
+                sourceField: 'consequent_hook',
+                involvedEntities: [...(hook.involvedEntities ?? [])],
+                activationConditions: `Player returns to related area or encounters related faction members`,
+                status: 'dormant',
+            };
+            consequentHooks.push(retaliationHook);
+
+            // Consequent 2: Reputation vector — word spreads about what happened
+            if ((hook.totalThreatsSourced ?? 0) >= 2) {
+                const reputationHook: DormantHook = {
+                    id: `hook_consequent_${hook.id}_reputation_t${currentTurn}`,
+                    summary: `Word of the player's actions regarding "${hook.summary}" has spread`,
+                    category: 'relationship',
+                    sourceField: 'consequent_hook',
+                    involvedEntities: [],
+                    activationConditions: `New NPCs recognize the player or reference past events`,
+                    status: 'dormant',
+                };
+                consequentHooks.push(reputationHook);
+            }
+
+            for (const ch of consequentHooks) {
+                updatedHooks.push(ch);
+                debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    message: `[HOOK REGEN — v1.12] Generated consequent hook "${ch.id}" from resolved "${hook.id}": "${ch.summary.substring(0, 80)}"`,
+                    type: 'info'
+                });
+            }
+        }
+    }
+
+    return updatedHooks;
+};
+
+/**
+ * v1.12 FIX SE-5: Syncs entity locations from world_tick NPC actions.
+ * When an NPC action describes an entity at a specific location, update
+ * that entity's location in knownEntities. This prevents stale location data
+ * where the registry says an entity is in one place but hidden_update shows
+ * them elsewhere.
+ */
+const syncEntityLocationsFromWorldTick = (
+    knownEntities: KnownEntity[],
+    npcActions: WorldTickAction[],
+    hiddenUpdate: string,
+    debugLogs: DebugLogEntry[]
+): KnownEntity[] => {
+    const updated = [...knownEntities];
+
+    // Location extraction patterns from NPC actions
+    const LOCATION_PATTERNS = [
+        /(?:at|in|near|outside|inside|heading to|arrives? at|reaches?|enters?)\s+(?:the\s+)?([A-Z][a-zA-Z\s'-]+?)(?:\.|,|$|to\s)/,
+        /(?:sweeps?|searches?|secures?|patrols?)\s+(?:the\s+)?([A-Z][a-zA-Z\s'-]+?)(?:\.|,|$)/,
+    ];
+
+    for (const action of npcActions) {
+        // Find the matching entity
+        const entityIdx = updated.findIndex(e => {
+            const primaryName = e.name.split('(')[0].trim().toLowerCase();
+            const actionNpc = action.npc_name.toLowerCase();
+            return actionNpc.includes(primaryName) || primaryName.includes(actionNpc);
+        });
+
+        if (entityIdx === -1) continue;
+
+        // Try to extract a location from the action text
+        for (const pattern of LOCATION_PATTERNS) {
+            const match = pattern.exec(action.action);
+            if (match && match[1]) {
+                const newLocation = match[1].trim();
+                if (newLocation.length >= 4 && newLocation.length <= 60) {
+                    const oldLocation = updated[entityIdx].location;
+                    if (oldLocation !== newLocation) {
+                        updated[entityIdx] = { ...updated[entityIdx], location: newLocation };
+                        debugLogs.push({
+                            timestamp: new Date().toISOString(),
+                            message: `[ENTITY LOCATION SYNC — v1.12] ${updated[entityIdx].name}: ` +
+                                `"${oldLocation}" → "${newLocation}" (from world_tick action)`,
+                            type: 'info'
+                        });
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    return updated;
+};
+
+/**
+ * v1.12 FIX SE-6: Checks whether a threat's description relies on lore that was
+ * created too recently. Compares significant words in the threat description
+ * against lore entries created within the maturation window.
+ *
+ * Returns true if the threat cites immature lore (should be blocked).
+ */
+const citesImmatureLore = (
+    threatDescription: string,
+    lore: LoreItem[],
+    currentTurn: number,
+    turnsPerLoreEntry: number, // approximate turns-per-timestamp for conversion
+    debugLogs: DebugLogEntry[]
+): boolean => {
+    const threatWords = significantWords(threatDescription);
+
+    for (const entry of lore) {
+        // Check if this lore entry was created recently
+        // Use the lore's turnCreated if available, otherwise estimate from timestamp
+        const loreCreatedTurn = (entry as any).turnCreated ?? 0;
+        const turnsOld = currentTurn - loreCreatedTurn;
+
+        if (turnsOld >= LORE_MATURATION_TURNS) continue; // Mature lore is fine
+
+        // Check semantic overlap between threat and this immature lore
+        const loreWords = significantWords(`${entry.keyword} ${entry.content}`);
+        const overlap = jaccardSimilarity(threatWords, loreWords);
+
+        if (overlap >= 0.35) {
+            debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[LORE MATURATION — v1.12] Threat "${threatDescription.substring(0, 60)}" ` +
+                    `cites immature lore "${entry.keyword}" (created ${turnsOld} turns ago, ` +
+                    `minimum: ${LORE_MATURATION_TURNS}). Overlap: ${overlap.toFixed(2)}`,
+                type: 'warning'
+            });
+            return true;
+        }
+    }
+
+    return false;
+};
+
+/**
+ * v1.12 FIX SE-7: Engine-level Information Chain Validator.
+ * For any new threat seed that responds to a player action, validates that:
+ * 1. A specific observer NPC exists in knownEntities
+ * 2. The observer was at the same location as the triggering event
+ * 3. The response time is consistent with information propagation delay
+ *
+ * Returns false if the information chain is invalid.
+ */
+const validateInformationChain = (
+    threat: WorldTickEvent,
+    knownEntities: { name: string; location: string; relationship_level: string }[],
+    playerLocation: string,
+    currentTurn: number,
+    debugLogs: DebugLogEntry[]
+): boolean => {
+    // Only validate threats with a playerActionCause
+    if (!threat.playerActionCause) return true;
+
+    const cause = threat.playerActionCause.toLowerCase();
+
+    // Extract the claimed observer name from the cause string
+    // Expected format: "[NPC name] observed [action] at [location] on turn [N]"
+    const observerMatch = /^([^"]+?)\s+observed\s+/i.exec(threat.playerActionCause);
+    if (!observerMatch) {
+        debugLogs.push({
+            timestamp: new Date().toISOString(),
+            message: `[INFO CHAIN — v1.12] "${threat.description.substring(0, 60)}" — ` +
+                `playerActionCause does not follow required format: ` +
+                `"[NPC] observed [action] at [location] on turn [N]". BLOCKED.`,
+            type: 'error'
+        });
+        return false;
+    }
+
+    const claimedObserver = observerMatch[1].trim();
+
+    // Check if the observer exists in knownEntities
+    const observerEntity = knownEntities.find(e => {
+        const primaryName = e.name.split('(')[0].trim().toLowerCase();
+        return primaryName.includes(claimedObserver.toLowerCase()) ||
+            claimedObserver.toLowerCase().includes(primaryName);
+    });
+
+    if (!observerEntity) {
+        debugLogs.push({
+            timestamp: new Date().toISOString(),
+            message: `[INFO CHAIN — v1.12] "${threat.description.substring(0, 60)}" — ` +
+                `claimed observer "${claimedObserver}" NOT FOUND in entity registry. ` +
+                `NPCs cannot observe events if they don't exist. BLOCKED.`,
+            type: 'error'
+        });
+        return false;
+    }
+
+    // Extract the claimed turn from the cause
+    const turnMatch = /turn\s+(\d+)/i.exec(threat.playerActionCause);
+    if (turnMatch) {
+        const observedTurn = parseInt(turnMatch[1]);
+        const turnsSince = currentTurn - observedTurn;
+        const eta = threat.turns_until_impact ?? 0;
+
+        // The response time must be at least INFO_PROPAGATION_MIN_TURNS if the
+        // observer is not the acting faction (i.e., info needs to propagate)
+        if (turnsSince < INFO_PROPAGATION_MIN_TURNS && eta < INFO_PROPAGATION_MIN_TURNS) {
+            debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[INFO CHAIN — v1.12] "${threat.description.substring(0, 60)}" — ` +
+                    `observed on turn ${observedTurn}, current turn ${currentTurn}. ` +
+                    `Only ${turnsSince} turns for info propagation (min: ${INFO_PROPAGATION_MIN_TURNS}). ` +
+                    `ETA ${eta} is too fast for an organized response. Bumping ETA to ${INFO_PROPAGATION_MIN_TURNS}.`,
+                type: 'warning'
+            });
+            // Don't block — bump ETA instead
+            threat.turns_until_impact = Math.max(eta, INFO_PROPAGATION_MIN_TURNS);
+        }
+    }
+
+    return true;
+};
+
+/**
+ * v1.12 FIX SE-8: Tracks mechanisms the player has explicitly rejected.
+ * When a player cancels a threat or rejects lore, the rejected concept's
+ * significant words are stored. Future lore and threat submissions are
+ * checked against this list.
+ *
+ * Stored on GameWorld as `bannedMechanisms: string[][]` (array of word-sets).
+ */
+const checkBannedMechanisms = (
+    text: string,
+    bannedMechanisms: string[][],
+    debugLogs: DebugLogEntry[]
+): boolean => {
+    if (!bannedMechanisms || bannedMechanisms.length === 0) return false;
+
+    const textWords = significantWords(text);
+
+    for (const bannedWords of bannedMechanisms) {
+        const bannedSet = new Set(bannedWords);
+        const overlap = [...textWords].filter(w => bannedSet.has(w));
+        const overlapRatio = bannedSet.size > 0 ? overlap.length / bannedSet.size : 0;
+
+        // If 60%+ of the banned concept's words appear, it's a match
+        if (overlapRatio >= 0.60) {
+            debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[BANNED MECHANISM — v1.12] Text "${text.substring(0, 60)}" ` +
+                    `matches banned concept [${bannedWords.join(', ')}] ` +
+                    `(${(overlapRatio * 100).toFixed(0)}% overlap). BLOCKED.`,
+                type: 'error'
+            });
+            return true;
+        }
+    }
+
+    return false;
+};
+
+/**
+ * v1.12: Extracts banned mechanism keywords from player rejection text.
+ * Called when a player's message contains CANCEL/DELETE directives.
+ */
+const extractBannedMechanismFromRejection = (
+    rejectionText: string,
+    threatDescription: string
+): string[] => {
+    // Combine the rejection context with the threat being rejected
+    const combined = `${rejectionText} ${threatDescription}`;
+    return [...significantWords(combined)];
+};
+
+/**
+ * v1.12 FIX SE-9: Validates that NPC actions describing movement through
+ * known hostile areas account for environmental hazards. If an NPC traverses
+ * an area with active hostile entities (stirges, vermin, traps), they may
+ * be delayed, injured, or fail to arrive.
+ *
+ * Uses deterministic check based on threat description + area keywords.
+ * Returns filtered actions with blocked movements logged.
+ */
+const applyNpcAttritionLayer = (
+    npcActions: WorldTickAction[],
+    activeThreats: WorldTickEvent[],
+    environmentChanges: string[],
+    knownEntities: { name: string; relationship_level: string }[],
+    debugLogs: DebugLogEntry[]
+): WorldTickAction[] => {
+    // Build a set of hazardous area keywords from active environmental threats
+    // and recent environment changes
+    const hazardKeywords = new Set<string>();
+    const ENVIRONMENTAL_HAZARDS = [
+        'swarm', 'vermin', 'stirge', 'trap', 'collapse', 'flood',
+        'miasma', 'spore', 'toxic', 'lava', 'acid', 'nest'
+    ];
+
+    // Extract area hazards from environment changes
+    for (const change of environmentChanges) {
+        const changeLower = change.toLowerCase();
+        for (const hazard of ENVIRONMENTAL_HAZARDS) {
+            if (changeLower.includes(hazard)) {
+                // Extract location words near the hazard mention
+                const words = changeLower.split(/\s+/);
+                const hazardIdx = words.findIndex(w => w.includes(hazard));
+                if (hazardIdx >= 0) {
+                    // Grab surrounding words as area identifiers
+                    for (let i = Math.max(0, hazardIdx - 3); i <= Math.min(words.length - 1, hazardIdx + 3); i++) {
+                        if (words[i].length >= 4) hazardKeywords.add(words[i]);
+                    }
+                }
+            }
+        }
+    }
+
+    // Also extract from active threat descriptions
+    for (const threat of activeThreats) {
+        const descLower = threat.description.toLowerCase();
+        for (const hazard of ENVIRONMENTAL_HAZARDS) {
+            if (descLower.includes(hazard)) {
+                hazardKeywords.add(hazard);
+            }
+        }
+    }
+
+    if (hazardKeywords.size === 0) return npcActions;
+
+    // Filter NPC actions — hostile/nemesis NPCs traversing hazardous areas get flagged
+    const MOVEMENT_VERBS = ['navigate', 'traverse', 'descend', 'enter', 'move through',
+        'head to', 'proceed', 'advance', 'infiltrate', 'approach'];
+
+    return npcActions.filter(action => {
+        const actionLower = action.action.toLowerCase();
+        const npcNameLower = action.npc_name.toLowerCase();
+
+        // Only apply to hostile NPCs
+        const isHostileNpc = knownEntities.some(e => {
+            const primaryName = e.name.split('(')[0].trim().toLowerCase();
+            return (npcNameLower.includes(primaryName) || primaryName.includes(npcNameLower)) &&
+                ['HOSTILE', 'NEMESIS'].includes(e.relationship_level);
+        });
+        if (!isHostileNpc) return true;
+
+        // Check if the action describes movement through a hazardous area
+        const isMovement = MOVEMENT_VERBS.some(v => actionLower.includes(v));
+        if (!isMovement) return true;
+
+        const hitsHazard = [...hazardKeywords].some(kw => actionLower.includes(kw));
+        if (!hitsHazard) return true;
+
+        // This NPC is moving through a hazardous area — apply attrition check
+        // Use a deterministic hash based on NPC name + turn to avoid randomness
+        const hash = (npcNameLower.length * 17 + actionLower.length * 31) % 100;
+        if (hash < NPC_ATTRITION_CHANCE * 100) {
+            debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[NPC ATTRITION — v1.12] "${action.npc_name}: ${action.action.substring(0, 80)}" — ` +
+                    `hostile NPC traversing hazardous area (${[...hazardKeywords].join(', ')}). ` +
+                    `Attrition applied: action DELAYED/BLOCKED.`,
+                type: 'warning'
+            });
+            return false;
+        }
+
+        return true;
+    });
+};
+
+/**
+ * v1.12 FIX SE-10: Tracks the total "threat tier" introduced within a sliding
+ * window of turns. Prevents the AI from escalating from amateur → elite within
+ * a few turns.
+ *
+ * Tier scoring:
+ *   - Individual amateur (lone stalker): 1 point
+ *   - Professional pair/team: 2 points
+ *   - Faction organized response: 3 points
+ *   - Elite/rare asset (Gold-rank, state-level): 5 points
+ *
+ * Returns true if the budget is exceeded (threat should be blocked).
+ */
+const checkEscalationBudget = (
+    threat: WorldTickEvent,
+    existingThreats: WorldTickEvent[],
+    currentTurn: number,
+    debugLogs: DebugLogEntry[]
+): boolean => {
+    // Score the incoming threat
+    const descLower = threat.description.toLowerCase();
+    let incomingTier = 1; // default: individual
+
+    const ELITE_KEYWORDS = ['gold-rank', 'gold rank', 'elite', 'master-rank', 'assassin',
+        'conditioned', 'decades', 'rare', 'state-level', 'diplomatic'];
+    const FACTION_KEYWORDS = ['dispatch', 'deploy', 'mobilize', 'cell', 'team', 'squad',
+        'organization', 'company', 'syndicate', 'dominion', 'enforcement'];
+    const PROFESSIONAL_KEYWORDS = ['professional', 'specialized', 'tracker', 'enforcer',
+        'trained', 'equipped', 'steel-tier', 'silver-tier'];
+
+    if (ELITE_KEYWORDS.some(kw => descLower.includes(kw))) {
+        incomingTier = 5;
+    } else if (FACTION_KEYWORDS.some(kw => descLower.includes(kw))) {
+        incomingTier = 3;
+    } else if (PROFESSIONAL_KEYWORDS.some(kw => descLower.includes(kw))) {
+        incomingTier = 2;
+    }
+
+    // Sum existing threat tiers within the window
+    let budgetUsed = 0;
+    for (const t of existingThreats) {
+        const created = t.turnCreated ?? 0;
+        if (currentTurn - created > ESCALATION_WINDOW_TURNS) continue;
+
+        const tDescLower = t.description.toLowerCase();
+        if (ELITE_KEYWORDS.some(kw => tDescLower.includes(kw))) {
+            budgetUsed += 5;
+        } else if (FACTION_KEYWORDS.some(kw => tDescLower.includes(kw))) {
+            budgetUsed += 3;
+        } else if (PROFESSIONAL_KEYWORDS.some(kw => tDescLower.includes(kw))) {
+            budgetUsed += 2;
+        } else {
+            budgetUsed += 1;
+        }
+    }
+
+    const totalAfter = budgetUsed + incomingTier;
+    if (totalAfter > ESCALATION_BUDGET_MAX) {
+        debugLogs.push({
+            timestamp: new Date().toISOString(),
+            message: `[ESCALATION BUDGET — v1.12] "${threat.description.substring(0, 60)}" — ` +
+                `tier ${incomingTier} would bring window total to ${totalAfter} ` +
+                `(max: ${ESCALATION_BUDGET_MAX} per ${ESCALATION_WINDOW_TURNS} turns). ` +
+                `BLOCKED — world is escalating too fast.`,
+            type: 'error'
+        });
+        return true; // Over budget
+    }
+
+    debugLogs.push({
+        timestamp: new Date().toISOString(),
+        message: `[ESCALATION BUDGET — v1.12] "${threat.description.substring(0, 40)}" — ` +
+            `tier ${incomingTier}, window total: ${totalAfter}/${ESCALATION_BUDGET_MAX}`,
+        type: 'info'
+    });
+
+    return false; // Within budget
 };
 
 /**
@@ -1877,6 +2554,16 @@ export const SimulationEngine = {
             }
         }
 
+        // v1.12 FIX SE-5: Entity Location Sync from world_tick NPC actions
+        if (r.world_tick?.npc_actions) {
+            updatedKnownEntities = syncEntityLocationsFromWorldTick(
+                updatedKnownEntities,
+                r.world_tick.npc_actions,
+                r.hidden_update ?? '',
+                debugLogs
+            );
+        }
+
         // ===================================================================
         // 7. Lore & Memory Pipeline
         // ===================================================================
@@ -1890,11 +2577,20 @@ const pendingLore: LoreItem[] = [];
         if (r.new_lore) {
             const { keyword, content } = r.new_lore;
 
-            // FIX 7: Exact-keyword check runs BEFORE semantic Jaccard check.
-            // Two entries with the same keyword are always a conflict regardless of
-            // content similarity — catches contradictory entries like duplicate
-            // "Tharnic Ledger Secrets" that slip past the similarity threshold.
-            const exactMatch = findExistingLore(keyword, currentWorld.lore);
+            // v1.12 FIX SE-8: Check lore against banned mechanisms
+            const bannedMechs = ((currentWorld as any).bannedMechanisms as string[][]) ?? [];
+            if (checkBannedMechanisms(`${keyword} ${content}`, bannedMechs, debugLogs)) {
+                debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    message: `[LORE BANNED — v1.12] "${keyword}" matches a player-rejected mechanism. Suppressed.`,
+                    type: 'error'
+                });
+            } else {
+                // FIX 7: Exact-keyword check runs BEFORE semantic Jaccard check.
+                // Two entries with the same keyword are always a conflict regardless of
+                // content similarity — catches contradictory entries like duplicate
+                // "Tharnic Ledger Secrets" that slip past the similarity threshold.
+                const exactMatch = findExistingLore(keyword, currentWorld.lore);
 
             if (exactMatch) {
                 const isLonger = content.length > exactMatch.content.length;
@@ -1912,6 +2608,7 @@ const pendingLore: LoreItem[] = [];
                         timestamp: new Date().toISOString(),
                     };
                     (expansionItem as any).semanticUpdateOf = exactMatch.id;
+                    (expansionItem as any).turnCreated = currentTurn;
                     pendingLore.push(expansionItem);
                 }
                 // Shorter or equal — suppress entirely, no push.
@@ -1937,6 +2634,7 @@ const pendingLore: LoreItem[] = [];
                         content,
                         timestamp: new Date().toISOString()
                     };
+                    (newItem as any).turnCreated = currentTurn;
 
                     if (isUpdate) {
                         (newItem as any).semanticUpdateOf = currentWorld.lore[existingIndex]?.id;
@@ -1951,6 +2649,7 @@ const pendingLore: LoreItem[] = [];
                     });
                 }
             } // end else (no exact keyword match)
+            } // end else (not banned)
         } // end if (r.new_lore)
 
         // --- Memory (with semantic deduplication and hard cap) ---
@@ -1968,11 +2667,52 @@ const pendingLore: LoreItem[] = [];
 
             // v1.3: Hard cap — refuse new engrams when at MEMORY_CAP
             if (finalMemory.length >= MEMORY_CAP) {
-                debugLogs.push({
-                    timestamp: new Date().toISOString(),
-                    message: `[MEMORY] Cap reached (${MEMORY_CAP}) — consolidation required before new engrams can be written. Fragment suppressed: "${r.new_memory.fact.substring(0, 60)}"`,
-                    type: 'warning'
-                });
+                // v1.12 FIX SE-3: Auto-consolidate before giving up
+                const consolidated = autoConsolidateMemory(finalMemory, debugLogs);
+                if (consolidated.length < MEMORY_CAP) {
+                    // Consolidation freed space — try the write again
+                    finalMemory = consolidated;
+                    const { isDuplicate, isUpdate, existingIndex } = checkMemoryDuplicate(
+                        r.new_memory.fact,
+                        finalMemory
+                    );
+
+                    if (isDuplicate) {
+                        debugLogs.push({
+                            timestamp: new Date().toISOString(),
+                            message: `[MEMORY] Post-consolidation duplicate suppressed: "${r.new_memory.fact.substring(0, 80)}"`,
+                            type: 'info'
+                        });
+                    } else if (isUpdate) {
+                        finalMemory[existingIndex] = {
+                            id: finalMemory[existingIndex].id,
+                            fact: r.new_memory.fact,
+                            timestamp: new Date().toISOString()
+                        };
+                        debugLogs.push({
+                            timestamp: new Date().toISOString(),
+                            message: `[MEMORY] Post-consolidation update (supersedes #${existingIndex}): "${r.new_memory.fact.substring(0, 80)}"`,
+                            type: 'success'
+                        });
+                    } else {
+                        finalMemory = [...finalMemory, {
+                            id: generateMemoryId(),
+                            fact: r.new_memory.fact,
+                            timestamp: new Date().toISOString()
+                        }];
+                        debugLogs.push({
+                            timestamp: new Date().toISOString(),
+                            message: `[MEMORY] Post-consolidation engram created: "${r.new_memory.fact.substring(0, 80)}"`,
+                            type: 'success'
+                        });
+                    }
+                } else {
+                    debugLogs.push({
+                        timestamp: new Date().toISOString(),
+                        message: `[MEMORY] Cap reached (${MEMORY_CAP}) — consolidation unable to free slots. Fragment suppressed: "${r.new_memory.fact.substring(0, 60)}"`,
+                        type: 'warning'
+                    });
+                }
             } else {
                 const { isDuplicate, isUpdate, existingIndex } = checkMemoryDuplicate(
                     r.new_memory.fact,
@@ -2111,6 +2851,17 @@ const pendingLore: LoreItem[] = [];
                 currentSceneMode
             );
 
+            // v1.12 FIX SE-9: NPC Attrition Layer — hostile NPCs traversing hazardous areas
+            r.world_tick.npc_actions = applyNpcAttritionLayer(
+                r.world_tick.npc_actions,
+                ((currentWorld as any).emergingThreats as WorldTickEvent[]) ?? [],
+                r.world_tick.environment_changes,
+                (currentWorld.knownEntities ?? []).map(e => ({
+                    name: e.name, relationship_level: e.relationship_level
+                })),
+                debugLogs
+            );
+
             const hiddenActions = r.world_tick.npc_actions.filter(a => !a.player_visible);
             for (const action of hiddenActions) {
                 newHiddenRegistry += `\n[${newTime.display}] [WORLD-TICK] ${action.npc_name}: ${action.action}`;
@@ -2157,11 +2908,13 @@ const pendingLore: LoreItem[] = [];
             }
 
             // v1.6: Exposure scoring runs before threat validation so same-turn exposure counts
-            const updatedExposure = updateFactionExposure(
+            const updatedExposure = updateFactionExposure_v112(
                 ((currentWorld as any).factionExposure as FactionExposure) ?? {},
                 r.world_tick.npc_actions,
                 currentTurn,
-                debugLogs
+                debugLogs,
+                currentWorld.knownEntities || [],
+                r.world_tick.emerging_threats || []
             );
             (currentWorld as any).factionExposure = updatedExposure;
 
@@ -2175,8 +2928,15 @@ const pendingLore: LoreItem[] = [];
                 updatedExposure,
                 knownEntityNames,
                 character.name,
-                currentSceneMode,  // v1.9
-                ((currentWorld as any).threatArcHistory as ThreatArcHistory) ?? {} // v1.11
+                currentSceneMode,
+                ((currentWorld as any).threatArcHistory as ThreatArcHistory) ?? {},
+                // v1.12: New parameters
+                currentWorld.lore ?? [],                                    // FIX SE-6
+                ((currentWorld as any).bannedMechanisms as string[][]) ?? [], // FIX SE-8
+                (currentWorld.knownEntities ?? []).map(e => ({              // FIX SE-7
+                    name: e.name, location: e.location, relationship_level: e.relationship_level
+                })),
+                currentWorld.location ?? ''                                 // FIX SE-7
             );
 
             // v1.6: Activate dormant hooks referenced by processed threats
@@ -2209,6 +2969,19 @@ const pendingLore: LoreItem[] = [];
                 debugLogs
             );
             (currentWorld as any).dormantHooks = cooldownHooks;
+
+            // v1.12 FIX SE-4: Consequent Hook Regeneration
+            const regeneratedHooks = regenerateConsequentHooks(
+                cooldownHooks,
+                previousEmergingThreats.filter(t =>
+                    !processedThreats.some(pt => pt.id === t.id)
+                ), // threats that just expired
+                currentTurn,
+                debugLogs,
+                currentWorld.lore ?? []
+            );
+            (currentWorld as any).dormantHooks = regeneratedHooks;
+
             (currentWorld as any).threatArcHistory = updatedArcHistory;
 
             // v1.11 FIX 7: Aggressive exposure decay when faction threat arcs conclude
@@ -2319,7 +3092,7 @@ const pendingLore: LoreItem[] = [];
                 if (finalConditions.includes(c)) return;
 
                 // Semantic match check
-                const { isDuplicate, existingIndex } = checkConditionDuplicate(c, finalConditions);
+                const { isDuplicate, existingIndex } = checkConditionDuplicateEnhanced(c, finalConditions);
                 if (isDuplicate) {
                     debugLogs.push({
                         timestamp: new Date().toISOString(),
@@ -2493,6 +3266,7 @@ const pendingLore: LoreItem[] = [];
                 passiveAlliesDetected: ((currentWorld as any).__passiveAllies ?? []).length > 0,
                 // v1.11: Threat arc history for re-seed detection
                 threatArcHistory: ((currentWorld as any).threatArcHistory as ThreatArcHistory) ?? {},
+                bannedMechanisms: (currentWorld as any).bannedMechanisms ?? [],
             } as GameWorld & { emergingThreats: WorldTickEvent[] },
             characterUpdate: {
                 ...character,

@@ -168,7 +168,7 @@ export interface DormantHook {
     id: string;                      // e.g. "hook_brennan_favor"
     summary: string;                 // one-sentence description of the tension
     category: HookCategory;
-    sourceField: string;             // 'backstory' | 'relationships' | 'goals' | etc.
+    sourceField: string;             // 'backstory' | 'relationships' | 'goals' | 'consequent_hook' (v1.12)
     involvedEntities: string[];      // names of NPCs or factions involved
     activationConditions: string;    // what player action or event would wake this
     status: HookStatus;
@@ -304,6 +304,9 @@ export interface LoreItem {
     keyword: string;
     content: string;
     timestamp: string;
+    // v1.12: Turn when this lore was created. Used for maturation checks —
+    // lore created within LORE_MATURATION_TURNS cannot be cited by threats.
+    turnCreated?: number;
 }
 
 export interface Scenario {
@@ -438,6 +441,9 @@ export interface GameHistory {
 
 // --- Low Frequency State ---
 export interface GameWorld {
+    // v1.12: Player-rejected mechanisms — keywords that the engine blocks
+    // from appearing in future lore or threat descriptions.
+    bannedMechanisms?: string[][];
     currentModel: string;
     memory: MemoryItem[];
     lore: LoreItem[];
