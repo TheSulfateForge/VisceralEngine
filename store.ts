@@ -104,6 +104,11 @@ const initialWorld: GameWorld = {
 
     // v1.7: Persistent name resolution map for banned names
     bannedNameMap: {},
+
+    // v1.13: Properties promoted from `as any` casts
+    emergingThreats: [],
+    passiveAlliesDetected: false,
+    location: '',
 };
 
 interface UIState {

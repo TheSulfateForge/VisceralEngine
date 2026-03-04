@@ -189,10 +189,12 @@ const STOP_WORDS = new Set([
     'his','her','their','its','is','are','was','were','has','have','had',
     'that','this','it','he','she','they','we','i','you','be','been','being',
 ]);
-const SIMILARITY_THRESHOLD = 0.55;
-const LORE_SIMILARITY_THRESHOLD = 0.60;
-// v1.5 FIX 8: Tighter threshold applied when two lore entries share a topic prefix.
-const LORE_SHARED_PREFIX_THRESHOLD = 0.40;
+import {
+    MEMORY_SIMILARITY_THRESHOLD, LORE_SIMILARITY_THRESHOLD,
+    LORE_SAME_TOPIC_SIMILARITY_THRESHOLD,
+    BIO_MODIFIER_CEILING, BIO_MODIFIER_DECAY_RATE,
+    CONDITION_SIMILARITY_THRESHOLD
+} from '../config/engineConfig';
 
 export const significantWords = (text: string): Set<string> => {
     return new Set(
@@ -246,7 +248,7 @@ export const checkMemoryDuplicate = (
         const existingWords = significantWords(existingMemory[i].fact);
         const similarity = jaccardSimilarity(newWords, existingWords);
 
-        if (similarity >= SIMILARITY_THRESHOLD) {
+        if (similarity >= MEMORY_SIMILARITY_THRESHOLD) {
             const isUpdate = newFact.length > existingMemory[i].fact.length;
             return { isDuplicate: !isUpdate, isUpdate, existingIndex: i };
         }
@@ -370,7 +372,7 @@ export const checkLoreDuplicate = (
         // FIX 8: Use stricter threshold when both entries share a meaningful topic prefix.
         // Minimum prefix length of 4 prevents short prefixes like "The" or "A" from triggering.
         const sharedPrefix = newPrefix === existingPrefix && newPrefix.length >= 4;
-        const threshold = sharedPrefix ? LORE_SHARED_PREFIX_THRESHOLD : LORE_SIMILARITY_THRESHOLD;
+        const threshold = sharedPrefix ? LORE_SAME_TOPIC_SIMILARITY_THRESHOLD : LORE_SIMILARITY_THRESHOLD;
 
         const similarity = jaccardSimilarity(newWords, existingWords);
 
@@ -406,8 +408,6 @@ export const checkLoreDuplicate = (
 // ---------------------------------------------------------------------------
 // Condition semantic deduplication (v1.5)
 // ---------------------------------------------------------------------------
-
-const CONDITION_SIMILARITY_THRESHOLD = 0.55; // Lower than memory — conditions are short
 
 export const checkConditionDuplicate = (
     newCondition: string,
@@ -575,13 +575,6 @@ export const partitionConditions = (conditions: string[]): { active: string[]; p
 // Bio modifier ceilings
 // ---------------------------------------------------------------------------
 
-export const BIO_MODIFIER_CEILING = {
-    stamina:   1.5,
-    calories:  2.0,
-    hydration: 2.0,
-    lactation: 3.0,
-};
-
 /**
  * Clamps bio modifiers to their per-stat ceiling values.
  * The AI cannot push a modifier above its ceiling regardless of what value it provides.
@@ -601,13 +594,11 @@ export const applyCeilings = (
 // Bio modifier decay
 // ---------------------------------------------------------------------------
 
-const DECAY_RATE = 0.05;
-
 export const decayBioModifiers = (
     modifiers: { calories: number; hydration: number; stamina: number; lactation: number },
     accelerated = false
 ): typeof modifiers => {
-    const rate = accelerated ? DECAY_RATE * 2 : DECAY_RATE;
+    const rate = accelerated ? BIO_MODIFIER_DECAY_RATE * 2 : BIO_MODIFIER_DECAY_RATE;
     const decay = (val: number, baseline = 1.0) =>
         val > baseline ? Math.max(baseline, val - rate) :
         val < baseline ? Math.min(baseline, val + rate) : val;

@@ -1,5 +1,5 @@
 
-export const mapSystemErrorToNarrative = (error: any): string => {
+export const mapSystemErrorToNarrative = (error: unknown): string => {
   let raw = '';
   
   if (typeof error === 'string') {

@@ -215,6 +215,14 @@ export const sanitiseStateOnLoad = (
     // --- World ---
     const cleanWorld = { ...world };
 
+    // v1.13: Migration guards for new GameWorld fields
+    if (!cleanWorld.emergingThreats) {
+        cleanWorld.emergingThreats = [];
+    }
+    if (cleanWorld.passiveAlliesDetected === undefined) {
+        cleanWorld.passiveAlliesDetected = false;
+    }
+
     // Entities
     cleanWorld.knownEntities = (world.knownEntities ?? []).map(entity => ({
         ...entity,

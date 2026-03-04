@@ -22,20 +22,16 @@
 
 import { Character, CharacterUpdates } from '../types';
 import { clampModifier } from './characterUtils';
-import { BIO_MODIFIER_CEILING, checkConditionDuplicate } from './contentValidation';
+import { checkConditionDuplicate } from './contentValidation';
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
 /** Condition count above which the prune gate activates. */
-const CONDITION_PRUNE_THRESHOLD = 25;
-
-/** Minimum removals required this turn before any additions are allowed when above threshold. */
-const MIN_REMOVALS_BEFORE_ADD = 3;
-
-/** Hard cap — no additions whatsoever at or above this count. */
-const CONDITION_HARD_CAP = 40;
+import {
+    CONDITION_PRUNE_THRESHOLD, MIN_REMOVALS_BEFORE_ADD, CONDITION_HARD_CAP, BIO_MODIFIER_CEILING
+} from '../config/engineConfig';
 
 // ---------------------------------------------------------------------------
 // Main delta processor

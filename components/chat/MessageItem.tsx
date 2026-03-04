@@ -9,7 +9,7 @@ import { useSensoryFX } from '../../hooks/useSensoryFX';
 
 interface MessageItemProps {
     msg: ChatMessage;
-    executeLocalRoll: (id: string, req: any) => void;
+    executeLocalRoll: (id: string, req: NonNullable<ChatMessage['rollRequest']>) => void;
     resolveBargain: (id: string, accepted: boolean, desc: string) => void;
 }
 

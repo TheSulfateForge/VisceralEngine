@@ -1,6 +1,7 @@
 
 import React, { useState } from 'react';
 import { useGameStore } from '../../store';
+import { View } from '../../types';
 import { getConditionSeverity, getMakersMark } from '../../utils';
 import { ImageCarousel } from '../common/ImageCarousel';
 import { EnvironmentWidget } from '../sidebar/EnvironmentWidget';
@@ -210,10 +211,10 @@ export const Sidebar: React.FC = () => {
             </div>
 
             <nav className="flex flex-col space-y-1 mb-8 shrink-0">
-                {['chat', 'character', 'world'].map(t => (
+                {(['chat', 'character', 'world'] as const).map(t => (
                     <button 
                         key={t} 
-                        onClick={() => setUI({ activeTab: t as any, isMobileMenuOpen: false })} 
+                        onClick={() => setUI({ activeTab: t, isMobileMenuOpen: false })} 
                         className={`text-left px-5 py-3 text-[9px] font-bold uppercase tracking-[0.3em] transition-all border-l-2 ${ui.activeTab === t ? 'bg-red-950/10 border-red-700 text-white' : 'border-transparent text-gray-500'}`}
                     >
                         {t}

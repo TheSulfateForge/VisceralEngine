@@ -28,6 +28,7 @@ export enum Role {
 export type RoleType = Role;
 
 export type RollOutcome = 'CRITICAL FAILURE' | 'FAILURE' | 'MIXED/COST' | 'SUCCESS' | 'STRONG SUCCESS' | 'CRITICAL SUCCESS';
+export type ConditionSeverity = 'minor' | 'traumatic' | 'lethal';
 
 // --- Bio Types ---
 
@@ -304,6 +305,7 @@ export interface LoreItem {
     keyword: string;
     content: string;
     timestamp: string;
+    semanticUpdateOf?: LoreId;
     // v1.12: Turn when this lore was created. Used for maturation checks —
     // lore created within LORE_MATURATION_TURNS cannot be cited by threats.
     turnCreated?: number;
@@ -478,6 +480,17 @@ export interface GameWorld {
 
     // v1.11 — Threat Arc History for re-seed detection
     threatArcHistory?: ThreatArcHistory;
+
+    // --- NEW v1.13: Properties promoted from `as any` casts ---
+
+    /** Active emerging threats being tracked by the threat seed state machine. */
+    emergingThreats: WorldTickEvent[];
+
+    /** v1.10: Flag set by allied passivity detection for sectionReminders. */
+    passiveAlliesDetected?: boolean;
+
+    /** Player's current location string — used by info chain validation. */
+    location?: string;
 }
 
 export interface WorldTime {

@@ -6,12 +6,12 @@ export const formatTimestamp = (isoString: string): string => {
   }
 };
 
-export interface DebouncedFunction<T extends (...args: any[]) => any> {
+export interface DebouncedFunction<T extends (...args: unknown[]) => unknown> {
     (...args: Parameters<T>): void;
     cancel: () => void;
 }
 
-export const debounce = <T extends (...args: any[]) => any>(
+export const debounce = <T extends (...args: unknown[]) => unknown>(
   func: T,
   wait: number
 ): DebouncedFunction<T> => {

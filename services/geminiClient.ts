@@ -9,7 +9,7 @@ const REQUEST_TIMEOUT_MS = 60000;
 
 export class GeminiClient {
   public readonly ai: GoogleGenAI;
-  protected readonly modelName: string;
+  public readonly modelName: string;
 
   constructor(apiKey: string, modelName: string) {
     if (!apiKey) throw new Error("API Key is required for GeminiClient");
@@ -108,7 +108,7 @@ export class GeminiClient {
       ? mode as SceneMode
       : 'NARRATIVE';
 
-    const rawLighting = asString((safeData.combat_context as any)?.environment?.lighting, "DIM");
+    const rawLighting = asString((safeData.combat_context as Record<string, any>)?.environment?.lighting, "DIM");
     const lighting: Lighting = (LIGHTING_LEVELS as readonly string[]).includes(rawLighting)
         ? rawLighting as Lighting
         : 'DIM';
@@ -122,9 +122,9 @@ export class GeminiClient {
         time_passed_minutes: asNumber(safeData.time_passed_minutes, 0),
         
         biological_inputs: isObject(safeData.biological_inputs) ? {
-            ingested_calories: asNumber(safeData.biological_inputs.ingested_calories, undefined as any),
-            ingested_water: asNumber(safeData.biological_inputs.ingested_water, undefined as any),
-            sleep_hours: asNumber(safeData.biological_inputs.sleep_hours, undefined as any),
+            ingested_calories: asNumber(safeData.biological_inputs.ingested_calories, undefined),
+            ingested_water: asNumber(safeData.biological_inputs.ingested_water, undefined),
+            sleep_hours: asNumber(safeData.biological_inputs.sleep_hours, undefined),
             relieved_pressure: asArray(safeData.biological_inputs.relieved_pressure)
         } : undefined,
 
@@ -132,10 +132,10 @@ export class GeminiClient {
         
         combat_context: isObject(safeData.combat_context) ? {
             environment: {
-                summary: asString((safeData.combat_context.environment as any)?.summary, "Unknown"),
+                summary: asString((safeData.combat_context.environment as Record<string, any>)?.summary, "Unknown"),
                 lighting: lighting,
-                weather: asString((safeData.combat_context.environment as any)?.weather, "None"),
-                terrain_tags: asArray((safeData.combat_context.environment as any)?.terrain_tags)
+                weather: asString((safeData.combat_context.environment as Record<string, any>)?.weather, "None"),
+                terrain_tags: asArray((safeData.combat_context.environment as Record<string, any>)?.terrain_tags)
             },
             active_threats: asArray(safeData.combat_context.active_threats)
         } : undefined,

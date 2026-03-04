@@ -1,5 +1,6 @@
 
 import { LoreItem, KnownEntity, ChatMessage, Role } from '../types';
+import { RAG_LORE_LIMIT } from '../config/engineConfig';
 
 // Extended Stop Words list for better noise filtering
 const STOP_WORDS = new Set([
@@ -234,7 +235,7 @@ export function retrieveRelevantContext(
       totalEntities: knownEntities.length,
       filteredEntities: selectedEntities.length,
       queryTokens: [...queryAnalysis.unigrams, ...queryAnalysis.bigrams],
-      topScores: debugScores.slice(0, 8)
+      topScores: debugScores.slice(0, RAG_LORE_LIMIT)
     }
   };
 }

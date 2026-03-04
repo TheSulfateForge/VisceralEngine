@@ -139,6 +139,13 @@ export const usePersistence = () => {
         save.gameState.history
       );
 
+      if (!world.emergingThreats) {
+        world.emergingThreats = [];
+      }
+      if (world.passiveAlliesDetected === undefined) {
+        world.passiveAlliesDetected = false;
+      }
+
       setGameHistory(history);
       setGameWorld(world);
       setCharacter(cleanChar);
@@ -176,6 +183,14 @@ export const usePersistence = () => {
           save.character,
           save.gameState.history
         );
+
+        if (!world.emergingThreats) {
+          world.emergingThreats = [];
+        }
+        if (world.passiveAlliesDetected === undefined) {
+          world.passiveAlliesDetected = false;
+        }
+
         setGameHistory({ ...history, isThinking: false });
         setGameWorld({ ...world });
         setCharacter({ ...cleanChar });

@@ -3,14 +3,7 @@ import { retrieveRelevantContext, RAGResult } from './ragEngine';
 import { getSectionReminders } from '../sectionReminders';
 import { partitionConditions } from './contentValidation';
 import { applyExistingMap } from './nameResolver';
-
-const DOWNTIME_KEYWORDS = [
-  'sleep', 'rest', 'wait', 'camp', 'hide', 
-  'relax', 'craft', 'recover', 'read', 'eat', 
-  'drink', 'bath', 'wash', 'clean', 'sit',
-  'meditate', 'heal', 'study', 'walk', 'travel',
-  'say', 'ask', 'tell', 'shout', 'whisper', 'talk', 'kiss', 'hug'
-];
+import { DOWNTIME_KEYWORDS } from '../config/engineConfig';
 
 export interface PromptResult {
     prompt: string;
@@ -302,8 +295,8 @@ export const constructGeminiPrompt = (
     character.conditions.length,
     (gameWorld.knownEntities ?? []).length,           // FIX 6: entity density
     (character.goals ?? []).length,                    // FIX 11: goal staleness
-    ((gameWorld as any).emergingThreats as any[] ?? []).length, // v1.7: logistics check
-    !!(gameWorld as any).passiveAlliesDetected         // v1.10: allied passivity
+    (gameWorld.emergingThreats ?? []).length, // v1.7: logistics check
+    !!gameWorld.passiveAlliesDetected         // v1.10: allied passivity
   );
   const sectionRefresh = sectionRefreshes.length > 0 ? sectionRefreshes.join('\n\n') : null;
   
@@ -320,12 +313,12 @@ export const constructGeminiPrompt = (
 
   // v1.6: Origin Gate context
   const dormantHooksContext = buildDormantHooksContext(
-      (gameWorld as any).dormantHooks as DormantHook[] ?? [],
-      (gameWorld as any).factionExposure as FactionExposure ?? {}
+      gameWorld.dormantHooks ?? [],
+      gameWorld.factionExposure ?? {}
   );
 
   // v1.7: Final sanitisation pass — ensure no banned names leak into prompt
-  const nameMap = (gameWorld as any).bannedNameMap as Record<string, string> ?? {};
+  const nameMap = gameWorld.bannedNameMap ?? {};
   const sanitise = (s: string) => applyExistingMap(s, nameMap);
 
   // 8. Assembly

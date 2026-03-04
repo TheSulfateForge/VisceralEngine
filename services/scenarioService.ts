@@ -22,7 +22,7 @@ export class ScenarioService {
       `;
 
             const response = await this.client.ai.models.generateContent({
-                model: (this.client as any).modelName,
+                model: this.client.modelName,
                 contents: prompt,
                 config: {
                     responseMimeType: "application/json",

@@ -35,7 +35,7 @@ Output valid JSON matching the schema exactly.
         `;
 
             const response = await this.client.ai.models.generateContent({
-                model: (this.client as any).modelName,
+                model: this.client.modelName,
                 contents: prompt,
                 config: {
                     responseMimeType: "application/json",
@@ -91,7 +91,7 @@ Output ONLY the value for the requested field as valid JSON.
             `;
 
             const response = await this.client.ai.models.generateContent({
-                model: (this.client as any).modelName,
+                model: this.client.modelName,
                 contents: prompt,
                 config: {
                     responseMimeType: "application/json",
@@ -201,7 +201,7 @@ Output valid JSON array of hook objects.
 
         try {
             const response = await this.client.ai.models.generateContent({
-                model: (this.client as any).modelName,
+                model: this.client.modelName,
                 contents: prompt,
                 config: {
                     responseMimeType: "application/json",

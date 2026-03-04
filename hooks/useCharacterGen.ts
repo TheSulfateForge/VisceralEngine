@@ -88,7 +88,7 @@ export const useCharacterGen = () => {
           const service = await getService();
           if (!service) return;
 
-          const characterService = new CharacterService((service as any).client ?? service);
+          const characterService = new CharacterService(service);
           const hooks = await characterService.extractDormantHooks(character);
 
           if (hooks.length > 0) {

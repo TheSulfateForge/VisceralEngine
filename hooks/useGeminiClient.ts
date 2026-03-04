@@ -17,8 +17,7 @@ import { useCharacterGen } from './useCharacterGen';
 import { processCharacterUpdates } from '../utils/characterDelta';
 import { deduplicateConditions } from '../utils/characterUtils';
 import { significantWords } from '../utils/contentValidation';
-
-const SUMMARIZATION_INTERVAL = 20;
+import { SUMMARIZATION_INTERVAL } from '../config/engineConfig';
 
 export const useGeminiClient = () => {
   const { 
@@ -85,7 +84,7 @@ export const useGeminiClient = () => {
     
     if (hasRejection) {
         const currentWorld = useGameStore.getState().gameWorld;
-        const currentBanned = ((currentWorld as any).bannedMechanisms as string[][]) ?? [];
+        const currentBanned = currentWorld.bannedMechanisms ?? [];
         
         // Extract the rejected concept keywords from the player's message
         // Look for threat descriptions in the CANCEL text (between quotes or after keywords)
@@ -104,7 +103,7 @@ export const useGeminiClient = () => {
                 useGameStore.getState().setGameWorld({
                     ...currentWorld,
                     bannedMechanisms: trimmedBanned
-                } as any);
+                });
                 
                 console.log('[v1.12] Banned mechanism added:', rejectedWords);
             }
@@ -123,12 +122,12 @@ export const useGeminiClient = () => {
                 if (match[1]) {
                     const deniedWords = [...significantWords(match[1])];
                     if (deniedWords.length >= 2) {
-                        const currentBannedNow = ((useGameStore.getState().gameWorld as any).bannedMechanisms as string[][]) ?? [];
+                        const currentBannedNow = useGameStore.getState().gameWorld.bannedMechanisms ?? [];
                         const updatedBannedNow = [...currentBannedNow, deniedWords].slice(-20);
                         useGameStore.getState().setGameWorld({
                             ...useGameStore.getState().gameWorld,
                             bannedMechanisms: updatedBannedNow
-                        } as any);
+                        });
                         console.log('[v1.12] Mechanism denial banned:', deniedWords);
                     }
                 }
@@ -171,8 +170,8 @@ export const useGeminiClient = () => {
             preCallState.character.conditions.length,
             (preCallState.gameWorld.knownEntities ?? []).length,
             (preCallState.character.goals ?? []).length,
-            ((preCallState.gameWorld as any).emergingThreats ?? []).length,
-            !!((preCallState.gameWorld as any).__passiveAllies as string[] | undefined)?.length
+            (preCallState.gameWorld.emergingThreats ?? []).length,
+            !!preCallState.gameWorld.passiveAlliesDetected
         );
         // Join multiple reminders into a single string for the prompt
         const activeReminder = activeReminders.length > 0 
