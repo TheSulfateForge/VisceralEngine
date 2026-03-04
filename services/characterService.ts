@@ -6,7 +6,7 @@
 
 import { GoogleGenAI, Schema, Type } from "@google/genai";
 import { GeneratedCharacterFields, Character, DormantHook, HookCategory, HookStatus } from "../types";
-import { SAFETY_SETTINGS } from "../constants";
+import { GEMINI_SAFETY_SETTINGS } from "../constants";
 import { CHARACTER_GEN_SCHEMA } from "../schemas/characterSchema";
 import { GeminiClient } from "./geminiClient";
 
@@ -40,7 +40,7 @@ Output valid JSON matching the schema exactly.
                 config: {
                     responseMimeType: "application/json",
                     responseSchema: CHARACTER_GEN_SCHEMA,
-                    safetySettings: SAFETY_SETTINGS,
+                    safetySettings: GEMINI_SAFETY_SETTINGS,
                     temperature: 1.0
                 }
             });
@@ -95,7 +95,7 @@ Output ONLY the value for the requested field as valid JSON.
                 contents: prompt,
                 config: {
                     responseMimeType: "application/json",
-                    safetySettings: SAFETY_SETTINGS,
+                    safetySettings: GEMINI_SAFETY_SETTINGS,
                     temperature: 0.9
                 }
             });
@@ -206,7 +206,7 @@ Output valid JSON array of hook objects.
                 config: {
                     responseMimeType: "application/json",
                     responseSchema: DORMANT_HOOK_SCHEMA,
-                    safetySettings: SAFETY_SETTINGS,
+                    safetySettings: GEMINI_SAFETY_SETTINGS,
                     temperature: 0.3 // Low temp — precise extraction, not creativity
                 }
             });

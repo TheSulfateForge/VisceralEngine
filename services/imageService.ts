@@ -1,6 +1,6 @@
 
 import { GoogleGenAI } from "@google/genai";
-import { IMAGE_SAFETY_SETTINGS } from "../constants";
+import { GEMINI_SAFETY_SETTINGS } from "../constants";
 
 export class ImageService {
     constructor(private ai: GoogleGenAI) {}
@@ -17,7 +17,7 @@ export class ImageService {
                     imageConfig: {
                         aspectRatio: "16:9"
                     },
-                    safetySettings: IMAGE_SAFETY_SETTINGS,
+                    safetySettings: GEMINI_SAFETY_SETTINGS,
                 }
             });
             const candidate = response.candidates?.[0];

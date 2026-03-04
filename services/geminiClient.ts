@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
-import { SAFETY_SETTINGS, MAX_CONTEXT_HISTORY } from "../constants";
+import { GEMINI_SAFETY_SETTINGS, MAX_CONTEXT_HISTORY } from "../constants";
 import { ChatMessage, Role, ModelResponseSchema, SCENE_MODES, SceneMode, Lighting, LIGHTING_LEVELS } from "../types";
 import { RESPONSE_SCHEMA } from "../schemas/responseSchema";
 import { sanitiseHistory } from '../utils/nameResolver';
@@ -260,7 +260,7 @@ export class GeminiClient {
         temperature: parseFloat(localStorage.getItem('visceral_temperature') || '0.9'),
         topP: 0.95,
         topK: 40,
-        safetySettings: SAFETY_SETTINGS,
+        safetySettings: GEMINI_SAFETY_SETTINGS,
         responseMimeType: "application/json",
         responseSchema: RESPONSE_SCHEMA
       },

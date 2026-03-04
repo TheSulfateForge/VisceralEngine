@@ -54,6 +54,12 @@ export const sanitiseBannedNames = (
 // (kept for backwards compatibility during transition)
 // ---------------------------------------------------------------------------
 
+/**
+ * @deprecated v1.7 — Vestigial safety net from the [RENAME:X] marker system.
+ * The v1.7 nameResolver now resolves banned names immediately. This function
+ * is kept only as a fallback guard in sanitiseAllFields(). Remove once
+ * confirmed that no [RENAME:X] markers appear in production save files.
+ */
 export const containsRenameMarker = (text: string): boolean =>
     /\[RENAME:[^\]]+\]/i.test(text);
 

@@ -69,9 +69,11 @@ export default defineConfig({
   base: '/VisceralEngine/', 
   publicDir: 'public', // Explicitly set public directory
   define: {
-    // Defines process.env to prevent "process is not defined" errors in browser
-    // since the code accesses process.env.API_KEY
-    'process.env': process.env
+    // Scoped process.env — only expose specific variables to the browser bundle.
+    // The broad 'process.env': process.env pattern leaks ALL Node environment
+    // variables into client-side code, which is a security concern.
+    'process.env.API_KEY': JSON.stringify(process.env.API_KEY ?? ''),
+    'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'production'),
   },
   build: {
     outDir: 'dist',

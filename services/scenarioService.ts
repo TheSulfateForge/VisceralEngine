@@ -1,6 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import { Scenario, Character } from "../types";
-import { SAFETY_SETTINGS } from "../constants";
+import { GEMINI_SAFETY_SETTINGS } from "../constants";
 import { SCENARIO_SCHEMA } from "../schemas/scenarioSchema";
 import { GeminiClient } from "./geminiClient";
 
@@ -27,7 +27,7 @@ export class ScenarioService {
                 config: {
                     responseMimeType: "application/json",
                     responseSchema: SCENARIO_SCHEMA,
-                    safetySettings: SAFETY_SETTINGS,
+                    safetySettings: GEMINI_SAFETY_SETTINGS,
                     temperature: 0.95
                 }
             });
