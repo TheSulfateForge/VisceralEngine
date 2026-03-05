@@ -144,44 +144,101 @@ export const Sidebar: React.FC = () => {
                      <div className="space-y-2 pt-2 border-t border-gray-900">
                         <span className="text-[9px] font-bold text-blue-900/70 uppercase tracking-widest">Social Registry</span>
                         <div className="flex flex-col gap-2 max-h-64 overflow-y-auto pr-1 custom-scrollbar">
-                            {knownEntities.map(entity => (
-                                <div key={entity.id} className="bg-gray-900/30 border border-gray-800 rounded-sm hover:border-gray-600 transition-colors">
-                                    <div 
-                                        className="px-2.5 py-2 cursor-pointer"
-                                        onClick={() => toggleLedger(entity.id)}
-                                    >
-                                        <div className="flex justify-between items-center mb-1">
-                                            <span className="text-[9px] font-bold text-gray-300">{entity.name}</span>
-                                            <span className="text-[7px] text-gray-500 uppercase tracking-wider">{entity.role}</span>
-                                        </div>
-                                        <div className="flex justify-between items-center">
-                                            <RelationshipBadge level={entity.relationship_level || 'NEUTRAL'} />
-                                            <span className="text-[7px] text-blue-400 italic opacity-80">{entity.impression}</span>
-                                        </div>
+                            
+                            {/* IN SCENE */}
+                            {knownEntities.filter(e => !e.status || e.status === 'present').length > 0 && (
+                                <div className="space-y-1">
+                                    <div className="flex items-center gap-1.5 mb-1.5">
+                                        <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></div>
+                                        <span className="text-[8px] font-bold text-gray-500 uppercase tracking-widest">In Scene</span>
                                     </div>
-                                    
-                                    {/* Expandable Ledger */}
-                                    {expandedLedgerId === entity.id && (
-                                        <div className="px-2.5 pb-2.5 pt-1 border-t border-gray-800 bg-black/20 animate-fade-in">
-                                            <p className="text-[7px] font-bold text-gray-500 uppercase tracking-widest mb-1">Leverage</p>
-                                            <p className="text-[8px] text-gray-400 italic mb-2">{entity.leverage || "None"}</p>
+                                    {knownEntities.filter(e => !e.status || e.status === 'present').map(entity => (
+                                        <div key={entity.id} className="bg-gray-900/30 border border-gray-800 rounded-sm hover:border-gray-600 transition-colors">
+                                            <div 
+                                                className="px-2.5 py-2 cursor-pointer"
+                                                onClick={() => toggleLedger(entity.id)}
+                                            >
+                                                <div className="flex justify-between items-center mb-1">
+                                                    <span className="text-[9px] font-bold text-gray-300">{entity.name}</span>
+                                                    <span className="text-[7px] text-gray-500 uppercase tracking-wider">{entity.role}</span>
+                                                </div>
+                                                <div className="flex justify-between items-center">
+                                                    <RelationshipBadge level={entity.relationship_level || 'NEUTRAL'} />
+                                                    <span className="text-[7px] text-blue-400 italic opacity-80">{entity.impression}</span>
+                                                </div>
+                                            </div>
                                             
-                                            <p className="text-[7px] font-bold text-gray-500 uppercase tracking-widest mb-1">Memory Ledger</p>
-                                            {entity.ledger && entity.ledger.length > 0 ? (
-                                                <ul className="space-y-1">
-                                                    {entity.ledger.map((mem, idx) => (
-                                                        <li key={idx} className="text-[8px] text-gray-500 leading-tight border-l border-gray-700 pl-1.5">
-                                                            {mem}
-                                                        </li>
-                                                    ))}
-                                                </ul>
-                                            ) : (
-                                                <p className="text-[8px] text-gray-500 italic">No significant memories.</p>
+                                            {/* Expandable Ledger */}
+                                            {expandedLedgerId === entity.id && (
+                                                <div className="px-2.5 pb-2.5 pt-1 border-t border-gray-800 bg-black/20 animate-fade-in">
+                                                    <p className="text-[7px] font-bold text-gray-500 uppercase tracking-widest mb-1">Leverage</p>
+                                                    <p className="text-[8px] text-gray-400 italic mb-2">{entity.leverage || "None"}</p>
+                                                    
+                                                    <p className="text-[7px] font-bold text-gray-500 uppercase tracking-widest mb-1">Memory Ledger</p>
+                                                    {entity.ledger && entity.ledger.length > 0 ? (
+                                                        <ul className="space-y-1">
+                                                            {entity.ledger.map((mem, idx) => (
+                                                                <li key={idx} className="text-[8px] text-gray-500 leading-tight border-l border-gray-700 pl-1.5">
+                                                                    {mem}
+                                                                </li>
+                                                            ))}
+                                                        </ul>
+                                                    ) : (
+                                                        <p className="text-[8px] text-gray-500 italic">No significant memories.</p>
+                                                    )}
+                                                </div>
                                             )}
                                         </div>
-                                    )}
+                                    ))}
                                 </div>
-                            ))}
+                            )}
+
+                            {/* NEARBY */}
+                            {knownEntities.filter(e => e.status === 'nearby').length > 0 && (
+                                <div className="space-y-1 mt-2">
+                                    <div className="flex items-center gap-1.5 mb-1.5">
+                                        <div className="w-1.5 h-1.5 rounded-full border border-gray-500"></div>
+                                        <span className="text-[8px] font-bold text-gray-600 uppercase tracking-widest">Nearby</span>
+                                    </div>
+                                    {knownEntities.filter(e => e.status === 'nearby').map(entity => (
+                                        <div key={entity.id} className="flex justify-between items-center px-2 py-1 bg-gray-900/20 border border-gray-800/50 rounded-sm">
+                                            <span className="text-[8px] text-gray-400">{entity.name} <span className="opacity-50">({entity.role})</span></span>
+                                            <RelationshipBadge level={entity.relationship_level || 'NEUTRAL'} />
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            {/* DISTANT / MISSING */}
+                            {knownEntities.filter(e => e.status === 'distant' || e.status === 'missing').length > 0 && (
+                                <div className="space-y-1 mt-2">
+                                    <div className="flex items-center gap-1.5 mb-1.5">
+                                        <div className="w-1.5 h-1.5 rounded-full border border-gray-700 border-dashed"></div>
+                                        <span className="text-[8px] font-bold text-gray-700 uppercase tracking-widest">Distant / Missing</span>
+                                    </div>
+                                    <div className="flex flex-wrap gap-1">
+                                        {knownEntities.filter(e => e.status === 'distant' || e.status === 'missing').map(entity => (
+                                            <span key={entity.id} className="text-[7px] text-gray-500 bg-gray-900/30 px-1.5 py-0.5 rounded-sm border border-gray-800/30">
+                                                {entity.name}
+                                            </span>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* DEAD / RETIRED */}
+                            {knownEntities.filter(e => e.status === 'dead' || e.status === 'retired').length > 0 && (
+                                <div className="space-y-1 mt-2 border-t border-gray-900 pt-2">
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-1.5">
+                                            <span className="text-[8px] text-red-900/50">✕</span>
+                                            <span className="text-[8px] font-bold text-gray-700 uppercase tracking-widest">Dead / Retired</span>
+                                        </div>
+                                        <span className="text-[7px] text-gray-600">{knownEntities.filter(e => e.status === 'dead' || e.status === 'retired').length} entries</span>
+                                    </div>
+                                </div>
+                            )}
+
                         </div>
                      </div>
                 )}

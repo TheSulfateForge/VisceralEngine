@@ -87,7 +87,7 @@ import {
     NPC_ATTRITION_CHANCE, CONSEQUENT_HOOKS_PER_CONSUMPTION,
     EXPOSURE_THRESHOLD_FOR_THREAT, EXPOSURE_DIRECT_OBSERVATION,
     EXPOSURE_PUBLIC_ACTION, EXPOSURE_DECAY_PER_TURN,
-    MAX_REGISTRY_LINES, TIME_CAPS, MEMORY_CAP,
+    MAX_REGISTRY_LINES, TIME_CAPS, MEMORY_CAP, DEFAULT_MINUTES_PER_TURN
 } from '../config/engineConfig';
 
 import {
@@ -99,7 +99,9 @@ import {
     validateNpcEntityRegistration, syncEntityLocationsFromWorldTick,
     applyNpcAttritionLayer, ENTITY_EXTRACTION_BLACKLIST,
     processThreatSeeds, extractEntityNamesFromDescription, extractBannedMechanismFromRejection,
-    checkBannedMechanisms
+    checkBannedMechanisms,
+    updateEntityPresence, applyStatusTransitions, detectEntityDeaths, filterDeadEntityActions,
+    processLocationUpdate, inferPlayerLocation
 } from './engine';
 // ---------------------------------------------------------------------------
 // Pipeline Orchestrator
@@ -381,6 +383,54 @@ export const SimulationEngine = {
                 r.hidden_update ?? '',
                 debugLogs
             );
+        }
+
+        // v1.14: Entity Status Lifecycle — Update presence based on narrative/actions
+        let newPlayerLocation = currentWorld.location ?? '';
+        updatedKnownEntities = updateEntityPresence(
+            updatedKnownEntities,
+            r.narrative,
+            r.world_tick?.npc_actions ?? [],
+            r.npc_interaction,
+            currentTurn,
+            newPlayerLocation,
+            debugLogs
+        );
+
+        // v1.14: Entity Status Lifecycle — Apply automatic transitions
+        updatedKnownEntities = applyStatusTransitions(
+            updatedKnownEntities,
+            currentTurn,
+            newPlayerLocation,
+            currentWorld.location ?? '',
+            currentWorld.emergingThreats ?? [],
+            debugLogs
+        );
+
+        // v1.14: Entity Status Lifecycle — Detect deaths
+        updatedKnownEntities = detectEntityDeaths(
+            updatedKnownEntities,
+            r.known_entity_updates,
+            r.narrative,
+            debugLogs
+        );
+
+        // v1.14: Location Proximity Graph — Process location updates
+        let updatedLocationGraph = currentWorld.locationGraph ?? { nodes: {}, edges: [], playerLocationId: '' };
+        if (r.location_update) {
+            updatedLocationGraph = processLocationUpdate(
+                updatedLocationGraph,
+                r.location_update,
+                currentTurn,
+                debugLogs
+            );
+            newPlayerLocation = r.location_update.location_name;
+        } else {
+            // Infer location if not explicitly provided
+            const inferred = inferPlayerLocation(updatedLocationGraph, r.narrative, newPlayerLocation);
+            if (inferred !== newPlayerLocation) {
+                newPlayerLocation = inferred;
+            }
         }
 
         // ===================================================================
@@ -673,6 +723,13 @@ const pendingLore: LoreItem[] = [];
                 currentSceneMode
             );
 
+            // v1.14: Filter out actions for dead/retired entities
+            r.world_tick.npc_actions = filterDeadEntityActions(
+                r.world_tick.npc_actions,
+                updatedKnownEntities,
+                debugLogs
+            );
+
             // v1.12 FIX SE-9: NPC Attrition Layer — hostile NPCs traversing hazardous areas
             r.world_tick.npc_actions = applyNpcAttritionLayer(
                 r.world_tick.npc_actions,
@@ -760,7 +817,9 @@ const pendingLore: LoreItem[] = [];
                 (currentWorld.knownEntities ?? []).map(e => ({              // FIX SE-7
                     name: e.name, location: e.location, relationship_level: e.relationship_level
                 })),
-                currentWorld.location ?? ''                                 // FIX SE-7
+                currentWorld.location ?? '',                                 // FIX SE-7
+                currentWorld.locationGraph,
+                DEFAULT_MINUTES_PER_TURN
             );
 
             // v1.6: Activate dormant hooks referenced by processed threats
@@ -1086,6 +1145,8 @@ const pendingLore: LoreItem[] = [];
                 // v1.11: Threat arc history for re-seed detection
                 threatArcHistory: typeof currentThreatArcHistory !== 'undefined' ? currentThreatArcHistory : (currentWorld.threatArcHistory ?? {}),
                 bannedMechanisms: currentWorld.bannedMechanisms ?? [],
+                location: newPlayerLocation,
+                locationGraph: updatedLocationGraph,
             },
             characterUpdate: {
                 ...character,

@@ -118,6 +118,17 @@ export interface ActiveThreat {
 
 // --- Social Realism Systems ---
 
+// --- Entity Status Lifecycle (v1.14) ---
+export const ENTITY_STATUSES = [
+    'present',    // In the current scene, actively interactable
+    'nearby',     // At the same location but not in the immediate scene
+    'distant',    // At a known location far from the player
+    'missing',    // Location unknown — disappeared, fled, untracked
+    'dead',       // Confirmed dead — engine blocks all actions from them
+    'retired',    // Narratively concluded — sailed away, imprisoned, etc.
+] as const;
+export type EntityStatus = typeof ENTITY_STATUSES[number];
+
 export const RELATIONSHIP_LEVELS = ['NEMESIS', 'HOSTILE', 'COLD', 'NEUTRAL', 'WARM', 'ALLIED', 'DEVOTED'] as const;
 export type RelationshipLevel = typeof RELATIONSHIP_LEVELS[number];
 
@@ -130,6 +141,13 @@ export interface KnownEntity {
     relationship_level: RelationshipLevel;
     leverage: string;
     ledger: string[];
+
+    // --- v1.14: Entity Status Lifecycle ---
+    status?: EntityStatus;
+    lastSeenTurn?: number;
+    firstSeenTurn?: number;
+    exitReason?: string;
+    statusChangedTurn?: number;
 }
 
 export interface NPCInteraction {
@@ -137,6 +155,46 @@ export interface NPCInteraction {
     dialogue: string;
     subtext: string;
     biological_tells: string;
+}
+
+// --- Location Proximity Graph (v1.14) ---
+
+export interface LocationNode {
+    /** Unique identifier — normalized lowercase name. */
+    id: string;
+    /** Display name as introduced in narrative. */
+    displayName: string;
+    /** Short description from first mention. */
+    description?: string;
+    /** Turn when this location was first mentioned. */
+    firstMentionedTurn: number;
+    /** Tags for categorization (e.g., 'settlement', 'wilderness', 'interior'). */
+    tags: string[];
+}
+
+export interface LocationEdge {
+    /** ID of source location node. */
+    from: string;
+    /** ID of destination location node. */
+    to: string;
+    /** Travel time in minutes by default movement mode. */
+    travelTimeMinutes: number;
+    /** How this edge was established (for debugging). */
+    source: 'ai_declared' | 'inferred_from_narrative' | 'player_travel';
+    /** Turn when this edge was created. */
+    createdTurn: number;
+    /** Optional: travel modes with time overrides.
+     *  E.g., { "horseback": 60, "foot": 180, "carriage": 120 } */
+    modeOverrides?: Record<string, number>;
+}
+
+export interface LocationGraph {
+    /** All known locations. Keyed by normalized ID. */
+    nodes: Record<string, LocationNode>;
+    /** All known travel connections. */
+    edges: LocationEdge[];
+    /** The player's current location ID. */
+    playerLocationId: string;
 }
 
 // --- Threat Seed State Machine (v1.3) ---
@@ -287,6 +345,44 @@ export interface WorldTick {
     emerging_threats: WorldTickEvent[];
 }
 
+// --- Location Proximity Graph (v1.14) ---
+
+export interface LocationNode {
+    id: string;
+    displayName: string;
+    description?: string;
+    firstMentionedTurn: number;
+    tags: string[];
+}
+
+export interface LocationEdge {
+    from: string;
+    to: string;
+    travelTimeMinutes: number;
+    source: 'ai_declared' | 'inferred_from_narrative' | 'player_travel';
+    createdTurn: number;
+    modeOverrides?: Record<string, number>;
+}
+
+export interface LocationGraph {
+    nodes: Record<string, LocationNode>;
+    edges: LocationEdge[];
+    playerLocationId: string;
+}
+
+export interface LocationUpdate {
+    location_name: string;
+    description?: string;
+    tags?: string[];
+    traveled_from?: string;
+    travel_time_minutes?: number;
+    nearby_locations?: Array<{
+        name: string;
+        travel_time_minutes: number;
+        mode?: string;
+    }>;
+}
+
 // --- Schema Types (Matches JSON Output) ---
 
 export interface RollRequest {
@@ -353,6 +449,7 @@ export interface ModelResponseSchema {
     new_memory?: { fact: string };
     new_lore?: { keyword: string; content: string };
     biological_event?: boolean;
+    location_update?: LocationUpdate;
 
     world_tick?: WorldTick;
 }
@@ -373,6 +470,7 @@ export interface ChatMessage {
     rollRequest?: RollRequest;
     bargainRequest?: BargainRequest;
     npcInteraction?: NPCInteraction;
+    worldTick?: WorldTick;
     isResolved?: boolean;
     metadata?: Record<string, unknown>;
 }
@@ -480,6 +578,9 @@ export interface GameWorld {
 
     // v1.11 — Threat Arc History for re-seed detection
     threatArcHistory?: ThreatArcHistory;
+
+    // v1.14 — Location Proximity Graph
+    locationGraph?: LocationGraph;
 
     // --- NEW v1.13: Properties promoted from `as any` casts ---
 

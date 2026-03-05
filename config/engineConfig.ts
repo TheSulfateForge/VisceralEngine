@@ -5,6 +5,26 @@
 // ============================================================================
 
 // ---------------------------------------------------------------------------
+// Entity Status Lifecycle (v1.14)
+// ---------------------------------------------------------------------------
+
+/** Turns without mention before NEARBY → DISTANT. */
+export const ENTITY_NEARBY_DECAY_TURNS = 3;
+/** Turns without mention before DISTANT → MISSING. */
+export const ENTITY_DISTANT_DECAY_TURNS = 8;
+
+// ---------------------------------------------------------------------------
+// Location Proximity Graph (v1.14)
+// ---------------------------------------------------------------------------
+
+/** Triangle inequality tolerance factor (1.2 = 20% slack). */
+export const TRIANGLE_INEQUALITY_TOLERANCE = 1.2;
+/** Maximum travel time (minutes) for instant NPC presence. */
+export const MAX_INSTANT_TRAVEL_MINUTES = 30;
+/** Default minutes per turn for distance→ETA conversion. */
+export const DEFAULT_MINUTES_PER_TURN = 15;
+
+// ---------------------------------------------------------------------------
 // Threat Seed Pipeline
 // ---------------------------------------------------------------------------
 

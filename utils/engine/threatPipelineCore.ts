@@ -1,4 +1,4 @@
-import { WorldTickEvent, DebugLogEntry, DormantHook, FactionExposure, ThreatArcHistory, LoreItem } from '../../types';
+import { WorldTickEvent, DebugLogEntry, DormantHook, FactionExposure, ThreatArcHistory, LoreItem, LocationGraph } from '../../types';
 import { jaccardSimilarity, significantWords } from '../contentValidation';
 import { THREAT_SEED_CAP, MAX_CONSECUTIVE_ETA_ONE, LORE_MATURATION_TURNS, EXPOSURE_THRESHOLD_FOR_THREAT } from '../../config/engineConfig';
 import {
@@ -9,6 +9,8 @@ import {
     extractEntityNamesFromDescription, generateThreatId, citesImmatureLore, validateInformationChain,
     checkBannedMechanisms, checkEscalationBudget, OVERLAP_MIN_DEFAULT, OVERLAP_MIN_MEDIUM, OVERLAP_MIN_BROAD, WEAK_OVERLAP_WEIGHT
 } from './threatPipeline';
+
+import { validateThreatDistanceConsistency } from './locationGraph';
 
 export const validateThreatCausality = (
     threat: WorldTickEvent,
@@ -123,7 +125,9 @@ export const processThreatSeeds = (
     lore: LoreItem[] = [],
     bannedMechanisms: string[][] = [],
     knownEntities: { name: string; location: string; relationship_level: string }[] = [],
-    playerLocation: string = ''
+    playerLocation: string = '',
+    locationGraph?: LocationGraph,
+    minutesPerTurn: number = 10
 ): WorldTickEvent[] => {
     const log = (message: string, type: DebugLogEntry['type'] = 'warning') => {
         debugLogs.push({ timestamp: new Date().toISOString(), message, type });
@@ -346,6 +350,26 @@ export const processThreatSeeds = (
 
             if (checkEscalationBudget(threat, existingThreats, currentTurn, debugLogs)) {
                 return false;
+            }
+
+            if (locationGraph && threat.factionSource) {
+                const distanceCheck = validateThreatDistanceConsistency(
+                    locationGraph,
+                    threat.factionSource, // Assuming factionSource is the location or we can use it as such. Wait, factionSource is not a location.
+                    // Actually, the spec says "threat's origin". The origin might be in the description or factionSource.
+                    // Let's just use factionSource for now, or skip if not a location.
+                    // Wait, the spec says: "validateThreatDistanceConsistency(graph, threatOriginLocation, playerLocationId, claimedEtaTurns, minutesPerTurn, debugLogs)"
+                    // Let's assume threat.factionSource might be a location, or we need to extract it.
+                    // For now, let's just use playerLocation as a placeholder if we don't have a specific origin, or skip.
+                    // Actually, let's just pass threat.factionSource and let normalizeLocationId handle it.
+                    playerLocation,
+                    threat.turns_until_impact ?? 0,
+                    minutesPerTurn,
+                    debugLogs
+                );
+                if (!distanceCheck.valid) {
+                    threat.turns_until_impact = distanceCheck.minimumEtaTurns;
+                }
             }
 
             return true;

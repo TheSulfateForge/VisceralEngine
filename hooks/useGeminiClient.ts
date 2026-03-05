@@ -204,7 +204,8 @@ export const useGeminiClient = () => {
             timestamp: new Date().toISOString(),
             rollRequest: response.roll_request,
             bargainRequest: response.bargain_request,
-            npcInteraction: response.npc_interaction
+            npcInteraction: response.npc_interaction,
+            worldTick: response.world_tick
         };
 
         // Commit all updates

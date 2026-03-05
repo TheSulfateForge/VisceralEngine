@@ -2,10 +2,10 @@
 import React, { useState, memo, useEffect, useRef } from 'react';
 import { ChatMessage, Role } from '../../types';
 import { RollCard } from './RollCard';
-import { BargainCard } from './BargainCard';
 import { DecisionBlock } from './DecisionBlock';
 import { MarkdownRenderer } from '../common/MarkdownRenderer';
 import { useSensoryFX } from '../../hooks/useSensoryFX';
+import { NarrativeRenderer } from './NarrativeRenderer';
 
 interface MessageItemProps {
     msg: ChatMessage;
@@ -103,9 +103,15 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({ msg, executeLocalRol
 
                 <div className={`${msg.role === Role.USER ? 'bg-red-950/5 border-r border-red-900/20 pr-6 pl-4 py-4 rounded-sm text-gray-500 italic text-sm' : msg.role === Role.SYSTEM ? 'bg-gray-900/10 border border-gray-800 text-gray-600 rounded p-5 text-center text-[9px] uppercase font-mono' : `serif-font ${narrativeFontSize} leading-[1.7] text-gray-300 font-light tracking-wide`}`}>
                     {isModel && isNew ? (
-                        <TypewriterText text={msg.text} onComplete={() => setIsTypingComplete(true)} />
+                        <div className="opacity-100 transition-opacity duration-1000">
+                            {isTypingComplete ? (
+                                <NarrativeRenderer message={msg} onResolveBargain={!hasDecision && msg.bargainRequest && !msg.isResolved ? resolveBargain : undefined} />
+                            ) : (
+                                <TypewriterText text={msg.text} onComplete={() => setIsTypingComplete(true)} />
+                            )}
+                        </div>
                     ) : (
-                        <MarkdownRenderer content={msg.text} />
+                        <NarrativeRenderer message={msg} onResolveBargain={!hasDecision && msg.bargainRequest && !msg.isResolved ? resolveBargain : undefined} />
                     )}
                 </div>
 
@@ -121,9 +127,6 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({ msg, executeLocalRol
 
                 {!hasDecision && msg.rollRequest && !msg.isResolved && (
                     <RollCard msgId={msg.id} request={msg.rollRequest} onExecute={executeLocalRoll} />
-                )}
-                {!hasDecision && msg.bargainRequest && !msg.isResolved && (
-                    <BargainCard msgId={msg.id} request={msg.bargainRequest} onResolve={resolveBargain} />
                 )}
             </div>
         </div>

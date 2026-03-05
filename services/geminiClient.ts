@@ -108,7 +108,9 @@ export class GeminiClient {
       ? mode as SceneMode
       : 'NARRATIVE';
 
-    const rawLighting = asString((safeData.combat_context as Record<string, any>)?.environment?.lighting, "DIM");
+    const combatContext = isObject(safeData.combat_context) ? safeData.combat_context : {};
+    const environment = isObject(combatContext.environment) ? combatContext.environment : {};
+    const rawLighting = asString(environment.lighting, "DIM");
     const lighting: Lighting = (LIGHTING_LEVELS as readonly string[]).includes(rawLighting)
         ? rawLighting as Lighting
         : 'DIM';
@@ -132,10 +134,10 @@ export class GeminiClient {
         
         combat_context: isObject(safeData.combat_context) ? {
             environment: {
-                summary: asString((safeData.combat_context.environment as Record<string, any>)?.summary, "Unknown"),
+                summary: asString(environment.summary, "Unknown"),
                 lighting: lighting,
-                weather: asString((safeData.combat_context.environment as Record<string, any>)?.weather, "None"),
-                terrain_tags: asArray((safeData.combat_context.environment as Record<string, any>)?.terrain_tags)
+                weather: asString(environment.weather, "None"),
+                terrain_tags: asArray(environment.terrain_tags)
             },
             active_threats: asArray(safeData.combat_context.active_threats)
         } : undefined,

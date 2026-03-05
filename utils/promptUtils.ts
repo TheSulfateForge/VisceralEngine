@@ -24,17 +24,40 @@ const buildLoreContext = (lore: LoreItem[]): string => {
 
 const buildEntityContext = (entities: KnownEntity[]): string => {
     if (entities.length === 0) return "";
-    
-    const entityStrings = entities.map(e => 
-        `ID: ${e.id}
-         Name: ${e.name} (${e.role})
-         Location: ${e.location}
-         Current State: [${e.relationship_level}] - ${e.impression}
-         Leverage: ${e.leverage}
-         Ledger (Memories): [${e.ledger.join(', ')}]`
-    ).join('\n----------------\n');
 
-    return `\n[KNOWN ENTITY REGISTRY - SOCIAL & MEMORY]\n${entityStrings}`;
+    // Only inject full context for present/nearby entities
+    const active = entities.filter(e =>
+        !e.status || e.status === 'present' || e.status === 'nearby'
+    );
+    const distant = entities.filter(e => e.status === 'distant');
+    const dead = entities.filter(e => e.status === 'dead');
+
+    let context = '';
+
+    if (active.length > 0) {
+        const activeStrings = active.map(e =>
+            `ID: ${e.id}\n Name: ${e.name} (${e.role})\n Location: ${e.location}\n` +
+            ` Current State: [${e.relationship_level}] - ${e.impression}\n` +
+            ` Leverage: ${e.leverage}\n Ledger: [${e.ledger.join(', ')}]`
+        ).join('\n----------------\n');
+        context += `\n[ACTIVE ENTITIES — In Scene / Nearby]\n${activeStrings}`;
+    }
+
+    // Distant entities get a compressed one-liner to save tokens
+    if (distant.length > 0) {
+        const distantSummary = distant.map(e =>
+            `${e.name} (${e.role}) — ${e.location} [${e.relationship_level}]`
+        ).join('\n');
+        context += `\n\n[DISTANT ENTITIES — Known but not present]\n${distantSummary}`;
+    }
+
+    // Dead entities get a single line so the AI knows not to reference them
+    if (dead.length > 0) {
+        const deadNames = dead.map(e => e.name).join(', ');
+        context += `\n\n[DEAD — Do not reference as living or acting] ${deadNames}`;
+    }
+
+    return context;
 };
 
 const buildBioStatus = (bio: BioMonitor | undefined, timeDisplay: string): string => {

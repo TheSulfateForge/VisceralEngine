@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { useGameStore } from '../../store';
 import { LoreItem, MemoryItem } from '../../types';
 import { generateLoreId, generateMemoryId } from '../../utils';
+import { LocationConstellation } from '../world/LocationConstellation';
 
 export const WorldView: React.FC = () => {
     const { gameWorld, setGameWorld, gameHistory } = useGameStore();
@@ -15,6 +16,9 @@ export const WorldView: React.FC = () => {
     // Memory State
     const [isAddingMemory, setIsAddingMemory] = useState(false);
     const [newMemoryFact, setNewMemoryFact] = useState('');
+
+    // Tabs
+    const [activeTab, setActiveTab] = useState<'chronicle' | 'locations' | 'memory' | 'lore'>('chronicle');
 
     const handleAddLore = () => {
         if (!newKeyword.trim() || !newContent.trim()) return;
@@ -69,9 +73,37 @@ export const WorldView: React.FC = () => {
     };
 
     return (
-        <div className="p-6 md:p-20 overflow-y-auto space-y-24 max-w-6xl mx-auto w-full pt-20 lg:pt-20">
+        <div className="p-6 md:p-20 overflow-y-auto space-y-16 max-w-6xl mx-auto w-full pt-20 lg:pt-20">
             <h2 className="text-5xl md:text-7xl font-bold tracking-tighter uppercase italic text-white">Neural Chronos</h2>
             
+            {/* TABS */}
+            <div className="flex flex-wrap gap-4 border-b border-gray-800 pb-4">
+                <button 
+                    onClick={() => setActiveTab('chronicle')}
+                    className={`text-sm font-bold uppercase tracking-widest transition-colors ${activeTab === 'chronicle' ? 'text-white' : 'text-gray-600 hover:text-gray-400'}`}
+                >
+                    Chronicle
+                </button>
+                <button 
+                    onClick={() => setActiveTab('locations')}
+                    className={`text-sm font-bold uppercase tracking-widest transition-colors ${activeTab === 'locations' ? 'text-white' : 'text-gray-600 hover:text-gray-400'}`}
+                >
+                    Locations
+                </button>
+                <button 
+                    onClick={() => setActiveTab('memory')}
+                    className={`text-sm font-bold uppercase tracking-widest transition-colors ${activeTab === 'memory' ? 'text-white' : 'text-gray-600 hover:text-gray-400'}`}
+                >
+                    Memory
+                </button>
+                <button 
+                    onClick={() => setActiveTab('lore')}
+                    className={`text-sm font-bold uppercase tracking-widest transition-colors ${activeTab === 'lore' ? 'text-white' : 'text-gray-600 hover:text-gray-400'}`}
+                >
+                    Lore
+                </button>
+            </div>
+
             {/* DICE ORACLE */}
             <section className="space-y-8">
                 <h3 className="text-4xl font-bold tracking-tighter uppercase italic text-white">Dice Oracle</h3>
@@ -126,37 +158,48 @@ export const WorldView: React.FC = () => {
             </section>
 
             {/* EVENT TIMELINE */}
-            <section className="space-y-8 border-t border-gray-900 pt-24">
-                <h3 className="text-4xl font-bold tracking-tighter uppercase italic text-white">Chronicle</h3>
-                
-                <div className="space-y-4 border-l-2 border-gray-800 pl-6">
-                    {[
-                        ...gameWorld.memory.map(m => ({ type: 'memory' as const, text: m.fact, timestamp: m.timestamp, id: m.id })),
-                        ...gameWorld.lore.map(l => ({ type: 'lore' as const, text: `[${l.keyword}] ${l.content}`, timestamp: l.timestamp, id: l.id })),
-                    ]
-                    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-                    .slice(0, 50)
-                    .map(event => (
-                        <div key={event.id} className="relative">
-                            <div className="absolute -left-[1.85rem] top-1 w-3 h-3 rounded-full border-2 border-gray-800 bg-[#050505]">
-                                <div className={`w-1.5 h-1.5 rounded-full m-auto mt-[1px] ${event.type === 'memory' ? 'bg-blue-500' : 'bg-yellow-600'}`} />
+            {activeTab === 'chronicle' && (
+                <section className="space-y-8 pt-8">
+                    <h3 className="text-4xl font-bold tracking-tighter uppercase italic text-white">Chronicle</h3>
+                    
+                    <div className="space-y-4 border-l-2 border-gray-800 pl-6">
+                        {[
+                            ...gameWorld.memory.map(m => ({ type: 'memory' as const, text: m.fact, timestamp: m.timestamp, id: m.id })),
+                            ...gameWorld.lore.map(l => ({ type: 'lore' as const, text: `[${l.keyword}] ${l.content}`, timestamp: l.timestamp, id: l.id })),
+                        ]
+                        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+                        .slice(0, 50)
+                        .map(event => (
+                            <div key={event.id} className="relative">
+                                <div className="absolute -left-[1.85rem] top-1 w-3 h-3 rounded-full border-2 border-gray-800 bg-[#050505]">
+                                    <div className={`w-1.5 h-1.5 rounded-full m-auto mt-[1px] ${event.type === 'memory' ? 'bg-blue-500' : 'bg-yellow-600'}`} />
+                                </div>
+                                <div className="pb-4">
+                                    <span className="text-[8px] font-mono text-gray-600 uppercase tracking-wider">
+                                        {new Date(event.timestamp).toLocaleDateString()} — {event.type}
+                                    </span>
+                                    <p className="text-sm text-gray-400 mt-1 leading-relaxed">{event.text}</p>
+                                </div>
                             </div>
-                            <div className="pb-4">
-                                <span className="text-[8px] font-mono text-gray-600 uppercase tracking-wider">
-                                    {new Date(event.timestamp).toLocaleDateString()} — {event.type}
-                                </span>
-                                <p className="text-sm text-gray-400 mt-1 leading-relaxed">{event.text}</p>
-                            </div>
-                        </div>
-                    ))}
-                    {gameWorld.memory.length === 0 && gameWorld.lore.length === 0 && (
-                        <div className="text-gray-500 uppercase tracking-widest text-xs">No memories recorded.</div>
-                    )}
-                </div>
-            </section>
+                        ))}
+                        {gameWorld.memory.length === 0 && gameWorld.lore.length === 0 && (
+                            <div className="text-gray-500 uppercase tracking-widest text-xs">No memories recorded.</div>
+                        )}
+                    </div>
+                </section>
+            )}
+
+            {/* LOCATIONS SECTION */}
+            {activeTab === 'locations' && (
+                <section className="space-y-8 pt-8">
+                    <h3 className="text-4xl font-bold tracking-tighter uppercase italic text-white">Location Constellation</h3>
+                    <LocationConstellation />
+                </section>
+            )}
 
             {/* MEMORY FRAGMENTS SECTION */}
-            <section className="space-y-10 border-t border-gray-900 pt-24">
+            {activeTab === 'memory' && (
+                <section className="space-y-10 pt-8">
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
                     <label className="text-[14px] font-bold text-white uppercase tracking-[0.5em]">Memory Fragments (History)</label>
                     <button 
@@ -204,10 +247,12 @@ export const WorldView: React.FC = () => {
                 ))}
                 {gameWorld.memory.length === 0 && !isAddingMemory && <div className="text-gray-500 uppercase tracking-widest text-xs">No long-term fragments recorded.</div>}
                 </div>
-            </section>
+                </section>
+            )}
 
             {/* WORLD LORE SECTION */}
-            <section className="space-y-10 border-t border-gray-900 pt-24">
+            {activeTab === 'lore' && (
+                <section className="space-y-10 pt-8">
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
                     <label className="text-[14px] font-bold text-white uppercase tracking-[0.5em]">World Lore</label>
                     <button 
@@ -265,7 +310,8 @@ export const WorldView: React.FC = () => {
                 ))}
                 {gameWorld.lore.length === 0 && !isAddingLore && <div className="text-gray-500 uppercase tracking-widest text-xs">No lore established.</div>}
                 </div>
-            </section>
+                </section>
+            )}
         </div>
     );
 };
