@@ -87,25 +87,40 @@ const isAlreadyUsed = (candidate: string, existingMap: Record<string, string>): 
  */
 export const generateReplacementName = (
     bannedName: string,
-    existingMap: Record<string, string>
+    existingMap: Record<string, string>,
+    usedNameRegistry: string[] = []
 ): string => {
     const hash = simpleHash(bannedName);
+    const usedSet = new Set(usedNameRegistry.map(n => n.toLowerCase()));
 
     // Try roots in hash-order until we find a compliant one
     for (let attempt = 0; attempt < NAME_ROOTS.length; attempt++) {
         const idx = (hash + attempt) % NAME_ROOTS.length;
         const candidate = NAME_ROOTS[idx];
 
-        if (!sharesBannedPrefix(candidate) && !isAlreadyUsed(candidate, existingMap)) {
+        if (
+            !sharesBannedPrefix(candidate) &&
+            !isAlreadyUsed(candidate, existingMap) &&
+            !usedSet.has(candidate.toLowerCase()) // v1.15: no reuse of ANY story name
+        ) {
             return candidate;
         }
     }
 
     // Fallback: generate a completely novel name by combining roots
-    const a = NAME_ROOTS[hash % NAME_ROOTS.length].substring(0, 3);
-    const b = NAME_ROOTS[(hash + 7) % NAME_ROOTS.length].substring(2);
-    const fallback = a + b;
-    return fallback;
+    // v1.15: Also check fallback against usedNameRegistry
+    for (let fallbackAttempt = 0; fallbackAttempt < 20; fallbackAttempt++) {
+        const a = NAME_ROOTS[(hash + fallbackAttempt) % NAME_ROOTS.length].substring(0, 3);
+        const b = NAME_ROOTS[(hash + 7 + fallbackAttempt) % NAME_ROOTS.length].substring(2);
+        const fallback = a + b;
+        if (!usedSet.has(fallback.toLowerCase()) && !isAlreadyUsed(fallback, existingMap)) {
+            return fallback;
+        }
+    }
+
+    // Ultimate fallback: append turn count or timestamp fragment
+    const ultimate = NAME_ROOTS[hash % NAME_ROOTS.length] + 'ax';
+    return ultimate;
 };
 
 // ---------------------------------------------------------------------------
@@ -129,7 +144,8 @@ const RENAME_MARKER_REGEX = /\[RENAME:([^\]]+)\]/gi;
  */
 export const resolveAllBannedNames = (
     text: string,
-    nameMap: Record<string, string>
+    nameMap: Record<string, string>,
+    usedNameRegistry: string[] = []  // v1.15
 ): string => {
     if (!text) return text;
 
@@ -138,10 +154,8 @@ export const resolveAllBannedNames = (
     // Phase 1: Resolve [RENAME:X] markers first
     result = result.replace(RENAME_MARKER_REGEX, (_match, captured: string) => {
         const trimmed = captured.trim();
-        // The captured name might itself be a banned name, or it might be
-        // something like "Kaelen" inside [RENAME:Kaelen]
         if (!nameMap[trimmed]) {
-            nameMap[trimmed] = generateReplacementName(trimmed, nameMap);
+            nameMap[trimmed] = generateReplacementName(trimmed, nameMap, usedNameRegistry);
         }
         return nameMap[trimmed];
     });
@@ -151,7 +165,7 @@ export const resolveAllBannedNames = (
         const pattern = new RegExp(`\\b${name}\\b`, 'g');
         if (pattern.test(result)) {
             if (!nameMap[name]) {
-                nameMap[name] = generateReplacementName(name, nameMap);
+                nameMap[name] = generateReplacementName(name, nameMap, usedNameRegistry);
             }
             result = result.replace(new RegExp(`\\b${name}\\b`, 'g'), nameMap[name]);
         }
@@ -166,7 +180,8 @@ export const resolveAllBannedNames = (
  */
 export const resolveWithTracking = (
     text: string,
-    nameMap: Record<string, string>
+    nameMap: Record<string, string>,
+    usedNameRegistry: string[] = []  // v1.15
 ): { result: string; violations: string[] } => {
     const violations: string[] = [];
 
@@ -184,7 +199,7 @@ export const resolveWithTracking = (
         });
     }
 
-    const result = resolveAllBannedNames(text, nameMap);
+    const result = resolveAllBannedNames(text, nameMap, usedNameRegistry);
     return { result, violations };
 };
 
@@ -344,4 +359,83 @@ export const sanitiseHistory = (
         ...msg,
         text: applyExistingMap(msg.text, nameMap),
     }));
+};
+
+// ---------------------------------------------------------------------------
+// v1.15: Name Registry Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Extracts significant name parts from an entity name and returns them
+ * as lowercase strings suitable for the usedNameRegistry.
+ *
+ * Strips parentheticals (role descriptors), splits on whitespace,
+ * and filters out words shorter than 3 characters and common role words.
+ */
+const REGISTRY_BLACKLIST = new Set([
+    'the', 'and', 'captain', 'commander', 'warden', 'guard', 'adept',
+    'lord', 'lady', 'sir', 'master', 'apprentice', 'elder', 'chief',
+    'scout', 'soldier', 'agent', 'factor', 'merchant', 'trader',
+    'medical', 'assistant', 'leader', 'lieutenant', 'sergeant', 'private',
+    'patrol', 'legionnaire', 'legionnaires', 'infiltrator', 'technician',
+    'salvage', 'sash'
+]);
+
+export const extractRegistrableNames = (entityName: string): string[] => {
+    const cleaned = entityName.replace(/\([^)]*\)/g, '').trim();
+    return cleaned
+        .split(/\s+/)
+        .map(p => p.toLowerCase().trim())
+        .filter(p => p.length >= 3 && !REGISTRY_BLACKLIST.has(p));
+};
+
+/**
+ * Registers all significant name parts from an entity into the registry.
+ * Returns the updated registry (new array, does not mutate).
+ */
+export const registerEntityName = (
+    entityName: string,
+    currentRegistry: string[]
+): string[] => {
+    const parts = extractRegistrableNames(entityName);
+    const registrySet = new Set(currentRegistry);
+    let changed = false;
+    for (const part of parts) {
+        if (!registrySet.has(part)) {
+            registrySet.add(part);
+            changed = true;
+        }
+    }
+    return changed ? [...registrySet] : currentRegistry;
+};
+
+/**
+ * Checks if a proposed new entity name collides with any name already
+ * in the registry that belongs to a DIFFERENT entity.
+ *
+ * Returns the colliding name part if found, or null if clean.
+ */
+export const checkNameCollision = (
+    proposedName: string,
+    currentRegistry: string[],
+    existingEntityNames: string[]
+): string | null => {
+    const proposedParts = extractRegistrableNames(proposedName);
+    const registrySet = new Set(currentRegistry);
+
+    // Check if any part of the proposed name is already registered
+    for (const part of proposedParts) {
+        if (registrySet.has(part)) {
+            // It's only a collision if the name doesn't belong to an existing entity
+            // that shares this part (i.e., it's the SAME character being updated)
+            const belongsToExisting = existingEntityNames.some(existing => {
+                const existingParts = extractRegistrableNames(existing);
+                return existingParts.includes(part);
+            });
+            if (!belongsToExisting) {
+                return part;
+            }
+        }
+    }
+    return null;
 };

@@ -140,6 +140,57 @@ THREAT SCALE: Are emerging threats proportional to the established faction's kno
 
 FIDELITY renders everything. INTEGRITY ensures what's rendered is consistent. Both rules apply.`,
 
+    GENRE_CONSISTENCY: `[SYSTEM REMINDER: GENRE LOCK — VOCABULARY CHECK v1.15]
+Before writing this turn's narrative, mentally audit your vocabulary:
+
+THE SETTING IS THE LAW. Check the character's setting field. If it says "Fantasy":
+- Magic is CAST, not "deployed." Enchantments are WOVEN, not "calibrated."
+- Soldiers are soldiers — not "operatives," "agents," or "retrieval specialists."
+- Equipment is forged, enchanted, or alchemical — not "tech," "modules," or "devices."
+- Communication is by messenger, bird, or spell — not "comms" or "channels."
+- Groups are war-bands, patrols, orders, guilds — not "units," "teams," or "squads."
+
+BANNED IN FANTASY SETTINGS:
+tech, module, deploy (as military term), sensor, calibrate, neural, biometric,
+operative, asset (intelligence sense), compromised (intelligence sense),
+retrieval specialist, ceramic plating, synthesized, phasing tech, dampener,
+scanner, frequency, electromagnetic, protocol (as procedure name)
+
+REPLACEMENT GUIDE:
+"phasing tech" → "translocation magic" or "phase-stepping spell"
+"neural-tap" → "mind-drain curse" or "soul-siphon ritual"
+"retrieval specialist" → "bounty hunter" or "recovery mage"
+"aetheric dampening pylon" → "null-ward stone" or "grounding rune"
+"Salvage-Technician" → "Scavenger" or "Loot-Bearer"
+"Sash-Infiltrator" → "Shadow-Blade" or "Veil-Walker"
+
+If you catch yourself writing a sci-fi term, STOP and replace it before continuing.`,
+
+    FACTION_PARITY: `[SYSTEM REMINDER: FACTION PARITY — ALLIED COMPETENCE CHECK v1.15]
+Before writing NPC actions this turn, verify:
+
+1. Are FRIENDLY NPCs acting with the same competence as hostile NPCs?
+   If enemies are coordinating, flanking, and using tactics — allies must too.
+   If enemies have scouts and intelligence — allies in their OWN territory have better intelligence.
+
+2. HOME TERRITORY ADVANTAGE: Is the player in friendly territory?
+   → Friendly forces respond FASTER than invaders can act
+   → Local infrastructure WORKS (walls hold, gates close, patrols exist)
+   → Enemy forces are CONSTRAINED (limited numbers, no resupply, risk of detection)
+
+3. ENEMY COUNT: How many hostile agents are currently in friendly territory?
+   → More than 5 individuals? That is an invasion, not an infiltration.
+   → The defending faction would have detected and responded to an invasion.
+   → Scale enemy presence to what could PLAUSIBLY infiltrate undetected.
+
+4. ALLY ACTIONS: Write at least one COMPETENT allied NPC action this turn.
+   Not "stands guard nervously." Not "watches helplessly."
+   Allies: patrol, investigate, reinforce, alert command, deploy countermeasures,
+   intercept threats, protect the player, share intelligence, make tactical decisions.
+
+The simulation has NO PLACE for incompetent allies next to omniscient enemies.
+That is not drama — it is a rigged game.`,
+
     WORLD_PULSE: `[SYSTEM REMINDER: WORLD PULSE — PROACTIVITY CHECK]
 The world_tick field is REQUIRED. Before writing your narrative:
 1. What did at least ONE named NPC do this turn? (Check their goals in the entity registry.)
@@ -466,8 +517,14 @@ export const getSectionReminder = (
     if ((mode === 'TENSION' || mode === 'COMBAT') && turnCount % 6 === 0) return REMINDERS.THREAT_SEED_INTEGRITY;
     if (turnCount % 10 === 0) return REMINDERS.THREAT_SEED_INTEGRITY;
 
+    // Priority 5.25: Genre Consistency (Every 5 turns, offset by 2) — v1.15
+    if ((turnCount - 2) % 5 === 0 && turnCount >= 2) return REMINDERS.GENRE_CONSISTENCY;
+
     // Priority 5.5: World Normalcy (Every 8 turns, offset by 4)
     if ((turnCount - 4) % 8 === 0 && turnCount >= 4) return REMINDERS.WORLD_NORMALCY;
+
+    // Priority 5.75: Faction Parity (Every 7 turns, offset by 3) — v1.15
+    if ((turnCount - 3) % 7 === 0 && turnCount >= 3) return REMINDERS.FACTION_PARITY;
 
     // Priority 6: Simulation Fidelity (Every 6 turns, offset from threat check)
     if (turnCount % 6 === 1) return REMINDERS.FIDELITY;

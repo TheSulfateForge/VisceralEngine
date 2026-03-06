@@ -41,11 +41,12 @@ export const findBannedNames = (text: string): string[] => {
  */
 export const sanitiseBannedNames = (
     text: string,
-    nameMap: Record<string, string>
+    nameMap: Record<string, string>,
+    usedNameRegistry: string[] = []  // v1.15
 ): { result: string; violations: string[] } => {
     if (!text) return { result: text, violations: [] };
 
-    const { result, violations } = resolveWithTracking(text, nameMap);
+    const { result, violations } = resolveWithTracking(text, nameMap, usedNameRegistry);
     return { result, violations };
 };
 
@@ -84,7 +85,8 @@ export interface FullSanitisationResult {
  */
 export const sanitiseAllFields = (
     response: ModelResponseSchema,
-    nameMap: Record<string, string>
+    nameMap: Record<string, string>,
+    usedNameRegistry: string[] = []  // v1.15
 ): FullSanitisationResult => {
     const allViolations: string[] = [];
     const track = (violations: string[]) => {
@@ -95,7 +97,7 @@ export const sanitiseAllFields = (
 
     // Helper: resolve a single string field
     const clean = (text: string): string => {
-        const { result, violations } = sanitiseBannedNames(text, nameMap);
+        const { result, violations } = sanitiseBannedNames(text, nameMap, usedNameRegistry);
         track(violations);
         return result;
     };

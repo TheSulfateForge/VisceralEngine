@@ -68,7 +68,7 @@ import {
     bigramJaccardSimilarity,          // v1.12
     autoConsolidateMemory,            // v1.12
 } from './contentValidation';
-import { resolveAllBannedNames } from './nameResolver';
+import { resolveAllBannedNames, registerEntityName, checkNameCollision } from './nameResolver';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -127,7 +127,8 @@ export const SimulationEngine = {
         //    v1.7: Uses nameMap for immediate resolution.
         // ===================================================================
         const nameMap = { ...currentWorld.bannedNameMap };
-        const { sanitisedResponse: response_sanitised, allViolations } = sanitiseAllFields(response, nameMap);
+        const usedNames = [...(currentWorld.usedNameRegistry ?? [])];
+        const { sanitisedResponse: response_sanitised, allViolations } = sanitiseAllFields(response, nameMap, usedNames);
         const r = response_sanitised; // Use sanitised copy for all subsequent processing
 
         if (allViolations.length > 0) {
@@ -306,6 +307,40 @@ export const SimulationEngine = {
                 } else {
                     updatedKnownEntities.push(update);
                 }
+            }
+        }
+
+        // v1.15: Register all entity names into usedNameRegistry
+        // and block new entities whose names collide with existing (dead or alive) characters
+        if (r.known_entity_updates) {
+            const existingNames = updatedKnownEntities.map(e => e.name);
+            for (const update of r.known_entity_updates) {
+                const collision = checkNameCollision(
+                    update.name,
+                    usedNames,
+                    existingNames
+                );
+                if (collision) {
+                    debugLogs.push({
+                        timestamp: new Date().toISOString(),
+                        message: `[NAME COLLISION — v1.15] "${update.name}" contains name part "${collision}" already used by another character in this story. New entity BLOCKED.`,
+                        type: 'error'
+                    });
+                    // Remove the colliding entity from the update set
+                    const colIdx = updatedKnownEntities.findIndex(e => e.name === update.name);
+                    if (colIdx >= 0 && !existingNames.includes(update.name)) {
+                        updatedKnownEntities.splice(colIdx, 1);
+                    }
+                }
+            }
+        }
+
+        // v1.15: Register all current entity names
+        for (const entity of updatedKnownEntities) {
+            const updatedRegistry = registerEntityName(entity.name, usedNames);
+            if (updatedRegistry !== usedNames) {
+                usedNames.length = 0;
+                usedNames.push(...updatedRegistry);
             }
         }
 
@@ -1122,7 +1157,7 @@ const pendingLore: LoreItem[] = [];
                 time: newTime,
                 lore: currentWorld.lore,
                 memory: finalMemory,
-                hiddenRegistry: resolveAllBannedNames(trimHiddenRegistry(newHiddenRegistry), nameMap),
+                hiddenRegistry: resolveAllBannedNames(trimHiddenRegistry(newHiddenRegistry), nameMap, usedNames),
                 pregnancies: currentPregnancies,
                 activeThreats: nextThreats,
                 environment: nextEnv,
@@ -1147,6 +1182,7 @@ const pendingLore: LoreItem[] = [];
                 bannedMechanisms: currentWorld.bannedMechanisms ?? [],
                 location: newPlayerLocation,
                 locationGraph: updatedLocationGraph,
+                usedNameRegistry: usedNames,
             },
             characterUpdate: {
                 ...character,

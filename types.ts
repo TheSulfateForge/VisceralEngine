@@ -592,6 +592,12 @@ export interface GameWorld {
 
     /** Player's current location string — used by info chain validation. */
     location?: string;
+
+    // v1.15 — Name Uniqueness Registry
+    // Every character name ever used in this story is recorded here (lowercase).
+    // Once a name appears, no new character may use it — even if the original
+    // character is dead or retired. Prevents the 3-Tegwens problem.
+    usedNameRegistry?: string[];
 }
 
 export interface WorldTime {
