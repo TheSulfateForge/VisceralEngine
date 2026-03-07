@@ -185,6 +185,23 @@ export const sanitiseAllFields = (
         }));
     }
 
+    // 12. location_update — v1.15
+    if (r.location_update) {
+        r.location_update.location_name = clean(r.location_update.location_name);
+        if (r.location_update.description) {
+            r.location_update.description = clean(r.location_update.description);
+        }
+        if (r.location_update.traveled_from) {
+            r.location_update.traveled_from = clean(r.location_update.traveled_from);
+        }
+        if (r.location_update.nearby_locations) {
+            r.location_update.nearby_locations = r.location_update.nearby_locations.map(loc => ({
+                ...loc,
+                name: clean(loc.name),
+            }));
+        }
+    }
+
     return { sanitisedResponse: r, allViolations };
 };
 

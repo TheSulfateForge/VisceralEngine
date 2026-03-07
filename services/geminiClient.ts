@@ -172,7 +172,29 @@ export class GeminiClient {
         } : undefined,
 
         biological_event: asBoolean(safeData.biological_event),
-        
+
+        // v1.15: Location Graph — pass through location_update for engine processing
+        location_update: isObject(safeData.location_update) ? {
+            location_name: asString(safeData.location_update.location_name, ''),
+            description: typeof safeData.location_update.description === 'string' 
+                ? safeData.location_update.description : undefined,
+            tags: asArray<string>(safeData.location_update.tags)
+                .filter((s: unknown): s is string => typeof s === 'string'),
+            traveled_from: typeof safeData.location_update.traveled_from === 'string' && safeData.location_update.traveled_from.trim()
+                ? safeData.location_update.traveled_from : undefined,
+            travel_time_minutes: asOptionalNumber(safeData.location_update.travel_time_minutes),
+            nearby_locations: asArray<{ name: string; travel_time_minutes: number; mode?: string }>(
+                safeData.location_update.nearby_locations
+            ).map((loc: unknown) => {
+                const l = isObject(loc) ? loc : {};
+                return {
+                    name: asString(l.name, 'Unknown'),
+                    travel_time_minutes: asNumber(l.travel_time_minutes, 30),
+                    mode: typeof l.mode === 'string' && l.mode.trim() ? l.mode : undefined
+                };
+            })
+        } : undefined,
+
         // v1.1: World Tick validation
         world_tick: isObject(safeData.world_tick) ? {
             npc_actions: asArray<{ npc_name: string; action: string; player_visible: boolean }>(
