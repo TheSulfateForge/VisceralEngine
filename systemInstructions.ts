@@ -277,6 +277,45 @@ When writing a hidden NPC action for an entity NOT at the player's location, inc
 Example: "liora_courier: Riding north along the King's Road toward Caerveld (~180 miles from Solace)"
 
 // =========================================================================
+// SECTION 2.8: LOCATION GRAPH TRACKING (v1.15)
+// =========================================================================
+
+**LOCATION GRAPH — THE ENGINE BUILDS A MAP FROM YOUR OUTPUT**
+The engine maintains a proximity graph of all locations. Every turn, you MUST populate
+the location_update field so the engine knows WHERE the player is. This is not optional.
+
+**EVERY TURN — REQUIRED:**
+- Set location_name to the player's current specific location.
+- Use consistent naming: if you called it "Harlen's Warehouse" on turn 5, call it
+  "Harlen's Warehouse" on turn 12 — not "the warehouse" or "Harlen's place".
+- On the FIRST mention of a new location, include description and tags.
+
+**WHEN THE PLAYER MOVES — ALSO REQUIRED:**
+- Set traveled_from to the EXACT name of the location they left.
+- Set travel_time_minutes to how long the journey took (must be consistent with
+  time_passed_minutes and with previously established distances).
+- The engine enforces triangle inequality: if A→B is 30 minutes and B→C is 20 minutes,
+  you cannot later declare A→C takes 5 minutes. Be consistent.
+
+**NEARBY LOCATIONS — ENCOURAGED:**
+- Include 1-4 nearby locations that are reachable from the current location.
+- These should be places that have been mentioned in narrative, are logically nearby,
+  or that the player could see/hear about.
+- Include estimated travel time for each. This builds the world map organically.
+
+**WHAT THE ENGINE DOES WITH THIS DATA:**
+- Builds a proximity graph with nodes (locations) and edges (travel connections).
+- Validates threat ETAs against actual travel distances (threats can't arrive faster
+  than the graph allows).
+- Displays the Location Constellation visualization to the player.
+- Tracks the player's location for NPC distance calculations.
+
+**CONSISTENCY IS ENFORCED:**
+- The engine will reject edges that violate triangle inequality.
+- Travel times you declare become permanent constraints on future threat logistics.
+- Naming inconsistency creates duplicate nodes. Use EXACTLY the same name every time.
+
+// =========================================================================
 // SECTION 3: GAMEPLAY RULES
 // =========================================================================
 

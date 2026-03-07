@@ -140,6 +140,48 @@ export const RESPONSE_SCHEMA: Schema = {
       },
       required: ["description"]
     },
+    location_update: {
+      type: Type.OBJECT,
+      nullable: true,
+      description: "LOCATION TRACKING: Populate EVERY turn the player is at a named location. Always set location_name to the current specific place name. If the player MOVED this turn, also set traveled_from (the previous location name) and travel_time_minutes. Optionally list 1-4 nearby_locations reachable from here with estimated travel times to build the world map. Even when the player stays put, still populate location_name.",
+      properties: {
+        location_name: {
+          type: Type.STRING,
+          description: "The player's CURRENT location. Use the most specific named place (e.g., 'The Rusty Anchor Tavern' not 'the tavern'). Be consistent — always reuse the exact same name for the same place across turns."
+        },
+        description: {
+          type: Type.STRING,
+          description: "Brief one-line description of this location if appearing for the first time (e.g., 'A cramped apothecary shop in the eastern market district'). Omit on subsequent visits."
+        },
+        tags: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING },
+          description: "Categorization tags for new locations: 'settlement', 'wilderness', 'interior', 'underground', 'port', 'road', 'camp', 'market', 'residential', etc."
+        },
+        traveled_from: {
+          type: Type.STRING,
+          description: "If the player MOVED this turn, the exact name of the location they departed from. Must match a previously used location_name. Leave empty string if the player stayed put."
+        },
+        travel_time_minutes: {
+          type: Type.INTEGER,
+          description: "If traveled_from is set, how many minutes the journey took. Must be consistent with time_passed_minutes. Walking across a district: 15-30. Between nearby settlements: 60-240. Long journey: 480+."
+        },
+        nearby_locations: {
+          type: Type.ARRAY,
+          description: "1-4 locations reachable from the current location. Include places mentioned in narrative or logically nearby. These build the proximity graph over time.",
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              name: { type: Type.STRING, description: "Name of the nearby reachable location." },
+              travel_time_minutes: { type: Type.INTEGER, description: "Estimated travel time in minutes by default movement mode." },
+              mode: { type: Type.STRING, description: "Movement mode if not on foot (e.g., 'horseback', 'carriage', 'boat'). Omit for walking." }
+            },
+            required: ["name", "travel_time_minutes"]
+          }
+        }
+      },
+      required: ["location_name"]
+    },
     hidden_update: { type: Type.STRING, nullable: true },
     new_memory: {
       type: Type.OBJECT,

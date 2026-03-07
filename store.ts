@@ -112,6 +112,7 @@ const initialWorld: GameWorld = {
     emergingThreats: [],
     passiveAlliesDetected: false,
     location: '',
+    locationGraph: { nodes: {}, edges: [], playerLocationId: '' },
 };
 
 interface UIState {
