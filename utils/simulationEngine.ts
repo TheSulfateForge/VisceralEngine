@@ -98,6 +98,7 @@ import {
     validateHiddenUpdateCoherence, extractHostileFactionKeywords,
     validateNpcEntityRegistration, syncEntityLocationsFromWorldTick,
     applyNpcAttritionLayer, ENTITY_EXTRACTION_BLACKLIST,
+    extractProperNounsFromThreatDescriptions, filterBlockedEntityEnvironmentChanges,
     processThreatSeeds, extractEntityNamesFromDescription, extractBannedMechanismFromRejection,
     checkBannedMechanisms,
     updateEntityPresence, applyStatusTransitions, detectEntityDeaths, filterDeadEntityActions,
@@ -739,8 +740,10 @@ const pendingLore: LoreItem[] = [];
             // Overwrite so downstream processing (exposure scoring, etc.) uses validated set
             r.world_tick.npc_actions = validatedNpcActions;
 
-            // v1.11 FIX 4: Phantom Entity Detection — block NPC actions from
-            // unregistered entities whose names contain hostile faction keywords.
+            // v1.11 FIX 4 + v1.16: Phantom Entity Detection + Origin Gate Bypass Prevention.
+            // Block NPC actions from unregistered entities whose names contain hostile
+            // faction keywords, OR whose names appear in this turn's threat submissions
+            // (origin gate bypass), OR who are taking hostile actions while unregistered.
             const hostileFactionKws = extractHostileFactionKeywords(
                 (currentWorld.knownEntities ?? []).map(e => ({
                     name: e.name,
@@ -749,14 +752,29 @@ const pendingLore: LoreItem[] = [];
                 }))
             );
             const knownEntityNames = (currentWorld.knownEntities ?? []).map(e => e.name);
-            r.world_tick.npc_actions = validateNpcEntityRegistration(
+
+            // v1.16: Pre-scan incoming threats for entity names. If the AI submitted
+            // a threat about "War-Harengon" AND wrote an NPC action for "War-Harengon",
+            // the NPC action is blocked — the entity must pass the origin gate first.
+            const incomingThreatDescriptions = (r.world_tick.emerging_threats ?? [])
+                .map(t => t.description);
+            const incomingThreatEntityNames = extractProperNounsFromThreatDescriptions(
+                incomingThreatDescriptions
+            );
+
+            const npcRegistrationResult = validateNpcEntityRegistration(
                 r.world_tick.npc_actions,
                 knownEntityNames,
                 currentWorld.emergingThreats ?? [],
                 hostileFactionKws,
                 debugLogs,
-                currentSceneMode
+                currentSceneMode,
+                incomingThreatEntityNames
             );
+            r.world_tick.npc_actions = npcRegistrationResult.actions;
+
+            // v1.16: Store blocked entity names for environment change filtering
+            const originGateBlockedEntities = npcRegistrationResult.blockedEntityNames;
 
             // v1.14: Filter out actions for dead/retired entities
             r.world_tick.npc_actions = filterDeadEntityActions(
@@ -796,6 +814,15 @@ const pendingLore: LoreItem[] = [];
                     type: 'info'
                 });
             }
+
+            // v1.16: Filter environment changes that reference entities blocked by
+            // origin gate bypass detection. Prevents the AI from advancing blocked
+            // threat arcs through environmental narration.
+            r.world_tick.environment_changes = filterBlockedEntityEnvironmentChanges(
+                r.world_tick.environment_changes,
+                originGateBlockedEntities,
+                debugLogs
+            );
 
             for (const change of r.world_tick.environment_changes) {
                 debugLogs.push({

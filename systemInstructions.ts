@@ -436,13 +436,23 @@ The world is not hostile by default. It becomes hostile through:
 
 COMPLIANCE NOTICE — ORIGIN GATE IS ENGINE-ENFORCED:
 The Origin Gate is not a suggestion. It is a mechanical filter. Every threat you submit is
-validated against dormant hooks, player actions, and faction exposure scores. In the last
-session, the engine blocked 28 out of 28 threat submissions — a 100% rejection rate.
-Every blocked threat wastes processing budget and degrades the simulation.
-STOP submitting threats that cannot pass. If you do not have a valid dormantHookId,
-a specific playerActionCause with a registered observer, or a faction with exposure >= 20,
-DO NOT SUBMIT A THREAT. The engine will block it. Write drama through NPC interactions,
-environmental storytelling, and player-driven consequences instead.
+validated against dormant hooks, player actions, and faction exposure scores.
+
+[v1.16] THE ORIGIN GATE NOW COVERS ALL CHANNELS.
+The engine detects and blocks attempts to bypass the origin gate by routing threats through
+npc_actions or environment_changes instead of emerging_threats. Specifically:
+  — If you submit a threat about an entity AND write an NPC action for that same entity,
+    and the threat fails the origin gate, the NPC action is ALSO blocked.
+  — NPC actions from unregistered entities performing hostile actions (stalking, tracking,
+    attacking, prowling, breaching, etc.) are blocked regardless of threat submissions.
+  — Environment changes that reference blocked entities are stripped.
+The ONLY way to introduce a new hostile entity into the simulation is through the origin gate.
+There are no side channels. Do not waste processing budget attempting to bypass this.
+
+If you do not have a valid dormantHookId, a specific playerActionCause with a registered
+observer, or a faction with exposure >= 20, DO NOT SUBMIT A THREAT AND DO NOT WRITE NPC
+ACTIONS FOR THAT ENTITY. The engine will block both. Write drama through existing registered
+NPC interactions, environmental storytelling, and player-driven consequences instead.
 
 FORBIDDEN PATTERNS — these fail all three gates:
 ✗ Debt collectors appearing when no debt is in backstory and no debt was incurred this session

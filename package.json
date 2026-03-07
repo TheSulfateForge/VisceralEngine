@@ -1,7 +1,7 @@
 {
-  "name": "visceral-realism-engine-ver.-0.9.7.959",
+  "name": "visceral-realism-engine-ver.-0.9.7.962",
   "private": true,
-  "version": "0.9.7.941",
+  "version": "0.9.7.962",
   "type": "module",
   "scripts": {
     "dev": "vite",

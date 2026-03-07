@@ -64,6 +64,108 @@ export const GENERIC_ROLE_WORDS = new Set([
     'dead', 'alive', 'former', 'current', 'surviving', 'escaped', 'backup',
 ]);
 
+// v1.16: Keywords in NPC action text that indicate hostile/threatening behavior.
+// Used to catch unregistered entities taking aggressive actions even when
+// they don't match existing hostile faction keywords (e.g., fresh game start).
+export const HOSTILE_NPC_ACTION_INDICATORS = new Set([
+    'stalking', 'stalks', 'stalked',
+    'tracking', 'tracks', 'tracked',
+    'hunting', 'hunts', 'hunted',
+    'prowling', 'prowls', 'prowled',
+    'circling', 'circles', 'circled',
+    'ambush', 'ambushes', 'ambushed', 'ambushing',
+    'lurking', 'lurks', 'lurked',
+    'predator', 'predatory', 'prey',
+    'snarling', 'snarls', 'growling', 'growls',
+    'claws', 'clawing', 'fangs', 'talons',
+    'pounce', 'pounces', 'pounced', 'pouncing',
+    'mauling', 'mauls', 'mauled',
+    'devouring', 'devours', 'devoured',
+    'screeching', 'screeches', 'howling', 'howls',
+    'wedged', 'breach', 'breaching', 'breaches',
+    'descend', 'descending', 'descends',
+]);
+
+// v1.16: Multi-word hostile action patterns for unregistered entities.
+export const HOSTILE_ACTION_PATTERNS = [
+    /\b(?:track(?:s|ing|ed)?)\s+(?:the\s+)?scent/i,
+    /\b(?:stalk(?:s|ing|ed)?)\s+(?:the\s+)?(?:perimeter|house|building|camp|village)/i,
+    /\b(?:crouch(?:es|ed|ing)?)\s+in\s+(?:the\s+)?(?:shadow|darkness|hiding)/i,
+    /\b(?:leap(?:s|ed|ing)?)\s+(?:onto|from|toward|at)\b/i,
+    /\b(?:scratch(?:es|ed|ing)?)\s+(?:against|at|through)\b/i,
+    /\b(?:driven\s+(?:by|into)\s+(?:a\s+)?(?:frenzy|madness|hunger|rage))/i,
+    /\b(?:nostrils?\s+flar(?:es?|ing|ed))/i,
+    /\b(?:preparing\s+to\s+(?:attack|strike|breach|descend|pounce))/i,
+    /\b(?:circl(?:es?|ing|ed)\s+(?:the\s+)?(?:house|building|camp|village|perimeter))/i,
+];
+
+/**
+ * v1.16: Extracts capitalized proper noun phrases from threat descriptions.
+ * Used to identify entity names in incoming threat submissions so they can be
+ * cross-referenced against NPC actions. Returns lowercase name fragments.
+ */
+export const extractProperNounsFromThreatDescriptions = (
+    threatDescriptions: string[]
+): Set<string> => {
+    const names = new Set<string>();
+    // Match capitalized words that aren't at sentence start and aren't common words
+    const COMMON_CAPS = new Set([
+        'the', 'a', 'an', 'is', 'are', 'was', 'were', 'has', 'have', 'had',
+        'will', 'would', 'could', 'should', 'may', 'might', 'can', 'shall',
+        'do', 'does', 'did', 'been', 'being', 'having', 'if', 'then', 'else',
+        'but', 'and', 'or', 'not', 'no', 'so', 'for', 'yet', 'nor',
+        'origin', 'gate', 'test', 'hook', 'action', 'faction', 'exposure',
+    ]);
+
+    for (const desc of threatDescriptions) {
+        // Find sequences of capitalized words (potential entity names)
+        const matches = desc.match(/\b[A-Z][a-z]+(?:[-'][A-Z][a-z]+)*(?:\s+[A-Z][a-z]+(?:[-'][A-Z][a-z]+)*)*/g);
+        if (!matches) continue;
+
+        for (const match of matches) {
+            const parts = match.toLowerCase().split(/[\s\-']+/).filter(
+                p => p.length >= 3 && !COMMON_CAPS.has(p) && !ENTITY_EXTRACTION_BLACKLIST.has(p)
+            );
+            for (const part of parts) {
+                names.add(part);
+            }
+        }
+    }
+
+    return names;
+};
+
+/**
+ * v1.16: Filters environment_changes to remove entries that reference
+ * entities whose NPC actions were blocked by the origin gate bypass detector.
+ * Prevents the AI from advancing blocked threat arcs through environmental narration.
+ */
+export const filterBlockedEntityEnvironmentChanges = (
+    envChanges: string[],
+    blockedEntityNames: Set<string>,
+    debugLogs: DebugLogEntry[]
+): string[] => {
+    if (blockedEntityNames.size === 0) return envChanges;
+
+    return envChanges.filter(change => {
+        const changeLower = change.toLowerCase();
+        for (const name of blockedEntityNames) {
+            if (changeLower.includes(name)) {
+                debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    message: `[ENV CHANGE BLOCKED — v1.16 ORIGIN GATE BYPASS] ` +
+                        `"${change.substring(0, 120)}" — references entity "${name}" ` +
+                        `which was blocked from NPC actions. Environment changes cannot ` +
+                        `advance threat arcs that failed the origin gate.`,
+                    type: 'error'
+                });
+                return false;
+            }
+        }
+        return true;
+    });
+};
+
 /**
  * Examines NPC actions for combat verbs and patterns. If actual combat is
  * happening (arrows firing, cavalry charging, melee fighting), returns 'COMBAT'
@@ -460,10 +562,17 @@ export const extractHostileFactionKeywords = (
 };
 
 /**
- * v1.11 FIX 4: Blocks NPC actions from entities that are NOT in the
- * knownEntities registry AND whose names contain hostile faction identifiers.
- * Closes the gap where the AI invents brand-new hostile NPCs that bypass
- * coherence checks because they aren't linked to any existing threat.
+ * v1.16: Blocks NPC actions from entities that bypass the origin gate.
+ * 
+ * Three blocking conditions for unregistered entities:
+ * 1. (v1.11) Name matches hostile faction keywords from existing hostile entities
+ * 2. (v1.16) Name appears in incoming threat submissions — entity is being introduced
+ *    through the threat pipeline and must pass the origin gate before acting
+ * 3. (v1.16) Action contains hostile indicators — catches novel hostile entities
+ *    that don't appear in any threat submission at all
+ * 
+ * Returns { filtered actions, set of blocked entity name fragments } so
+ * downstream processors can also filter environment changes.
  */
 export const validateNpcEntityRegistration = (
     npcActions: WorldTickAction[],
@@ -471,10 +580,15 @@ export const validateNpcEntityRegistration = (
     emergingThreats: WorldTickEvent[],
     hostileFactionKeywords: Set<string>,
     debugLogs: DebugLogEntry[],
-    sceneMode: string = 'NARRATIVE'
-): WorldTickAction[] => {
-    if (sceneMode === 'COMBAT') return npcActions;
-    if (hostileFactionKeywords.size === 0) return npcActions;
+    sceneMode: string = 'NARRATIVE',
+    incomingThreatEntityNames: Set<string> = new Set()
+): { actions: WorldTickAction[]; blockedEntityNames: Set<string> } => {
+    const blockedEntityNames = new Set<string>();
+
+    if (sceneMode === 'COMBAT') {
+        return { actions: npcActions, blockedEntityNames };
+    }
+
 
     const knownNamesLower = knownEntityNames.map(n => n.toLowerCase());
     const knownFirstNames = new Set<string>();
@@ -491,7 +605,7 @@ export const validateNpcEntityRegistration = (
         }
     }
 
-    return npcActions.filter(action => {
+    const filtered = npcActions.filter(action => {
         const npcNameLower = action.npc_name.toLowerCase();
 
         // Is this NPC in the known entities registry?
@@ -507,19 +621,81 @@ export const validateNpcEntityRegistration = (
         const isInThreat = [...threatEntityNames].some(tn => npcNameLower.includes(tn));
         if (isInThreat) return true;
 
-        // Does this NPC's name contain hostile faction keywords?
-        const npcNameParts = npcNameLower.split(/[\s()\-_]/);
-        const hasHostileFactionId = npcNameParts.some(part =>
-            part.length >= 3 && hostileFactionKeywords.has(part)
-        );
+        // --- v1.16 CHECK 1: Origin Gate Bypass Detection ---
+        // If this NPC's name appears in ANY incoming threat submission this turn,
+        // the entity is being introduced through the threat pipeline. It MUST pass
+        // the origin gate before it can take NPC actions. Block it here; if the
+        // threat passes, the entity can act next turn after registration.
+        if (incomingThreatEntityNames.size > 0) {
+            const npcNameParts = npcNameLower.split(/[\s()\-_]/);
+            const matchedThreatName = npcNameParts.find(part =>
+                part.length >= 3 && incomingThreatEntityNames.has(part)
+            );
 
-        if (hasHostileFactionId) {
+            if (matchedThreatName) {
+                // Track blocked name for environment change filtering
+                for (const part of npcNameParts) {
+                    if (part.length >= 3) blockedEntityNames.add(part);
+                }
+                debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    message: `[NPC ACTION BLOCKED — v1.16 ORIGIN GATE BYPASS] "${action.npc_name}: ` +
+                        `${action.action.substring(0, 100)}" — NPC "${action.npc_name}" is not in ` +
+                        `knownEntities registry but appears in this turn's threat submissions ` +
+                        `(matched: "${matchedThreatName}"). Entities introduced via the threat ` +
+                        `pipeline must pass the origin gate before taking NPC actions. ` +
+                        `The origin gate is the ONLY entry point for new hostile entities.`,
+                    type: 'error'
+                });
+                return false;
+            }
+        }
+
+        // --- v1.11 CHECK: Hostile faction keyword match ---
+        if (hostileFactionKeywords.size > 0) {
+            const npcNameParts = npcNameLower.split(/[\s()\-_]/);
+            const hasHostileFactionId = npcNameParts.some(part =>
+                part.length >= 3 && hostileFactionKeywords.has(part)
+            );
+
+            if (hasHostileFactionId) {
+                for (const part of npcNameParts) {
+                    if (part.length >= 3) blockedEntityNames.add(part);
+                }
+                debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    message: `[NPC ACTION BLOCKED — v1.11 PHANTOM ENTITY] "${action.npc_name}: ` +
+                        `${action.action.substring(0, 100)}" — NPC is not in knownEntities ` +
+                        `registry and name contains hostile faction keyword. Unregistered ` +
+                        `hostile entities cannot take actions. Register via known_entity_updates first.`,
+                    type: 'error'
+                });
+                return false;
+            }
+        }
+
+        // --- v1.16 CHECK 2: Hostile Action Detection ---
+        // Even if the entity doesn't appear in any threat submission and doesn't
+        // match faction keywords, block it if its action text contains hostile
+        // indicators. This catches novel entities the AI introduces directly
+        // through NPC actions without even submitting a threat.
+        const actionLower = action.action.toLowerCase();
+        const actionWords = actionLower.split(/\s+/);
+        const hasHostileWord = actionWords.some(w => HOSTILE_NPC_ACTION_INDICATORS.has(w));
+        const hasHostilePattern = HOSTILE_ACTION_PATTERNS.some(p => p.test(action.action));
+
+        if (hasHostileWord || hasHostilePattern) {
+            const npcNameParts = npcNameLower.split(/[\s()\-_]/);
+            for (const part of npcNameParts) {
+                if (part.length >= 3) blockedEntityNames.add(part);
+            }
             debugLogs.push({
                 timestamp: new Date().toISOString(),
-                message: `[NPC ACTION BLOCKED — v1.11 PHANTOM ENTITY] "${action.npc_name}: ` +
+                message: `[NPC ACTION BLOCKED — v1.16 HOSTILE UNREGISTERED] "${action.npc_name}: ` +
                     `${action.action.substring(0, 100)}" — NPC is not in knownEntities ` +
-                    `registry and name contains hostile faction keyword. Unregistered ` +
-                    `hostile entities cannot take actions. Register via known_entity_updates first.`,
+                    `registry and action contains hostile indicators. Unregistered entities ` +
+                    `cannot take hostile actions. Register the entity AND pass the origin ` +
+                    `gate first.`,
                 type: 'error'
             });
             return false;
@@ -527,6 +703,8 @@ export const validateNpcEntityRegistration = (
 
         return true;
     });
+
+    return { actions: filtered, blockedEntityNames };
 };
 
 /**
