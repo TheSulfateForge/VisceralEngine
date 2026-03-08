@@ -188,7 +188,8 @@ export const useGeminiClient = () => {
             currentWorld, 
             tempCharUpdates, 
             nextTurn,
-            playerRemovedConditions
+            playerRemovedConditions,
+            text  // v1.17: Pass player input for cooldown detection
         );
 
         // Deduplicate conditions on the final update (extracted to utils/characterUtils.ts)

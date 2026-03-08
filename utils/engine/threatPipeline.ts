@@ -304,3 +304,44 @@ export const checkEscalationBudget = (
 
     return false;
 };
+
+/**
+ * v1.17: Extracts probable entity name fragments from a threat description
+ * by finding capitalized multi-word phrases (proper nouns).
+ * Returns lowercase fragments for matching against the denial tracker.
+ */
+export const extractProperNounFragments = (description: string): string[] => {
+    const COMMON_WORDS = new Set([
+        'the', 'a', 'an', 'is', 'are', 'was', 'were', 'has', 'have', 'had',
+        'will', 'would', 'could', 'should', 'may', 'might', 'can', 'shall',
+        'do', 'does', 'did', 'been', 'being', 'having', 'if', 'then', 'else',
+        'but', 'and', 'or', 'not', 'no', 'so', 'for', 'yet', 'nor',
+        'new', 'old', 'first', 'last', 'next', 'this', 'that', 'these',
+        'origin', 'gate', 'test', 'hook', 'action', 'faction', 'exposure',
+        'eta', 'threat', 'status', 'building', 'blocked',
+    ]);
+
+    const fragments: string[] = [];
+
+    // Match sequences of capitalized words (potential entity names)
+    const matches = description.match(
+        /\b[A-Z][a-z]+(?:[-'][A-Z][a-z]+)*(?:\s+[A-Z][a-z]+(?:[-'][A-Z][a-z]+)*)*/g
+    );
+    if (!matches) return fragments;
+
+    for (const match of matches) {
+        const parts = match.toLowerCase().split(/[\s\-']+/).filter(
+            p => p.length >= 3 && !COMMON_WORDS.has(p)
+        );
+        if (parts.length >= 2) {
+            fragments.push(parts.join(' '));
+        }
+        for (const part of parts) {
+            if (part.length >= 4) {
+                fragments.push(part);
+            }
+        }
+    }
+
+    return [...new Set(fragments)];
+};

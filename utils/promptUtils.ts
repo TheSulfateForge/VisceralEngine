@@ -1,9 +1,9 @@
-import { GameHistory, GameWorld, Character, SceneMode, MemoryItem, LoreItem, KnownEntity, BioMonitor, ActiveThreat, DormantHook, FactionExposure } from '../types';
+import { GameHistory, GameWorld, Character, SceneMode, MemoryItem, LoreItem, KnownEntity, BioMonitor, ActiveThreat, DormantHook, FactionExposure, ThreatDenialTracker } from '../types';
 import { retrieveRelevantContext, RAGResult } from './ragEngine';
 import { getSectionReminders } from '../sectionReminders';
 import { partitionConditions } from './contentValidation';
 import { applyExistingMap } from './nameResolver';
-import { DOWNTIME_KEYWORDS } from '../config/engineConfig';
+import { DOWNTIME_KEYWORDS, DENIAL_SUPPRESSION_THRESHOLD } from '../config/engineConfig';
 
 export interface PromptResult {
     prompt: string;
@@ -253,6 +253,40 @@ const buildDormantHooksContext = (
     return lines.join('\n');
 };
 
+// --- v1.17: Threat Suppression Context ---
+const buildThreatSuppressionContext = (
+    currentTurn: number,
+    globalCooldownUntil?: number,
+    denialTracker?: ThreatDenialTracker
+): string => {
+    let context = '';
+
+    // 1. Global Cooldown Status
+    if (globalCooldownUntil && globalCooldownUntil > currentTurn) {
+        const remaining = globalCooldownUntil - currentTurn;
+        context += `[GLOBAL THREAT COOLDOWN ACTIVE]\n`;
+        context += `The simulation is currently in a cooldown period for ${remaining} more turn(s).\n`;
+        context += `DO NOT generate any new emerging threats during this time.\n`;
+        context += `Focus entirely on narrative progression, NPC actions, and environment changes.\n\n`;
+    }
+
+    // 2. Suppressed Entities
+    if (denialTracker) {
+        const suppressed = Object.entries(denialTracker)
+            .filter(([_, entry]) => entry.denialCount >= DENIAL_SUPPRESSION_THRESHOLD)
+            .map(([name, _]) => name);
+
+        if (suppressed.length > 0) {
+            context += `[SUPPRESSED ENTITIES]\n`;
+            context += `The following entities have been blocked by the Origin Gate too many times and are now SUPPRESSED:\n`;
+            context += suppressed.map(name => `- ${name}`).join('\n') + '\n';
+            context += `DO NOT use these entities in threats, NPC actions, or environment changes.\n\n`;
+        }
+    }
+
+    return context;
+};
+
 /**
  * Builds a condition lock block when the player has manually removed conditions.
  * Informs the AI that these conditions were deliberately cleared and must NOT
@@ -340,6 +374,13 @@ export const constructGeminiPrompt = (
       gameWorld.factionExposure ?? {}
   );
 
+  // v1.17: Threat Suppression Context
+  const suppressionContext = buildThreatSuppressionContext(
+      gameHistory.turnCount,
+      gameWorld.threatCooldownUntilTurn,
+      gameWorld.threatDenialTracker
+  );
+
   // v1.7: Final sanitisation pass — ensure no banned names leak into prompt
   const nameMap = gameWorld.bannedNameMap ?? {};
   const sanitise = (s: string) => applyExistingMap(s, nameMap);
@@ -358,7 +399,7 @@ Tension Level: ${tension}/100
 ${sanitise(bioStatus)}
 
 [HIDDEN_REGISTRY]
-${sanitise(dormantHooksContext ? dormantHooksContext + '\n\n' : '')}${sanitise(gameWorld.hiddenRegistry)}
+${sanitise(suppressionContext ? suppressionContext : '')}${sanitise(dormantHooksContext ? dormantHooksContext + '\n\n' : '')}${sanitise(gameWorld.hiddenRegistry)}
 
 ${sanitise(characterBlock)}
 

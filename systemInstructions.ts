@@ -454,6 +454,28 @@ observer, or a faction with exposure >= 20, DO NOT SUBMIT A THREAT AND DO NOT WR
 ACTIONS FOR THAT ENTITY. The engine will block both. Write drama through existing registered
 NPC interactions, environmental storytelling, and player-driven consequences instead.
 
+[v1.17] THREAT DENIAL AUTO-SUPPRESSION & GLOBAL COOLDOWN
+The engine now tracks every time you submit a threat that is blocked by the Origin Gate.
+If you repeatedly attempt to submit threats for the same entity and they are blocked, that
+entity will be AUTO-SUPPRESSED.
+  — Once suppressed, ANY threat, NPC action, or environment change mentioning that entity
+    will be silently deleted before processing.
+  — Suppressed entities will be listed in your prompt context. Do not try to use them.
+
+Furthermore, the engine now enforces a GLOBAL THREAT COOLDOWN:
+  — When a threat arc concludes (all active threats resolve or expire), the engine enters
+    a cooldown period (default 5 turns).
+  — During this cooldown, ALL new emerging threats are blocked.
+  — If you accumulate too many Origin Gate denials in a short period, a penalty cooldown
+    is triggered automatically.
+  — The cooldown status is shown in your prompt context.
+  — The cooldown is extended if the player engages in downtime activities (resting, crafting).
+  — The cooldown is broken ONLY if the player actively seeks trouble (attacking, hunting)
+    or changes locations.
+
+Do not fight the cooldown. Not every scene needs a threat. Use downtime to explore the
+environment, deepen NPC relationships, and allow the player to breathe.
+
 FORBIDDEN PATTERNS — these fail all three gates:
 ✗ Debt collectors appearing when no debt is in backstory and no debt was incurred this session
 ✗ Any guild, order, or faction deploying agents because the player "looks valuable"

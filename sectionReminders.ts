@@ -207,9 +207,14 @@ This is not optional. The bargain_request field must be populated.
 After offering the bargain (accepted or not), the clock resets.
 Bargain costs must be SPECIFIC, PERMANENT, and a genuine trade-off. Never vague.`,
 
-    // v1.6: Fully replaced with Origin Gate version
-    THREAT_SEED_INTEGRITY: `[SYSTEM REMINDER: THREAT SEED PROTOCOL — INTEGRITY CHECK v1.6]
+    // v1.17: Added cooldown awareness
+    THREAT_SEED_INTEGRITY: `[SYSTEM REMINDER: THREAT SEED PROTOCOL — INTEGRITY CHECK v1.17]
 Before writing or updating any emerging_threats this turn, verify ALL of the following:
+
+━━━ v1.17 GLOBAL COOLDOWN & SUPPRESSION CHECK ━━━
+1. Check the [GLOBAL THREAT COOLDOWN ACTIVE] block in your prompt. If present, you MUST NOT generate new threats.
+2. Check the [SUPPRESSED ENTITIES] block. If an entity is listed, you MUST NOT use it in threats, NPC actions, or environment changes.
+If either applies, skip the rest of this checklist and focus on narrative downtime.
 
 ━━━ ORIGIN GATE — CHECK THIS FIRST ━━━
 Every new threat seed must pass at least ONE of these three tests:

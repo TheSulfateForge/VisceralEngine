@@ -54,6 +54,31 @@ export const NPC_ATTRITION_CHANCE = 0.35;
 export const CONSEQUENT_HOOKS_PER_CONSUMPTION = 2;
 
 // ---------------------------------------------------------------------------
+// v1.17: Threat Denial Suppression + Global Cooldown
+// ---------------------------------------------------------------------------
+
+/** Origin Gate denials before an entity is auto-suppressed from future threats. */
+export const DENIAL_SUPPRESSION_THRESHOLD = 3;
+
+/** Maximum entries in the denial tracker before oldest are pruned. */
+export const DENIAL_TRACKER_MAX_ENTRIES = 50;
+
+/** Turns of global threat cooldown after a threat arc concludes (all threats → 0). */
+export const THREAT_ARC_COOLDOWN_TURNS = 5;
+
+/** Cumulative Origin Gate denials in a sliding window that trigger a global cooldown. */
+export const DENIAL_COOLDOWN_TRIGGER = 8;
+
+/** Turns of global cooldown triggered by cumulative denials. */
+export const DENIAL_COOLDOWN_TURNS = 5;
+
+/** Extra cooldown turns added when player input contains downtime keywords during active cooldown. */
+export const DOWNTIME_COOLDOWN_EXTENSION = 2;
+
+/** Maximum global cooldown duration (prevents runaway extension). */
+export const THREAT_COOLDOWN_MAX = 20;
+
+// ---------------------------------------------------------------------------
 // Faction Exposure
 // ---------------------------------------------------------------------------
 
@@ -161,4 +186,24 @@ export const DOWNTIME_KEYWORDS = [
     'drink', 'bath', 'wash', 'clean', 'sit',
     'meditate', 'heal', 'study', 'walk', 'travel',
     'say', 'ask', 'tell', 'shout', 'whisper', 'talk', 'kiss', 'hug',
+    'masturbate', 'pleasure', 'touch myself', 'jerk', 'orgasm',
+    'cook', 'sew', 'repair', 'sharpen', 'whittle', 'carve',
+    'pray', 'contemplate', 'think', 'ponder', 'reflect',
+    'undress', 'dress', 'change', 'groom', 'shave',
+    'stretch', 'exercise', 'train', 'practice', 'spar',
+    'write', 'draw', 'sketch', 'journal', 'sing', 'hum',
+    'pet', 'feed', 'tend', 'water', 'garden',
+    'browse', 'shop', 'haggle', 'barter', 'trade',
+    'lock', 'bar the door', 'close the door', 'stay inside',
+] as const;
+
+/** v1.17: Keywords that indicate the player is actively seeking trouble.
+ *  These BREAK an active global threat cooldown. */
+export const AGGRESSION_KEYWORDS = [
+    'attack', 'fight', 'hunt', 'ambush', 'stalk', 'pursue', 'confront',
+    'challenge', 'provoke', 'threaten', 'raid', 'assault', 'charge',
+    'kill', 'murder', 'steal', 'rob', 'pickpocket', 'break in',
+    'trespass', 'infiltrate', 'sabotage', 'destroy', 'burn',
+    'draw my weapon', 'draw my sword', 'draw my knife', 'draw my gun',
+    'look for trouble', 'looking for a fight', 'pick a fight',
 ] as const;

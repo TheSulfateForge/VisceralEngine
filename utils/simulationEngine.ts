@@ -47,7 +47,7 @@
 import {
     ModelResponseSchema, GameWorld, DebugLogEntry, LoreItem,
     Character, MemoryItem, SceneMode, WorldTime, WorldTickEvent,
-    DormantHook, FactionExposure, WorldTickAction, ThreatArcHistory, ThreatArcEntry, KnownEntity
+    DormantHook, FactionExposure, WorldTickAction, ThreatArcHistory, ThreatArcEntry, KnownEntity, ThreatDenialTracker
 } from '../types';
 import { ReproductionSystem } from './reproductionSystem';
 import { BioEngine } from './bioEngine';
@@ -87,7 +87,10 @@ import {
     NPC_ATTRITION_CHANCE, CONSEQUENT_HOOKS_PER_CONSUMPTION,
     EXPOSURE_THRESHOLD_FOR_THREAT, EXPOSURE_DIRECT_OBSERVATION,
     EXPOSURE_PUBLIC_ACTION, EXPOSURE_DECAY_PER_TURN,
-    MAX_REGISTRY_LINES, TIME_CAPS, MEMORY_CAP, DEFAULT_MINUTES_PER_TURN
+    MAX_REGISTRY_LINES, TIME_CAPS, MEMORY_CAP, DEFAULT_MINUTES_PER_TURN,
+    DENIAL_SUPPRESSION_THRESHOLD, DENIAL_TRACKER_MAX_ENTRIES,
+    THREAT_ARC_COOLDOWN_TURNS, DENIAL_COOLDOWN_TRIGGER, DENIAL_COOLDOWN_TURNS,
+    DOWNTIME_COOLDOWN_EXTENSION, THREAT_COOLDOWN_MAX, AGGRESSION_KEYWORDS, DOWNTIME_KEYWORDS
 } from '../config/engineConfig';
 
 import {
@@ -100,7 +103,7 @@ import {
     applyNpcAttritionLayer, ENTITY_EXTRACTION_BLACKLIST,
     extractProperNounsFromThreatDescriptions, filterBlockedEntityEnvironmentChanges,
     processThreatSeeds, extractEntityNamesFromDescription, extractBannedMechanismFromRejection,
-    checkBannedMechanisms,
+    checkBannedMechanisms, extractProperNounFragments,
     updateEntityPresence, applyStatusTransitions, detectEntityDeaths, filterDeadEntityActions,
     processLocationUpdate, inferPlayerLocation
 } from './engine';
@@ -114,7 +117,8 @@ export const SimulationEngine = {
         currentWorld: GameWorld,
         character: Character,
         currentTurn: number,
-        playerRemovedConditions: string[] = []
+        playerRemovedConditions: string[] = [],
+        playerInput: string = ''
     ): SimulationResult => {
         const debugLogs: DebugLogEntry[] = [];
 
@@ -138,6 +142,22 @@ export const SimulationEngine = {
                 message: `[⚠ BANNED NAME VIOLATION] AI used forbidden name(s): ${allViolations.join(', ')} — all fields sanitised`,
                 type: 'warning'
             });
+        }
+
+        // ===================================================================
+        // v1.17: Initialize Global Cooldown & Suppression State
+        // ===================================================================
+        let globalCooldownUntil = currentWorld.threatCooldownUntilTurn ?? 0;
+        let sessionDenialCount = currentWorld.sessionDenialCount ?? 0;
+        let lastThreatArcEndTurn = currentWorld.lastThreatArcEndTurn ?? 0;
+        const currentDenialTracker: ThreatDenialTracker = {
+            ...(currentWorld.threatDenialTracker ?? {})
+        };
+        const suppressedEntityNames = new Set<string>();
+        for (const [name, entry] of Object.entries(currentDenialTracker)) {
+            if (entry.denialCount >= DENIAL_SUPPRESSION_THRESHOLD) {
+                suppressedEntityNames.add(name);
+            }
         }
 
         // ===================================================================
@@ -824,6 +844,46 @@ const pendingLore: LoreItem[] = [];
                 debugLogs
             );
 
+            // =============================================================
+            // v1.17: Filter NPC Actions & Environment Changes for Suppressed Entities
+            // =============================================================
+            if (suppressedEntityNames.size > 0) {
+                // Filter NPC actions
+                const originalActionCount = r.world_tick.npc_actions.length;
+                r.world_tick.npc_actions = r.world_tick.npc_actions.filter(action => {
+                    const nameLower = action.npc_name.toLowerCase();
+                    const actionLower = action.action.toLowerCase();
+                    for (const suppressed of suppressedEntityNames) {
+                        if (nameLower.includes(suppressed) || actionLower.includes(suppressed)) {
+                            debugLogs.push({
+                                timestamp: new Date().toISOString(),
+                                message: `[SUPPRESSED — v1.17] NPC Action by/about "${suppressed}" blocked.`,
+                                type: 'warning'
+                            });
+                            return false;
+                        }
+                    }
+                    return true;
+                });
+
+                // Filter Environment Changes
+                const originalEnvCount = r.world_tick.environment_changes.length;
+                r.world_tick.environment_changes = r.world_tick.environment_changes.filter(env => {
+                    const descLower = env.toLowerCase();
+                    for (const suppressed of suppressedEntityNames) {
+                        if (descLower.includes(suppressed)) {
+                            debugLogs.push({
+                                timestamp: new Date().toISOString(),
+                                message: `[SUPPRESSED — v1.17] Environment Change about "${suppressed}" blocked.`,
+                                type: 'warning'
+                            });
+                            return false;
+                        }
+                    }
+                    return true;
+                });
+            }
+
             for (const change of r.world_tick.environment_changes) {
                 debugLogs.push({
                     timestamp: new Date().toISOString(),
@@ -861,9 +921,136 @@ const pendingLore: LoreItem[] = [];
                 r.world_tick.emerging_threats || []
             );
 
+            // =============================================================
+            // v1.17: GLOBAL THREAT COOLDOWN + ENTITY SUPPRESSION
+            // =============================================================
+
+            // --- Step 1: Detect cooldown breakers in player input ---
+            const inputLower = playerInput.toLowerCase();
+            const playerSeekingTrouble = AGGRESSION_KEYWORDS.some(
+                kw => inputLower.includes(kw)
+            );
+            const playerInDowntime = DOWNTIME_KEYWORDS.some(
+                kw => inputLower.includes(kw)
+            );
+            const playerLocationChanged = (
+                currentWorld.location !== undefined &&
+                newPlayerLocation !== undefined &&
+                newPlayerLocation !== '' &&
+                currentWorld.location !== newPlayerLocation
+            );
+
+            // --- Step 2: Compute current global cooldown ---
+            // (globalCooldownUntil initialized at top of processTurn)
+
+            // If player actively seeks trouble, break cooldown immediately
+            if (playerSeekingTrouble && globalCooldownUntil > currentTurn) {
+                debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    message: `[COOLDOWN BROKEN — v1.17] Player input contains aggression ` +
+                        `keyword. Global threat cooldown lifted ` +
+                        `(was until turn ${globalCooldownUntil}).`,
+                    type: 'info'
+                });
+                globalCooldownUntil = 0;
+            }
+
+            // If player changed location, break cooldown
+            if (playerLocationChanged && globalCooldownUntil > currentTurn) {
+                debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    message: `[COOLDOWN BROKEN — v1.17] Player changed location ` +
+                        `("${currentWorld.location}" → "${newPlayerLocation}"). ` +
+                        `Global threat cooldown lifted ` +
+                        `(was until turn ${globalCooldownUntil}).`,
+                    type: 'info'
+                });
+                globalCooldownUntil = 0;
+            }
+
+            // If player is doing downtime stuff AND cooldown is active, extend it
+            if (playerInDowntime && globalCooldownUntil > currentTurn) {
+                const newCooldown = Math.min(
+                    globalCooldownUntil + DOWNTIME_COOLDOWN_EXTENSION,
+                    currentTurn + THREAT_COOLDOWN_MAX
+                );
+                if (newCooldown > globalCooldownUntil) {
+                    debugLogs.push({
+                        timestamp: new Date().toISOString(),
+                        message: `[COOLDOWN EXTENDED — v1.17] Player in downtime. ` +
+                            `Global cooldown extended: ` +
+                            `${globalCooldownUntil} → ${newCooldown}.`,
+                        type: 'info'
+                    });
+                    globalCooldownUntil = newCooldown;
+                }
+            }
+
+            const globalCooldownActive = globalCooldownUntil > currentTurn;
+
+            // --- Step 3: Entity denial suppression ---
+            // (currentDenialTracker and suppressedEntityNames initialized at top of processTurn)
+
+            // --- Step 4: Filter incoming threats ---
+            let incomingThreatsForProcessing = r.world_tick.emerging_threats;
+
+            // Gate A: Global cooldown blocks ALL new threats
+            if (globalCooldownActive) {
+                const existingIds = new Set(
+                    (currentWorld.emergingThreats ?? []).map(t => t.id)
+                        .filter(Boolean)
+                );
+                const existingDescs = new Set(
+                    (currentWorld.emergingThreats ?? []).map(t => t.description)
+                );
+
+                incomingThreatsForProcessing =
+                    incomingThreatsForProcessing.filter(threat => {
+                    // Allow CONTINUING existing threats through
+                    if (threat.id && existingIds.has(threat.id)) return true;
+                    if (existingDescs.has(threat.description)) return true;
+
+                    // Block all genuinely new threats
+                    const remaining = globalCooldownUntil - currentTurn;
+                    debugLogs.push({
+                        timestamp: new Date().toISOString(),
+                        message: `[GLOBAL COOLDOWN — v1.17] ` +
+                            `"${threat.description.substring(0, 80)}" — ` +
+                            `new threat blocked. Cooldown active for ` +
+                            `${remaining} more turns. Break by: changing ` +
+                            `location or actively seeking conflict.`,
+                        type: 'error'
+                    });
+                    return false;
+                });
+            }
+
+            // Gate B: Entity suppression blocks specific entities
+            if (suppressedEntityNames.size > 0) {
+                incomingThreatsForProcessing =
+                    incomingThreatsForProcessing.filter(threat => {
+                    const descLower = threat.description.toLowerCase();
+                    for (const name of suppressedEntityNames) {
+                        if (descLower.includes(name)) {
+                            debugLogs.push({
+                                timestamp: new Date().toISOString(),
+                                message: `[SUPPRESSED — v1.17] ` +
+                                    `"${threat.description.substring(0, 80)}" — ` +
+                                    `entity "${name}" blocked ` +
+                                    `${currentDenialTracker[name].denialCount} ` +
+                                    `times. Auto-suppressed.`,
+                                type: 'error'
+                            });
+                            return false;
+                        }
+                    }
+                    return true;
+                });
+            }
+
             // v1.6 / v1.4 / v1.8 / v1.9 / v1.11: Threat seed state machine with Origin Gate + ETA floors + entity continuity + scene awareness + re-seed detection
             processedThreats = processThreatSeeds(
-                r.world_tick.emerging_threats,
+                incomingThreatsForProcessing,
                 currentWorld.emergingThreats ?? [],
                 currentTurn,
                 debugLogs,
@@ -898,6 +1085,85 @@ const pendingLore: LoreItem[] = [];
                         message: `[DORMANT HOOK] "${threat.dormantHookId}" activated on turn ${currentTurn}`,
                         type: 'info'
                     });
+                }
+            }
+
+            // =============================================================
+            // v1.17: POST-PROCESSING (Denial Tracking & Cooldown Triggers)
+            // =============================================================
+
+            // (sessionDenialCount initialized at top of processTurn)
+
+            // 1. Track Origin Gate denials
+            // We find threats that were in incomingThreatsForProcessing but NOT in processedThreats
+            const processedIds = new Set(processedThreats.map(t => t.id).filter(Boolean));
+            const processedDescs = new Set(processedThreats.map(t => t.description));
+
+            const deniedThreats = incomingThreatsForProcessing.filter(t =>
+                !(t.id && processedIds.has(t.id)) && !processedDescs.has(t.description)
+            );
+
+            for (const denied of deniedThreats) {
+                const fragments = extractProperNounFragments(denied.description);
+                for (const fragment of fragments) {
+                    if (!currentDenialTracker[fragment]) {
+                        currentDenialTracker[fragment] = { denialCount: 0, lastDeniedTurn: 0 };
+                    }
+                    currentDenialTracker[fragment].denialCount++;
+                    currentDenialTracker[fragment].lastDeniedTurn = currentTurn;
+
+                    if (currentDenialTracker[fragment].denialCount === DENIAL_SUPPRESSION_THRESHOLD) {
+                        currentDenialTracker[fragment].suppressedAtTurn = currentTurn;
+                        debugLogs.push({
+                            timestamp: new Date().toISOString(),
+                            message: `[SUPPRESSION ACTIVATED — v1.17] Entity "${fragment}" ` +
+                                `reached ${DENIAL_SUPPRESSION_THRESHOLD} denials. ` +
+                                `Auto-suppressed from future threats.`,
+                            type: 'warning'
+                        });
+                    }
+                }
+                sessionDenialCount++;
+            }
+
+            // 2. Trigger Cumulative Denial Cooldown
+            if (sessionDenialCount >= DENIAL_COOLDOWN_TRIGGER && !globalCooldownActive) {
+                globalCooldownUntil = currentTurn + DENIAL_COOLDOWN_TURNS;
+                sessionDenialCount = 0; // Reset counter after triggering
+                debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    message: `[GLOBAL COOLDOWN TRIGGERED — v1.17] Cumulative Origin Gate ` +
+                        `denials reached ${DENIAL_COOLDOWN_TRIGGER}. Threat generation ` +
+                        `paused for ${DENIAL_COOLDOWN_TURNS} turns.`,
+                    type: 'warning'
+                });
+            }
+
+            // 3. Detect Threat Arc Conclusion
+            // An arc concludes if there were threats last turn, but 0 threats this turn.
+            const previousThreatCount = (currentWorld.emergingThreats ?? []).length;
+            const currentThreatCount = processedThreats.length;
+            // (lastThreatArcEndTurn initialized at top of processTurn)
+
+            if (previousThreatCount > 0 && currentThreatCount === 0) {
+                globalCooldownUntil = currentTurn + THREAT_ARC_COOLDOWN_TURNS;
+                lastThreatArcEndTurn = currentTurn;
+                debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    message: `[THREAT ARC CONCLUDED — v1.17] All threats resolved or expired. ` +
+                        `Global cooldown activated for ${THREAT_ARC_COOLDOWN_TURNS} turns.`,
+                    type: 'info'
+                });
+            }
+
+            // 4. Prune Denial Tracker (prevent infinite growth)
+            const trackerEntries = Object.entries(currentDenialTracker);
+            if (trackerEntries.length > DENIAL_TRACKER_MAX_ENTRIES) {
+                // Sort by lastDeniedTurn ascending (oldest first)
+                trackerEntries.sort((a, b) => a[1].lastDeniedTurn - b[1].lastDeniedTurn);
+                const toRemove = trackerEntries.length - DENIAL_TRACKER_MAX_ENTRIES;
+                for (let i = 0; i < toRemove; i++) {
+                    delete currentDenialTracker[trackerEntries[i][0]];
                 }
             }
 
@@ -1210,6 +1476,11 @@ const pendingLore: LoreItem[] = [];
                 location: newPlayerLocation,
                 locationGraph: updatedLocationGraph,
                 usedNameRegistry: usedNames,
+                // v1.17 fields
+                threatDenialTracker: currentDenialTracker,
+                threatCooldownUntilTurn: globalCooldownUntil,
+                lastThreatArcEndTurn: lastThreatArcEndTurn,
+                sessionDenialCount: sessionDenialCount,
             },
             characterUpdate: {
                 ...character,

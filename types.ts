@@ -272,6 +272,23 @@ export interface ThreatArcEntry {
 /** Keyed by hookId, "playerAction", or "factionExposure". */
 export type ThreatArcHistory = Record<string, ThreatArcEntry[]>;
 
+// --- v1.17: Threat Denial Tracking ---
+// Tracks how many times each entity name has been denied by the Origin Gate.
+// After reaching the suppression threshold, threats mentioning that entity
+// are silently dropped before reaching the Origin Gate validation.
+
+export interface ThreatDenialEntry {
+    /** Number of times this entity appeared in a blocked threat. */
+    denialCount: number;
+    /** Turn when the most recent denial occurred. */
+    lastDeniedTurn: number;
+    /** Turn when auto-suppression activated (undefined = not yet suppressed). */
+    suppressedAtTurn?: number;
+}
+
+/** Keyed by lowercase entity name fragment. */
+export type ThreatDenialTracker = Record<string, ThreatDenialEntry>;
+
 export interface WorldTickEvent {
     description: string;
     turns_until_impact?: number;
@@ -586,6 +603,16 @@ export interface GameWorld {
 
     /** Active emerging threats being tracked by the threat seed state machine. */
     emergingThreats: WorldTickEvent[];
+
+    /** v1.17: Tracks Origin Gate denial counts per entity to auto-suppress repeat offenders. */
+    threatDenialTracker?: ThreatDenialTracker;
+
+    /** v1.17: Global threat cooldown — no new threats until this turn. */
+    threatCooldownUntilTurn?: number;
+    /** v1.17: Turn when the most recent threat arc ended (all emergingThreats → 0). */
+    lastThreatArcEndTurn?: number;
+    /** v1.17: Cumulative Origin Gate denials this session (for global cooldown trigger). */
+    sessionDenialCount?: number;
 
     /** v1.10: Flag set by allied passivity detection for sectionReminders. */
     passiveAlliesDetected?: boolean;
