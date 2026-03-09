@@ -199,3 +199,61 @@ export const filterDeadEntityActions = (
         return true;
     });
 };
+
+/**
+ * v1.18: Cross-references lore entries with known entities to detect deaths
+ * that the AI recorded in lore but never propagated to entity status.
+ * This catches the "retroactive consciousness" pattern where the AI kills
+ * an entity in lore but continues generating actions for them via
+ * world_tick by inventing workarounds (e.g. "consciousness in stasis").
+ */
+export const detectLoreDeaths = (
+    entities: KnownEntity[],
+    lore: { keyword: string; content: string }[],
+    debugLogs: DebugLogEntry[]
+): KnownEntity[] => {
+    const DEATH_PHRASES = [
+        'beaten to death', 'killed by', 'was killed', 'was slain',
+        'died', 'found dead', 'executed', 'perished',
+        'murdered', 'assassinated', 'fell in battle',
+        'mortally wounded', 'bled out', 'destroyed'
+    ];
+
+    return entities.map(entity => {
+        if (entity.status === 'dead' || entity.status === 'retired') return entity;
+
+        const nameLower = entity.name.toLowerCase();
+        // Check first name for matching (e.g. "Vaelen" matches "Mage-Inquisitor Vaelen")
+        const firstName = nameLower.split(/[\s\-(']/)[0];
+
+        for (const entry of lore) {
+            const contentLower = entry.content.toLowerCase();
+            const keywordLower = entry.keyword.toLowerCase();
+
+            // Entity must be referenced in keyword OR content
+            const nameInKeyword = keywordLower.includes(firstName) && firstName.length >= 4;
+            const nameInContent = contentLower.includes(nameLower) || contentLower.includes(firstName);
+
+            if (!nameInKeyword && !nameInContent) continue;
+
+            // Check for death phrases
+            const hasDeath = DEATH_PHRASES.some(phrase => contentLower.includes(phrase));
+            if (hasDeath) {
+                debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    type: 'warning',
+                    message: `[LORE DEATH — v1.18] ${entity.name} marked as DEAD. ` +
+                        `Lore entry "${entry.keyword}" contains death language: ` +
+                        `"${entry.content.substring(0, 80)}"`
+                });
+                return {
+                    ...entity,
+                    status: 'dead' as const,
+                    exitReason: `Confirmed dead in lore: ${entry.keyword}`
+                };
+            }
+        }
+
+        return entity;
+    });
+};

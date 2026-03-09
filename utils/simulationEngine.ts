@@ -104,7 +104,7 @@ import {
     extractProperNounsFromThreatDescriptions, filterBlockedEntityEnvironmentChanges,
     processThreatSeeds, extractEntityNamesFromDescription, extractBannedMechanismFromRejection,
     checkBannedMechanisms, extractProperNounFragments,
-    updateEntityPresence, applyStatusTransitions, detectEntityDeaths, filterDeadEntityActions,
+    updateEntityPresence, applyStatusTransitions, detectEntityDeaths, filterDeadEntityActions, detectLoreDeaths,
     processLocationUpdate, inferPlayerLocation
 } from './engine';
 // ---------------------------------------------------------------------------
@@ -155,7 +155,10 @@ export const SimulationEngine = {
         };
         const suppressedEntityNames = new Set<string>();
         for (const [name, entry] of Object.entries(currentDenialTracker)) {
-            if (entry.denialCount >= DENIAL_SUPPRESSION_THRESHOLD) {
+            // v1.18: Only suppress on multi-word entity names. Single-word fragments
+            // ("nathan", "mana", "high", "city") caused catastrophic collateral blocking.
+            // Existing single-word entries in saved tracker data become inert.
+            if (entry.denialCount >= DENIAL_SUPPRESSION_THRESHOLD && name.includes(' ')) {
                 suppressedEntityNames.add(name);
             }
         }
@@ -471,6 +474,16 @@ export const SimulationEngine = {
             debugLogs
         );
 
+        // v1.18: Lore-based death reconciliation — catches entities the AI
+        // killed in lore but never propagated to entity status (e.g. Vaelen
+        // "beaten to death" in lore but still generating world_tick actions
+        // via "consciousness in stasis" workaround).
+        updatedKnownEntities = detectLoreDeaths(
+            updatedKnownEntities,
+            currentWorld.lore ?? [],
+            debugLogs
+        );
+
         // v1.14: Location Proximity Graph — Process location updates
         let updatedLocationGraph = currentWorld.locationGraph ?? { nodes: {}, edges: [], playerLocationId: '' };
         if (r.location_update) {
@@ -700,13 +713,36 @@ const pendingLore: LoreItem[] = [];
         // threat entities as locally present despite their ETA being > 3.
         if (r.hidden_update) {
             const existingEmergingForHiddenCheck = currentWorld.emergingThreats ?? [];
-            const validatedHiddenUpdate = validateHiddenUpdateCoherence(
+            let validatedHiddenUpdate = validateHiddenUpdateCoherence(
                 r.hidden_update,
                 existingEmergingForHiddenCheck,
                 debugLogs,
                 character.name,
                 currentSceneMode  // v1.9
             );
+
+            // v1.18: Filter hidden_update sentences that mention suppressed entities.
+            // The AI uses hidden_update to narrate suppressed threat progress,
+            // which then pollutes the registry fed back as context on subsequent turns.
+            if (validatedHiddenUpdate.trim().length > 0 && suppressedEntityNames.size > 0) {
+                const sentences = validatedHiddenUpdate.split(/(?<=[.!?])\s+/);
+                const filtered = sentences.filter(sentence => {
+                    const sLower = sentence.toLowerCase();
+                    for (const suppressed of suppressedEntityNames) {
+                        if (sLower.includes(suppressed)) {
+                            debugLogs.push({
+                                timestamp: new Date().toISOString(),
+                                message: `[SUPPRESSED — v1.18] hidden_update sentence about "${suppressed}" blocked.`,
+                                type: 'warning'
+                            });
+                            return false;
+                        }
+                    }
+                    return true;
+                });
+                validatedHiddenUpdate = filtered.join(' ');
+            }
+
             if (validatedHiddenUpdate.trim().length > 0) {
                 newHiddenRegistry += `\n[${newTime.display}] ${validatedHiddenUpdate}`;
             }
@@ -814,6 +850,58 @@ const pendingLore: LoreItem[] = [];
                 debugLogs
             );
 
+            // v1.16: Filter environment changes that reference entities blocked by
+            // origin gate bypass detection. Prevents the AI from advancing blocked
+            // threat arcs through environmental narration.
+            r.world_tick.environment_changes = filterBlockedEntityEnvironmentChanges(
+                r.world_tick.environment_changes,
+                originGateBlockedEntities,
+                debugLogs
+            );
+
+            // =============================================================
+            // v1.17/v1.18: Filter NPC Actions & Environment Changes for Suppressed Entities
+            // v1.18 FIX: This now runs BEFORE hidden registry write, so suppressed
+            // entity actions no longer leak into the registry and pollute AI context.
+            // =============================================================
+            if (suppressedEntityNames.size > 0) {
+                // Filter NPC actions
+                r.world_tick.npc_actions = r.world_tick.npc_actions.filter(action => {
+                    const nameLower = action.npc_name.toLowerCase();
+                    const actionLower = action.action.toLowerCase();
+                    for (const suppressed of suppressedEntityNames) {
+                        if (nameLower.includes(suppressed) || actionLower.includes(suppressed)) {
+                            debugLogs.push({
+                                timestamp: new Date().toISOString(),
+                                message: `[SUPPRESSED — v1.18] NPC Action by/about "${suppressed}" blocked.`,
+                                type: 'warning'
+                            });
+                            return false;
+                        }
+                    }
+                    return true;
+                });
+
+                // Filter Environment Changes
+                r.world_tick.environment_changes = r.world_tick.environment_changes.filter(env => {
+                    const descLower = env.toLowerCase();
+                    for (const suppressed of suppressedEntityNames) {
+                        if (descLower.includes(suppressed)) {
+                            debugLogs.push({
+                                timestamp: new Date().toISOString(),
+                                message: `[SUPPRESSED — v1.18] Environment Change about "${suppressed}" blocked.`,
+                                type: 'warning'
+                            });
+                            return false;
+                        }
+                    }
+                    return true;
+                });
+            }
+
+            // v1.18: Hidden registry write now happens AFTER all filtering.
+            // Previously this ran before suppression, leaking suppressed entities
+            // into the registry where they polluted AI context on subsequent turns.
             const hiddenActions = r.world_tick.npc_actions.filter(a => !a.player_visible);
             for (const action of hiddenActions) {
                 newHiddenRegistry += `\n[${newTime.display}] [WORLD-TICK] ${action.npc_name}: ${action.action}`;
@@ -835,61 +923,44 @@ const pendingLore: LoreItem[] = [];
                 });
             }
 
-            // v1.16: Filter environment changes that reference entities blocked by
-            // origin gate bypass detection. Prevents the AI from advancing blocked
-            // threat arcs through environmental narration.
-            r.world_tick.environment_changes = filterBlockedEntityEnvironmentChanges(
-                r.world_tick.environment_changes,
-                originGateBlockedEntities,
-                debugLogs
-            );
-
-            // =============================================================
-            // v1.17: Filter NPC Actions & Environment Changes for Suppressed Entities
-            // =============================================================
-            if (suppressedEntityNames.size > 0) {
-                // Filter NPC actions
-                const originalActionCount = r.world_tick.npc_actions.length;
-                r.world_tick.npc_actions = r.world_tick.npc_actions.filter(action => {
-                    const nameLower = action.npc_name.toLowerCase();
-                    const actionLower = action.action.toLowerCase();
-                    for (const suppressed of suppressedEntityNames) {
-                        if (nameLower.includes(suppressed) || actionLower.includes(suppressed)) {
-                            debugLogs.push({
-                                timestamp: new Date().toISOString(),
-                                message: `[SUPPRESSED — v1.17] NPC Action by/about "${suppressed}" blocked.`,
-                                type: 'warning'
-                            });
-                            return false;
-                        }
-                    }
-                    return true;
-                });
-
-                // Filter Environment Changes
-                const originalEnvCount = r.world_tick.environment_changes.length;
-                r.world_tick.environment_changes = r.world_tick.environment_changes.filter(env => {
-                    const descLower = env.toLowerCase();
-                    for (const suppressed of suppressedEntityNames) {
-                        if (descLower.includes(suppressed)) {
-                            debugLogs.push({
-                                timestamp: new Date().toISOString(),
-                                message: `[SUPPRESSED — v1.17] Environment Change about "${suppressed}" blocked.`,
-                                type: 'warning'
-                            });
-                            return false;
-                        }
-                    }
-                    return true;
-                });
-            }
-
             for (const change of r.world_tick.environment_changes) {
                 debugLogs.push({
                     timestamp: new Date().toISOString(),
                     message: `[ENV] ${change}`,
                     type: 'info'
                 });
+            }
+
+            // =============================================================
+            // v1.18: Post-suppression entity status correction
+            // The entity lifecycle runs before world tick filtering, so narrative
+            // mentions of suppressed entities cause updateEntityPresence to mark
+            // them as 'present'. Correct that here.
+            // =============================================================
+            if (suppressedEntityNames.size > 0) {
+                for (let i = 0; i < updatedKnownEntities.length; i++) {
+                    const entity = updatedKnownEntities[i];
+                    if (entity.status === 'dead' || entity.status === 'retired') continue;
+                    const nameLower = entity.name.toLowerCase();
+                    for (const suppressed of suppressedEntityNames) {
+                        if (nameLower.includes(suppressed)) {
+                            if (entity.status === 'present') {
+                                updatedKnownEntities[i] = {
+                                    ...entity,
+                                    status: 'missing',
+                                    statusChangedTurn: currentTurn
+                                };
+                                debugLogs.push({
+                                    timestamp: new Date().toISOString(),
+                                    message: `[ENTITY STATUS — v1.18] ${entity.name} demoted ` +
+                                        `present → missing (entity "${suppressed}" is suppressed).`,
+                                    type: 'info'
+                                });
+                            }
+                            break;
+                        }
+                    }
+                }
             }
 
             // v1.10: Allied NPC passivity detection — flag when bonded/companion NPCs
@@ -1104,7 +1175,7 @@ const pendingLore: LoreItem[] = [];
             );
 
             for (const denied of deniedThreats) {
-                const fragments = extractProperNounFragments(denied.description);
+                const fragments = extractProperNounFragments(denied.description, character.name);
                 for (const fragment of fragments) {
                     if (!currentDenialTracker[fragment]) {
                         currentDenialTracker[fragment] = { denialCount: 0, lastDeniedTurn: 0 };

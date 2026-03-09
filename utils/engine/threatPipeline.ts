@@ -306,11 +306,13 @@ export const checkEscalationBudget = (
 };
 
 /**
- * v1.17: Extracts probable entity name fragments from a threat description
+ * v1.18: Extracts probable entity name fragments from a threat description
  * by finding capitalized multi-word phrases (proper nouns).
- * Returns lowercase fragments for matching against the denial tracker.
+ * Returns lowercase MULTI-WORD fragments only — single-word fragments caused
+ * catastrophic collateral suppression (blocking "nathan", "mana", "high", "city").
+ * Accepts playerName to exclude the player character from denial tracking.
  */
-export const extractProperNounFragments = (description: string): string[] => {
+export const extractProperNounFragments = (description: string, playerName?: string): string[] => {
     const COMMON_WORDS = new Set([
         'the', 'a', 'an', 'is', 'are', 'was', 'were', 'has', 'have', 'had',
         'will', 'would', 'could', 'should', 'may', 'might', 'can', 'shall',
@@ -319,7 +321,21 @@ export const extractProperNounFragments = (description: string): string[] => {
         'new', 'old', 'first', 'last', 'next', 'this', 'that', 'these',
         'origin', 'gate', 'test', 'hook', 'action', 'faction', 'exposure',
         'eta', 'threat', 'status', 'building', 'blocked',
+        // v1.18: Common setting/gameplay words that caused collateral suppression
+        'high', 'low', 'great', 'grand', 'deep', 'upper', 'lower', 'inner', 'outer',
+        'city', 'town', 'village', 'port', 'free', 'royal', 'sacred', 'ancient',
+        'mana', 'magic', 'arcane', 'ward', 'spell', 'ritual', 'resonance',
+        'captain', 'sergeant', 'guard', 'scout', 'soldier', 'merchant', 'priest',
+        'north', 'south', 'east', 'west', 'river', 'harbor', 'district', 'market',
     ]);
+
+    // v1.18: Build player name exclusion set
+    const playerNameParts = new Set<string>();
+    if (playerName) {
+        for (const part of playerName.toLowerCase().split(/\s+/)) {
+            if (part.length >= 3) playerNameParts.add(part);
+        }
+    }
 
     const fragments: string[] = [];
 
@@ -331,16 +347,15 @@ export const extractProperNounFragments = (description: string): string[] => {
 
     for (const match of matches) {
         const parts = match.toLowerCase().split(/[\s\-']+/).filter(
-            p => p.length >= 3 && !COMMON_WORDS.has(p)
+            p => p.length >= 3 && !COMMON_WORDS.has(p) && !playerNameParts.has(p)
         );
+        // v1.18: ONLY emit multi-word fragments (2+ significant words).
+        // Single-word fragments like "vaelen", "marrow", "hounds" are too broad
+        // and cause collateral suppression of unrelated content.
         if (parts.length >= 2) {
             fragments.push(parts.join(' '));
         }
-        for (const part of parts) {
-            if (part.length >= 4) {
-                fragments.push(part);
-            }
-        }
+        // Single-word fragments are NO LONGER emitted.
     }
 
     return [...new Set(fragments)];

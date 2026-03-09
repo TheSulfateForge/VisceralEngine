@@ -271,9 +271,14 @@ const buildThreatSuppressionContext = (
     }
 
     // 2. Suppressed Entities
+    // v1.18: Only show multi-word entity names. Single-word fragments like
+    // "nathan", "mana", "high", "city" polluted the AI's instructions and
+    // prevented it from mentioning the player character or common setting terms.
     if (denialTracker) {
         const suppressed = Object.entries(denialTracker)
-            .filter(([_, entry]) => entry.denialCount >= DENIAL_SUPPRESSION_THRESHOLD)
+            .filter(([name, entry]) =>
+                entry.denialCount >= DENIAL_SUPPRESSION_THRESHOLD && name.includes(' ')
+            )
             .map(([name, _]) => name);
 
         if (suppressed.length > 0) {
