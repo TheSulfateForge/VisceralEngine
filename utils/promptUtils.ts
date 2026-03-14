@@ -1,6 +1,7 @@
 import { GameHistory, GameWorld, Character, SceneMode, MemoryItem, LoreItem, KnownEntity, BioMonitor, ActiveThreat, DormantHook, FactionExposure, ThreatDenialTracker } from '../types';
 import { retrieveRelevantContext, RAGResult } from './ragEngine';
-import { getSectionReminders } from '../sectionReminders';
+// v1.19: Section reminders moved to trailing position on user message (useGeminiClient.ts)
+// import { getSectionReminders } from '../sectionReminders';
 import { partitionConditions } from './contentValidation';
 import { applyExistingMap } from './nameResolver';
 import { DOWNTIME_KEYWORDS, DENIAL_SUPPRESSION_THRESHOLD } from '../config/engineConfig';
@@ -347,20 +348,9 @@ export const constructGeminiPrompt = (
   const pacingInstruction = buildPacingInstruction(tension, currentMode, isDowntime);
   const characterBlock = buildCharacterBlock(character);
 
-  // 5. Section Reminders
-  // v1.5: Pass entityCount and goalCount for FIX 6 (entity density) and FIX 11 (goal staleness).
-  const sectionRefreshes = getSectionReminders(
-    gameHistory.turnCount,
-    currentMode as SceneMode,
-    gameWorld.lastBargainTurn,
-    gameHistory.turnCount,
-    character.conditions.length,
-    (gameWorld.knownEntities ?? []).length,           // FIX 6: entity density
-    (character.goals ?? []).length,                    // FIX 11: goal staleness
-    (gameWorld.emergingThreats ?? []).length, // v1.7: logistics check
-    !!gameWorld.passiveAlliesDetected         // v1.10: allied passivity
-  );
-  const sectionRefresh = sectionRefreshes.length > 0 ? sectionRefreshes.join('\n\n') : null;
+  // v1.19: Section reminders removed from here — they are now appended as a
+  // trailing suffix on the user message in useGeminiClient.ts → sendMessage()
+  // to exploit Gemini's recency bias for better compliance.
   
   // 6. World Pressure (v1.1)
   const worldPressure = buildWorldPressure(
@@ -422,9 +412,6 @@ ${sanitise(conditionLock ? `\n${conditionLock}\n` : '')}
 5. Check the current Conditions list before adding new ones. Do NOT add conditions that semantically duplicate existing ones (e.g., do not add "Broken Left Arm" if "Left Arm Fractured" already exists). If a condition worsens, REMOVE the old one and ADD the new severity.
 6. Populate \`world_tick\` with at least one NPC action. The world does not pause.
 
-${sectionRefresh ? `\n${sectionRefresh}\n` : ''}
-[INPUT]
-${userInput}
 `;
 
   return {

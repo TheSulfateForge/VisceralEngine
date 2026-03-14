@@ -4,6 +4,7 @@ import { generateMessageId } from '../idUtils';
 import { mapSystemErrorToNarrative } from '../utils';
 import { useToast } from '../components/providers/ToastProvider';
 import { constructGeminiPrompt } from '../utils/promptUtils';
+import { SYSTEM_INSTRUCTIONS } from '../systemInstructions'; // v1.19: Wire persona into API call
 import { GeminiService } from '../geminiService';
 import { useGameStore } from '../store';
 import { SimulationEngine } from '../utils/simulationEngine';
@@ -149,11 +150,17 @@ export const useGeminiClient = () => {
             }));
         }
 
+        // v1.19: Prepend SYSTEM_INSTRUCTIONS so the VRE persona, core directives,
+        // banned names, and output protocol actually reach config.systemInstruction.
+        // Previously only dynamic game state context was being sent.
+        const fullSystemPrompt = `${SYSTEM_INSTRUCTIONS}\n\n${contextPrompt}`;
+
         const response: ModelResponseSchema = await service.sendMessage(
-            contextPrompt, 
+            fullSystemPrompt, 
             [...preCallState.gameHistory.history, userMsg], 
             preCallState.gameHistory.lastActiveSummary,
-            preCallState.gameWorld.bannedNameMap ?? {}  // v1.7
+            preCallState.gameWorld.bannedNameMap ?? {},  // v1.7
+            activeReminder  // v1.19: Trailing reminder for recency-biased compliance
         );
 
         if (latestRequestId.current !== requestId) {

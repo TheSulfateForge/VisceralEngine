@@ -249,7 +249,8 @@ export class GeminiClient {
       systemPrompt: string, 
       history: ChatMessage[], 
       historicalSummary?: string,
-      nameMap?: Record<string, string>  // v1.7
+      nameMap?: Record<string, string>,  // v1.7
+      trailingReminder?: string | null   // v1.19: Appended to user message for recency compliance
   ): Promise<ModelResponseSchema> {
     
     const contextHistory = history.length > 0 ? history.slice(0, -1) : [];
@@ -291,8 +292,15 @@ export class GeminiClient {
     });
 
     try {
+      // v1.19: Append section reminders to the END of the user message.
+      // Gemini pays strongest attention to the very bottom of context (recency bias).
+      // Moving enforcement reminders here forces compliance even in long conversations.
+      const userMessageWithReminder = trailingReminder
+          ? `${currentUserMsg.text}\n\n[SYSTEM REFRESH — MANDATORY COMPLIANCE]\n${trailingReminder}`
+          : currentUserMsg.text;
+
       const result = await this.withRetry(() => Promise.race([
-          chat.sendMessage({ message: currentUserMsg.text }),
+          chat.sendMessage({ message: userMessageWithReminder }),
           new Promise<never>((_, reject) => 
             setTimeout(() => reject(new Error("Request Timed Out")), REQUEST_TIMEOUT_MS)
           )
