@@ -9,15 +9,26 @@ import { RollOutcome, ConditionSeverity } from "./types";
 // API & MODEL CONFIGURATION
 // ============================================================================
 
+// v1.19: Pinned model list — no -latest aliases for predictable cost/behavior.
+// Each model family requires different thinking parameters (see geminiClient.ts).
 export const MODELS = [
-  'gemini-flash-latest',
-  'gemini-flash-lite-latest',
   'gemini-2.5-flash',
   'gemini-2.5-flash-lite',
-  'gemini-3-flash-preview'
+  'gemini-3-flash-preview',
+  'gemini-3.1-flash-lite-preview',
 ] as const;
 
 export const MAX_CONTEXT_HISTORY = 30;
+
+// v1.19: Thinking config defaults per model family.
+// Gemini 2.5 uses thinkingBudget (token count). Gemini 3.x uses thinkingLevel (0-3 scale).
+// These are baseline defaults — the main GM call may override with higher values.
+export const THINKING_DEFAULTS: Record<string, { type: 'budget'; value: number } | { type: 'level'; value: number }> = {
+  'gemini-2.5-flash':              { type: 'budget', value: 8192 },   // Strong reasoning for narrative + JSON
+  'gemini-2.5-flash-lite':         { type: 'budget', value: 1024 },   // Light reasoning for utility tasks
+  'gemini-3-flash-preview':        { type: 'level',  value: 2 },      // Medium deliberation
+  'gemini-3.1-flash-lite-preview': { type: 'level',  value: 1 },      // Light deliberation
+};
 
 // All Gemini API calls: Maximum Permissiveness for "Visceral Realism"
 export const GEMINI_SAFETY_SETTINGS = [

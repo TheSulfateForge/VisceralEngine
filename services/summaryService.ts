@@ -11,6 +11,9 @@ export class SummaryService {
             const response = await this.ai.models.generateContent({
                 model: "gemini-2.5-flash-lite", 
                 contents: `Summarize the following RPG session logs into a concise paragraph (max 300 words). Focus on key events, injuries, and location changes:\n\n${textContent}`,
+                config: {
+                    thinkingConfig: { thinkingBudget: 512 },  // v1.19: Minimal thinking for fast summaries
+                },
             });
             return response.text || "";
         } catch (e) {

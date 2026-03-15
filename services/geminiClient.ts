@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
-import { GEMINI_SAFETY_SETTINGS, MAX_CONTEXT_HISTORY } from "../constants";
+import { GEMINI_SAFETY_SETTINGS, MAX_CONTEXT_HISTORY, THINKING_DEFAULTS } from "../constants";
 import { ChatMessage, Role, ModelResponseSchema, SCENE_MODES, SceneMode, Lighting, LIGHTING_LEVELS } from "../types";
 import { RESPONSE_SCHEMA } from "../schemas/responseSchema";
 import { sanitiseHistory } from '../utils/nameResolver';
@@ -81,6 +81,22 @@ export class GeminiClient {
         .replace(/\/\*[\s\S]*?\*\//g, '')
         .replace(/(^|[^:])\/\/.*/g, '')
         .replace(/\\n/g, '\\n');
+  }
+
+  // v1.19: Build the correct thinkingConfig for the current model family.
+  // Gemini 2.5 models use thinkingBudget (token count).
+  // Gemini 3.x models use thinkingLevel (integer 0-3).
+  // Sending the wrong param type causes 400 errors.
+  private buildThinkingConfig(overrideBudget?: number): Record<string, unknown> | undefined {
+    const defaults = THINKING_DEFAULTS[this.modelName];
+    if (!defaults) return undefined; // Unknown model — omit thinking config entirely
+
+    if (defaults.type === 'budget') {
+      return { thinkingBudget: overrideBudget ?? defaults.value };
+    } else {
+      // 'level' type — overrideBudget is ignored, use the default level
+      return { thinkingLevel: defaults.value };
+    }
   }
 
   protected validateResponse(data: unknown): ModelResponseSchema {
@@ -277,6 +293,10 @@ export class GeminiClient {
 
     const currentUserMsg = history[history.length - 1];
 
+    // v1.19: Build model-appropriate thinking config.
+    // Gemini 2.5 → thinkingBudget (tokens), Gemini 3.x → thinkingLevel (0-3).
+    const thinkingConfig = this.buildThinkingConfig();
+
     const chat = this.ai.chats.create({
       model: this.modelName,
       history: apiHistory,
@@ -287,7 +307,8 @@ export class GeminiClient {
         topK: 40,
         safetySettings: GEMINI_SAFETY_SETTINGS,
         responseMimeType: "application/json",
-        responseSchema: RESPONSE_SCHEMA
+        responseSchema: RESPONSE_SCHEMA,
+        ...(thinkingConfig ? { thinkingConfig } : {}),
       },
     });
 
