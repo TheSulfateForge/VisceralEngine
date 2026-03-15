@@ -305,6 +305,179 @@ export const detectAlliedPassivity = (
     return passiveAllies;
 };
 
+export const HOSTILE_ROLE_KEYWORDS = new Set([
+    'investigator', 'enforcer', 'collector', 'compliance', 'inspector',
+    'bounty', 'hunter', 'tracker', 'spy', 'agent', 'operative',
+    'inquisitor', 'warden', 'overseer', 'assessor', 'auditor',
+]);
+
+/**
+ * v1.19: Validates hidden NPC actions. Blocks actions from entities whose associated
+ * threat has expired or been suppressed. Also blocks entities with hostile-investigative
+ * roles that were registered without a corresponding active threat.
+ */
+export const validateHiddenNpcActions = (
+    hiddenActions: WorldTickAction[],
+    suppressedEntityNames: Set<string>,
+    updatedKnownEntities: KnownEntity[],
+    activeOrBuildingThreats: WorldTickEvent[],
+    debugLogs: DebugLogEntry[]
+): WorldTickAction[] => {
+    const activeEntityNames = new Set<string>();
+    for (const threat of activeOrBuildingThreats) {
+        for (const name of (threat.entitySourceNames ?? [])) {
+            activeEntityNames.add(name.toLowerCase());
+        }
+        const descWords = threat.description.toLowerCase().split(/\s+/);
+        for (const w of descWords) {
+            if (w.length >= 4) activeEntityNames.add(w);
+        }
+    }
+
+    return hiddenActions.filter(action => {
+        const npcNameLower = action.npc_name.toLowerCase();
+        const actionLower = action.action.toLowerCase();
+
+        // v1.19 CHECK 1: Is this NPC associated with a suppressed entity?
+        let blockedBySuppression = false;
+        for (const suppressed of suppressedEntityNames) {
+            if (npcNameLower.includes(suppressed) || actionLower.includes(suppressed)) {
+                blockedBySuppression = true;
+                break;
+            }
+        }
+        if (blockedBySuppression) return false;
+
+        // v1.19 CHECK 2: Is this NPC's associated threat expired?
+        const entityMatch = updatedKnownEntities.find(e => {
+            const eName = e.name.toLowerCase();
+            const npcFirst = npcNameLower.split(/[\s_-]/)[0];
+            return eName.includes(npcFirst) || npcFirst.includes(eName.split(/[\s(]/)[0]);
+        });
+
+        if (entityMatch) {
+            const roleLower = (entityMatch.role ?? '').toLowerCase();
+            const roleWords = roleLower.split(/[\s/,()]+/).filter(w => w.length >= 3);
+            const hasHostileRole = roleWords.some(w => HOSTILE_ROLE_KEYWORDS.has(w));
+
+            if (hasHostileRole) {
+                const entityNameParts = entityMatch.name.toLowerCase().split(/[\s(]+/).filter(p => p.length >= 3);
+                const hasActiveThreat = entityNameParts.some(p => activeEntityNames.has(p));
+
+                if (!hasActiveThreat) {
+                    debugLogs.push({
+                        timestamp: new Date().toISOString(),
+                        message: `[HIDDEN ACTION BLOCKED — v1.19 THREAT GATE] "${action.npc_name}: ` +
+                            `${action.action.substring(0, 100)}" — entity has hostile role ` +
+                            `"${entityMatch.role}" but no active/building threat. Hidden ` +
+                            `actions from hostile-role NPCs require an active threat.`,
+                        type: 'warning'
+                    });
+                    return false;
+                }
+            }
+        }
+
+        // v1.19 CHECK 3: Does the action text reference a suppressed or non-active faction?
+        const FACTION_ACTION_INDICATORS = [
+            'bribe', 'report to', 'sends a', 'missive', 'intelligence',
+            'surveillance', 'profiling', 'dossier', 'ledger', 'recording',
+            'tracking', 'tailing', 'shadowing', 'monitoring',
+        ];
+        const hasFactionIndicator = FACTION_ACTION_INDICATORS.some(ind => actionLower.includes(ind));
+
+        if (hasFactionIndicator && entityMatch) {
+            const relationship = entityMatch.relationship_level?.toUpperCase();
+            if (relationship === 'HOSTILE' || relationship === 'SUSPICIOUS') {
+                const entityNameParts = entityMatch.name.toLowerCase().split(/[\s(]+/).filter(p => p.length >= 3);
+                const hasActiveThreat = entityNameParts.some(p => activeEntityNames.has(p));
+                if (!hasActiveThreat) {
+                    debugLogs.push({
+                        timestamp: new Date().toISOString(),
+                        message: `[HIDDEN ACTION BLOCKED — v1.19 FACTION GATE] "${action.npc_name}: ` +
+                            `${action.action.substring(0, 100)}" — hostile faction action ` +
+                            `without active threat. Faction operations require active threat pipeline entry.`,
+                        type: 'warning'
+                    });
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    });
+};
+
+/**
+ * v1.19: Validates faction intel entries in hidden_update. Blocks entries that reference
+ * factions without active exposure score or active threats. Prevents the AI from
+ * fabricating entire faction infrastructures through hidden_update.
+ */
+export const validateFactionIntel = (
+    hiddenUpdate: string,
+    currentFactionExposure: Record<string, any>,
+    allThreats: WorldTickEvent[],
+    updatedKnownEntities: KnownEntity[],
+    debugLogs: DebugLogEntry[]
+): string => {
+    if (!hiddenUpdate || hiddenUpdate.trim().length === 0) return hiddenUpdate;
+
+    const sentences = hiddenUpdate.split(/(?<=[.!?\]])\s+/);
+    const factionFiltered = sentences.filter(sentence => {
+        const factionIntelMatch = sentence.match(/\[FACTION_INTEL\]\s*([^:]+):/);
+        if (!factionIntelMatch) return true;
+
+        const claimedFaction = factionIntelMatch[1].trim().toLowerCase();
+
+        const hasExposure = Object.keys(currentFactionExposure).some(
+            f => f.toLowerCase().includes(claimedFaction) || claimedFaction.includes(f.toLowerCase())
+        );
+        if (hasExposure) return true;
+
+        const hasThreat = allThreats.some(t => t.description.toLowerCase().includes(claimedFaction));
+        if (hasThreat) return true;
+
+        const hasHostileEntity = updatedKnownEntities.some(e =>
+            e.name.toLowerCase().includes(claimedFaction) &&
+            (e.relationship_level as string === 'HOSTILE' || e.relationship_level as string === 'SUSPICIOUS')
+        );
+        if (hasHostileEntity) return true;
+
+        debugLogs.push({
+            timestamp: new Date().toISOString(),
+            message: `[FACTION INTEL BLOCKED — v1.19] "${sentence.substring(0, 120)}" — ` +
+                `faction "${factionIntelMatch[1].trim()}" has no active exposure, ` +
+                `no active threats, and no hostile entities. Fabricated intel blocked.`,
+            type: 'warning'
+        });
+        return false;
+    });
+
+    const legalFiltered = factionFiltered.filter(sentence => {
+        const legalMatch = sentence.match(/\[LEGAL_STATUS\].*?Active Claim:.*?\(([^)]+)\)/);
+        if (!legalMatch) return true;
+
+        const claimant = legalMatch[1].trim().toLowerCase();
+        const isKnown = updatedKnownEntities.some(e =>
+            e.name.toLowerCase().includes(claimant) || claimant.includes(e.name.toLowerCase())
+        );
+        if (isKnown) return true;
+
+        const hasThreat = allThreats.some(t => t.description.toLowerCase().includes(claimant));
+        if (hasThreat) return true;
+
+        debugLogs.push({
+            timestamp: new Date().toISOString(),
+            message: `[LEGAL STATUS BLOCKED — v1.19] "${sentence.substring(0, 120)}" — ` +
+                `claimant "${claimant}" not found in entity registry or active threats.`,
+            type: 'warning'
+        });
+        return false;
+    });
+
+    return legalFiltered.join(' ').trim();
+};
+
 /**
  * Validates that world_tick NPC actions don't contradict emerging threat ETAs.
  *

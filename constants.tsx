@@ -12,10 +12,10 @@ import { RollOutcome, ConditionSeverity } from "./types";
 // v1.19: Pinned model list — no -latest aliases for predictable cost/behavior.
 // Each model family requires different thinking parameters (see geminiClient.ts).
 export const MODELS = [
-  'gemini-2.5-flash',
-  'gemini-2.5-flash-lite',
   'gemini-3-flash-preview',
   'gemini-3.1-flash-lite-preview',
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
 ] as const;
 
 export const MAX_CONTEXT_HISTORY = 30;

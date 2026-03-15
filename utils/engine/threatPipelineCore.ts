@@ -19,7 +19,9 @@ export const validateThreatCausality = (
     currentTurn: number,
     debugLogs: DebugLogEntry[],
     knownEntityNames: string[] = [],
-    playerCharacterName: string = ''
+    playerCharacterName: string = '',
+    lore: LoreItem[] = [],           // v1.19: For location-inherent encounter validation
+    playerLocation: string = ''       // v1.19: Current player location
 ): boolean => {
     const log = (msg: string) => debugLogs.push({
         timestamp: new Date().toISOString(),
@@ -57,13 +59,26 @@ export const validateThreatCausality = (
             let overlapScore = 0;
             const matchedWords: string[] = [];
 
+            // v1.19: Thematic words that directly relate to the hook's threat category
+            // score at 1.5x instead of 1.0x. This ensures hooks about exploitation/commodification
+            // actually fire when threats use exploitation/commodification vocabulary.
+            const THEMATIC_BOOST_WORDS = new Set([
+                'predatory', 'exploit', 'commodity', 'commodify', 'harvest', 'specimen',
+                'trafficking', 'auction', 'breeding', 'capture', 'enslave', 'abduct',
+                'physiology', 'biological', 'rare', 'exotic', 'valuable', 'profitable',
+                'entertainment', 'licensed', 'regulated', 'inspection', 'warrant',
+                'scout', 'talent', 'recruit', 'acquire', 'procurement', 'bounty',
+                'groping', 'harassment', 'assault', 'coercion', 'intimidation',
+            ]);
+
             for (const word of threatWords) {
                 if (hookWords.has(word)) {
                     const isWeak = word.length >= 4 && (
                         word.includes('faction') || word.includes('guild') ||
                         word.includes('city') || word.includes('guard')
                     );
-                    overlapScore += isWeak ? WEAK_OVERLAP_WEIGHT : 1;
+                    const isThematic = THEMATIC_BOOST_WORDS.has(word);
+                    overlapScore += isWeak ? WEAK_OVERLAP_WEIGHT : (isThematic ? 1.5 : 1);
                     matchedWords.push(word);
                 }
             }
@@ -107,7 +122,42 @@ export const validateThreatCausality = (
         }
     }
 
-    log(`[ORIGIN GATE ✗] "${desc}" — no dormantHookId, no playerActionCause, no factionSource with exposure. BLOCKED.`);
+    // v1.19: Origin Gate Test D — Location-Inherent Encounters
+    // Threats describing creatures, hazards, or environmental dangers that are
+    // established in lore for the player's current location pass automatically.
+    // This prevents the gate from blocking "giant rats on Floor 1" when lore
+    // explicitly documents giant rats on Floor 1.
+    if (threat.description && lore && lore.length > 0 && playerLocation) {
+        const descLower = threat.description.toLowerCase();
+        const locationLower = playerLocation.toLowerCase();
+
+        // Extract the broadest location identifier (e.g., "Floor 1" from "Floor 1 — Sector A (Verdant Corridors)")
+        const locationParts = locationLower.split(/[—\-()]/);
+        const broadLocation = locationParts[0].trim();
+
+        for (const entry of lore) {
+            const loreLower = `${entry.keyword} ${entry.content}`.toLowerCase();
+
+            // Lore must reference the player's current broad location
+            if (!loreLower.includes(broadLocation) && broadLocation.length >= 3) continue;
+
+            // Check if the threat description shares significant vocabulary with the lore entry
+            const loreWords = significantWords(`${entry.keyword} ${entry.content}`);
+            const threatDescWords = significantWords(threat.description);
+            const overlap = jaccardSimilarity(loreWords, threatDescWords);
+
+            if (overlap >= 0.15) {
+                log(
+                    `[ORIGIN GATE ✓ — v1.19 LOCATION-INHERENT] "${desc}" — ` +
+                    `matches lore "${entry.keyword}" for location "${broadLocation}" ` +
+                    `(overlap: ${overlap.toFixed(2)}). Environmental encounter approved.`
+                );
+                return true;
+            }
+        }
+    }
+
+    log(`[ORIGIN GATE ✗] "${desc}" — no dormantHookId, no playerActionCause, no factionSource with exposure, no location-inherent lore match. BLOCKED.`);
     return false;
 };
 
@@ -326,7 +376,7 @@ export const processThreatSeeds = (
         : processed.filter(threat => {
             if (threat.turnCreated !== currentTurn) return true;
 
-            if (!validateThreatCausality(threat, dormantHooks, factionExposure, currentTurn, debugLogs, knownEntityNames, playerCharacterName)) {
+            if (!validateThreatCausality(threat, dormantHooks, factionExposure, currentTurn, debugLogs, knownEntityNames, playerCharacterName, lore, playerLocation)) {
                 return false;
             }
 

@@ -101,9 +101,10 @@ import {
     validateHiddenUpdateCoherence, extractHostileFactionKeywords,
     validateNpcEntityRegistration, syncEntityLocationsFromWorldTick,
     applyNpcAttritionLayer, ENTITY_EXTRACTION_BLACKLIST,
+    validateHiddenNpcActions, validateFactionIntel,
     extractProperNounsFromThreatDescriptions, filterBlockedEntityEnvironmentChanges,
     processThreatSeeds, extractEntityNamesFromDescription, extractBannedMechanismFromRejection,
-    checkBannedMechanisms, extractProperNounFragments,
+    checkBannedMechanisms, extractProperNounFragments, checkAdversarialLore,
     updateEntityPresence, applyStatusTransitions, detectEntityDeaths, filterDeadEntityActions, detectLoreDeaths,
     processLocationUpdate, inferPlayerLocation
 } from './engine';
@@ -523,6 +524,9 @@ const pendingLore: LoreItem[] = [];
                     message: `[LORE BANNED — v1.12] "${keyword}" matches a player-rejected mechanism. Suppressed.`,
                     type: 'error'
                 });
+            } else if (checkAdversarialLore(keyword, content, currentWorld.lore ?? [], character.backstory ?? '', debugLogs)) {
+                // v1.19: Block adversarial lore that isn't grounded in existing lore/backstory
+                // checkAdversarialLore already logs the warning
             } else {
                 // FIX 7: Exact-keyword check runs BEFORE semantic Jaccard check.
                 // Two entries with the same keyword are always a conflict regardless of
@@ -696,6 +700,13 @@ const pendingLore: LoreItem[] = [];
         // ===================================================================
         let newHiddenRegistry = currentWorld.hiddenRegistry || '';
 
+        let lastWorldTickTurn = currentWorld.lastWorldTickTurn ?? 0;
+        let processedThreats: WorldTickEvent[] | undefined;
+        let currentHooks: DormantHook[] | undefined;
+        let currentFactionExposure: FactionExposure | undefined;
+        let detectedPassiveAllies: string[] | undefined;
+        let currentThreatArcHistory: ThreatArcHistory | undefined;
+
         // v1.9 + v1.10: Compute scene mode early so all downstream validators can use it.
         // v1.10: getEffectiveSceneMode() detects de facto combat from NPC actions.
         // If the AI labels the scene TENSION but NPCs are shooting arrows and charging
@@ -743,8 +754,22 @@ const pendingLore: LoreItem[] = [];
                 validatedHiddenUpdate = filtered.join(' ');
             }
 
+            // v1.19: Filter faction intel entries in hidden_update that reference
+            // factions without active exposure score or active threats. Prevents
+            // the AI from fabricating entire faction infrastructures through hidden_update.
             if (validatedHiddenUpdate.trim().length > 0) {
-                newHiddenRegistry += `\n[${newTime.display}] ${validatedHiddenUpdate}`;
+                const allThreats = [...(processedThreats ?? []), ...(currentWorld.emergingThreats ?? [])];
+                const finalHiddenUpdate = validateFactionIntel(
+                    validatedHiddenUpdate,
+                    currentFactionExposure ?? currentWorld.factionExposure ?? {},
+                    allThreats,
+                    updatedKnownEntities,
+                    debugLogs
+                );
+                
+                if (finalHiddenUpdate.length > 0) {
+                    newHiddenRegistry += `\n[${newTime.display}] ${finalHiddenUpdate}`;
+                }
             }
         }
 
@@ -766,13 +791,6 @@ const pendingLore: LoreItem[] = [];
                 r.world_tick = { npc_actions: [], environment_changes: [], emerging_threats: [] };
             }
         }
-
-        let lastWorldTickTurn = currentWorld.lastWorldTickTurn ?? 0;
-        let processedThreats: WorldTickEvent[] | undefined;
-        let currentHooks: DormantHook[] | undefined;
-        let currentFactionExposure: FactionExposure | undefined;
-        let detectedPassiveAllies: string[] | undefined;
-        let currentThreatArcHistory: ThreatArcHistory | undefined;
 
         if (r.world_tick) {
             const hasActivity =
@@ -860,6 +878,34 @@ const pendingLore: LoreItem[] = [];
             );
 
             // =============================================================
+            // v1.19: Validate Hidden NPC Actions (Adversarial Lore Channel Closure)
+            // Block hidden actions from hostile NPCs if they don't have an active threat.
+            // =============================================================
+            r.world_tick.npc_actions = r.world_tick.npc_actions.filter(action => {
+                if (action.player_visible) return true;
+
+                const npcNameLower = action.npc_name.toLowerCase();
+                const registeredEntity = currentWorld.knownEntities?.find(e => e.name.toLowerCase() === npcNameLower);
+                
+                if (registeredEntity && ['hostile', 'investigator', 'enforcer'].includes(registeredEntity.role.toLowerCase())) {
+                    const hasActiveThreat = currentWorld.emergingThreats?.some(t => 
+                        t.factionSource?.toLowerCase() === npcNameLower || 
+                        t.description?.toLowerCase().includes(npcNameLower)
+                    );
+
+                    if (!hasActiveThreat) {
+                        debugLogs.push({
+                            timestamp: new Date().toISOString(),
+                            message: `[HIDDEN ACTION BLOCKED — v1.19] Hostile NPC "${action.npc_name}" attempted a hidden action without an active threat.`,
+                            type: 'warning'
+                        });
+                        return false;
+                    }
+                }
+                return true;
+            });
+
+            // =============================================================
             // v1.17/v1.18: Filter NPC Actions & Environment Changes for Suppressed Entities
             // v1.18 FIX: This now runs BEFORE hidden registry write, so suppressed
             // entity actions no longer leak into the registry and pollute AI context.
@@ -899,10 +945,21 @@ const pendingLore: LoreItem[] = [];
                 });
             }
 
-            // v1.18: Hidden registry write now happens AFTER all filtering.
-            // Previously this ran before suppression, leaking suppressed entities
-            // into the registry where they polluted AI context on subsequent turns.
-            const hiddenActions = r.world_tick.npc_actions.filter(a => !a.player_visible);
+            // v1.18/v1.19: Hidden registry write now happens AFTER all filtering.
+            // v1.19: Additional filter — hidden NPC actions for entities whose associated
+            // threat has expired or been suppressed are blocked. This closes the channel
+            // where Kennet (Iron Rats) continued stalking for 20+ turns after threat expiry.
+            // Also blocks entities with hostile-investigative roles that were registered
+            // without a corresponding active threat (the "Valen Investigator" pattern).
+            const activeOrBuildingThreats = processedThreats ?? currentWorld.emergingThreats ?? [];
+            const hiddenActions = validateHiddenNpcActions(
+                r.world_tick.npc_actions.filter(a => !a.player_visible),
+                suppressedEntityNames,
+                updatedKnownEntities,
+                activeOrBuildingThreats,
+                debugLogs
+            );
+
             for (const action of hiddenActions) {
                 newHiddenRegistry += `\n[${newTime.display}] [WORLD-TICK] ${action.npc_name}: ${action.action}`;
             }

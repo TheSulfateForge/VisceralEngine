@@ -57,20 +57,23 @@ export const CONSEQUENT_HOOKS_PER_CONSUMPTION = 2;
 // v1.17: Threat Denial Suppression + Global Cooldown
 // ---------------------------------------------------------------------------
 
-/** Origin Gate denials before an entity is auto-suppressed from future threats. */
-export const DENIAL_SUPPRESSION_THRESHOLD = 3;
+/** Origin Gate denials before an entity is auto-suppressed from future threats. // v1.19: Raised from 3 → 6 to prevent premature permanent suppression of factions */
+export const DENIAL_SUPPRESSION_THRESHOLD = 6;
 
 /** Maximum entries in the denial tracker before oldest are pruned. */
 export const DENIAL_TRACKER_MAX_ENTRIES = 50;
+
+/** v1.19: Turns before a re-seed block expires. Lowered from 10 to allow faster faction reuse. */
+export const RESEED_BLOCK_TURNS_V19 = 5;
 
 /** Turns of global threat cooldown after a threat arc concludes (all threats → 0). */
 export const THREAT_ARC_COOLDOWN_TURNS = 5;
 
 /** Cumulative Origin Gate denials in a sliding window that trigger a global cooldown. */
-export const DENIAL_COOLDOWN_TRIGGER = 8;
+export const DENIAL_COOLDOWN_TRIGGER = 12; // v1.19: Raised from 8 — prevents premature engine shutdown
 
 /** Turns of global cooldown triggered by cumulative denials. */
-export const DENIAL_COOLDOWN_TURNS = 5;
+export const DENIAL_COOLDOWN_TURNS = 3; // v1.19: Lowered from 5 — cooldown is shorter but triggers later
 
 /** Extra cooldown turns added when player input contains downtime keywords during active cooldown. */
 export const DOWNTIME_COOLDOWN_EXTENSION = 2;

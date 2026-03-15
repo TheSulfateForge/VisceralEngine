@@ -100,6 +100,12 @@ Before writing NPC actions or advancing threats this turn, verify:
 [v1.8] 11. NO RETCON OF THREAT IDENTITY: Once a threat is established, you cannot
    retroactively assign named leaders, change pursuers, or upgrade capabilities.
 
+[v1.19] 12. LOCATION-INHERENT ENCOUNTERS: If the player is in a location with
+   established lore about environmental hazards or creatures (e.g., "The Sunken
+   Ruins are infested with giant centipedes"), you may submit threats for those
+   hazards without needing a dormant hook or faction exposure. The engine will
+   validate the semantic overlap between the threat description and the lore.
+
 REMEMBER: A realistic delayed response creates BETTER drama than an omniscient instant one.
 Allied NPCs with orders CREATE drama by acting — passive allies are a narrative dead zone.`,
 

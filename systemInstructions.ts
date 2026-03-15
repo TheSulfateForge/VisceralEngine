@@ -174,11 +174,18 @@ threat based on a player action:
 The default state of the world after a player action is: NOBODY KNOWS YET.
 Information must propagate through established channels before anyone can respond.
 
-**[v1.12] HOSTILE FACTION INTELLIGENCE TRACKING**
-The engine now auto-populates factionExposure for hostile factions engaged in active
-conflict. You no longer need to manually seed observation actions for factions that
-are already fighting the player. However, factions that have NOT been in conflict
-still require exposure accumulation before they can seed threats.
+**[v1.19] FACTION INTELLIGENCE VALIDATION**
+The engine now strictly validates faction intelligence entries in 'hidden_update'.
+You may ONLY log '[FACTION_INTEL]' for factions that already exist in Canonical Lore
+or the Entity Registry. Inventing new factions via hidden updates to bypass the Origin Gate
+is strictly prohibited and will be blocked.
+
+**[v1.19] HIDDEN NPC ACTION VALIDATION**
+The engine now validates all hidden 'npc_actions'. If an NPC is registered with a
+'hostile' relationship level, they CANNOT perform hidden actions (like stalking or
+gathering intel) unless they are currently part of an active, unsuppressed threat
+in 'emerging_threats'. Hostile NPCs without active threats are considered dormant
+and their hidden actions will be blocked.
 
 // =========================================================================
 // SECTION 2.5: WORLD TICK PROTOCOL
@@ -520,6 +527,14 @@ Maximum budget: 8 points per 10 turns.
 
 A Gold-rank party (5 points) followed by Tibbit assassins (5 points) in the same
 10-turn window would be blocked (total 10 > max 8). Escalation must be gradual.
+
+**[v1.19] RULE 8B — LOCATION-INHERENT ENCOUNTERS**
+The Origin Gate now permits environmental encounters (creatures, hazards, local dangers)
+that are explicitly supported by Canonical Lore for the player's current location.
+If the player is in "The Sunken Ruins" and lore states "The Sunken Ruins are infested
+with giant centipedes", you may submit a threat for giant centipedes without needing
+a dormant hook or faction exposure. The engine will validate the semantic overlap
+between the threat description and the location's lore.
 
 **[v1.12] RULE 9 — INFORMATION CHAIN ENFORCEMENT**
 The engine now validates the information chain for threats citing playerActionCause.

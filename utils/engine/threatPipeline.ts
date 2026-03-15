@@ -7,6 +7,44 @@ import {
 } from '../../config/engineConfig';
 import { isMessengerThreat } from './npcCoherence';
 
+// v1.19: Adversarial Lore Validation
+// Blocks the AI from inventing new adversarial capabilities or factions via lore
+// if they are not supported by backstory or existing lore.
+export const checkAdversarialLore = (
+    keyword: string,
+    content: string,
+    existingLore: LoreItem[],
+    backstory: string,
+    debugLogs: DebugLogEntry[]
+): boolean => {
+    const textLower = `${keyword} ${content}`.toLowerCase();
+    
+    // Check for adversarial keywords
+    const adversarialKeywords = ['faction', 'syndicate', 'cult', 'gang', 'military', 'assassin', 'mercenary', 'threat', 'enemy', 'hostile'];
+    const hasAdversarialKeyword = adversarialKeywords.some(kw => textLower.includes(kw));
+    
+    if (!hasAdversarialKeyword) return false; // Not adversarial lore, allow it
+
+    // If it is adversarial, check if it's grounded in existing lore or backstory
+    const isGroundedInBackstory = adversarialKeywords.some(kw => backstory.toLowerCase().includes(kw) && textLower.includes(kw));
+    if (isGroundedInBackstory) return false;
+
+    const isGroundedInLore = existingLore.some(lore => {
+        const loreLower = `${lore.keyword} ${lore.content}`.toLowerCase();
+        return adversarialKeywords.some(kw => loreLower.includes(kw) && textLower.includes(kw));
+    });
+
+    if (isGroundedInLore) return false;
+
+    // If we reach here, it's adversarial but ungrounded
+    debugLogs.push({
+        timestamp: new Date().toISOString(),
+        message: `[ADVERSARIAL LORE BLOCKED — v1.19] Lore entry "${keyword}" introduces ungrounded adversarial elements.`,
+        type: 'warning'
+    });
+    return true; // Block it
+};
+
 export const ETA_FLOOR_FACTION = 15;
 export const ETA_FLOOR_INDIVIDUAL_NEUTRAL = 5;
 export const ETA_FLOOR_INDIVIDUAL_HOME = 3;
@@ -17,16 +55,18 @@ export const ETA_FLOOR_COMBAT_FACTION = 3;
 export const ETA_FLOOR_TENSION_INDIVIDUAL = 2;
 export const ETA_FLOOR_TENSION_FACTION = 5;
 
+import { RESEED_BLOCK_TURNS_V19 } from '../../config/engineConfig';
+
 export const PIVOT_DELAY_TURNS = 2;
 export const ENTITY_NAME_MATCH_THRESHOLD = 1;
 export const PIVOT_JACCARD_THRESHOLD = 0.35;
 
-export const RESEED_BLOCK_TURNS = 10;
+export const RESEED_BLOCK_TURNS = RESEED_BLOCK_TURNS_V19; // v1.19: Lowered from 10 — allows faster faction recycling after expiry
 export const RESEED_ENTITY_OVERLAP_THRESHOLD = 1;
 
 export const OVERLAP_MIN_DEFAULT = 2;
 export const OVERLAP_MIN_MEDIUM = 3;
-export const OVERLAP_MIN_BROAD = 4;
+export const OVERLAP_MIN_BROAD = 3; // v1.19: Lowered from 4 — broad hooks (16+ words) were mechanically unusable
 export const WEAK_OVERLAP_WEIGHT = 0.5;
 
 export const HOOK_COOLDOWN_BASE = 8;
