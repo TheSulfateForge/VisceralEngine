@@ -20,14 +20,18 @@ export const MODELS = [
 
 export const MAX_CONTEXT_HISTORY = 30;
 
-// v1.19: Thinking config defaults per model family.
-// Gemini 2.5 uses thinkingBudget (token count). Gemini 3.x uses thinkingLevel (0-3 scale).
-// These are baseline defaults — the main GM call may override with higher values.
-export const THINKING_DEFAULTS: Record<string, { type: 'budget'; value: number } | { type: 'level'; value: number }> = {
-  'gemini-2.5-flash':              { type: 'budget', value: 8192 },   // Strong reasoning for narrative + JSON
-  'gemini-2.5-flash-lite':         { type: 'budget', value: 1024 },   // Light reasoning for utility tasks
-  'gemini-3-flash-preview':        { type: 'level',  value: 2 },      // Medium deliberation
-  'gemini-3.1-flash-lite-preview': { type: 'level',  value: 1 },      // Light deliberation
+// v1.19c: Thinking config defaults per model family.
+// Gemini 2.5 models: thinking is ON by default — do NOT send thinkingConfig
+// via chats.create() as it causes empty responses with structured JSON output.
+// Gemini 3.x models: use thinkingLevel with string values.
+// Valid levels: "minimal" | "low" | "medium" | "high"
+export const THINKING_DEFAULTS: Record<string, { type: 'level'; value: string }> = {
+  // 2.5 models intentionally OMITTED — they think by default and the
+  // chats.create() API has known issues when thinkingConfig is combined
+  // with responseMimeType + responseSchema. Omitting lets them use their
+  // internal defaults without interference.
+  'gemini-3-flash-preview':        { type: 'level', value: 'medium' },
+  'gemini-3.1-flash-lite-preview': { type: 'level', value: 'low' },
 };
 
 // All Gemini API calls: Maximum Permissiveness for "Visceral Realism"

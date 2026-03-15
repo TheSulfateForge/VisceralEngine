@@ -83,20 +83,18 @@ export class GeminiClient {
         .replace(/\\n/g, '\\n');
   }
 
-  // v1.19: Build the correct thinkingConfig for the current model family.
-  // Gemini 2.5 models use thinkingBudget (token count).
-  // Gemini 3.x models use thinkingLevel (integer 0-3).
-  // Sending the wrong param type causes 400 errors.
-  private buildThinkingConfig(overrideBudget?: number): Record<string, unknown> | undefined {
+  // v1.19c: Build the correct thinkingConfig for the current model family.
+  // Gemini 2.5 models: OMIT thinkingConfig entirely — they think by default,
+  // and the chats.create() API returns empty responses when thinkingConfig
+  // is combined with responseMimeType + responseSchema.
+  // Gemini 3.x models: use thinkingLevel with string values
+  // ("minimal" | "low" | "medium" | "high").
+  private buildThinkingConfig(): Record<string, unknown> | undefined {
     const defaults = THINKING_DEFAULTS[this.modelName];
-    if (!defaults) return undefined; // Unknown model — omit thinking config entirely
+    if (!defaults) return undefined; // 2.5 models + unknown models — omit entirely
 
-    if (defaults.type === 'budget') {
-      return { thinkingBudget: overrideBudget ?? defaults.value };
-    } else {
-      // 'level' type — overrideBudget is ignored, use the default level
-      return { thinkingLevel: defaults.value };
-    }
+    // 3.x models use string-based thinkingLevel
+    return { thinkingLevel: defaults.value };
   }
 
   protected validateResponse(data: unknown): ModelResponseSchema {
