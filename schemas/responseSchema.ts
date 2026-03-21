@@ -23,7 +23,7 @@ export const RESPONSE_SCHEMA: Schema = {
     },
     time_passed_minutes: {
         type: Type.INTEGER,
-        description: "Minutes elapsed in THIS scene beat ONLY. Do NOT 'catch up' or account for off-screen time from prior turns. Combat round=1-5, Dialogue=5-15, Routine task=15-45, District travel=30-60. Sleep=420-480 ONLY if sleep_hours is also set. If unsure, default LOW (15). Max non-sleep value: 90."
+        description: "Minutes elapsed in THIS scene beat ONLY. Do NOT 'catch up' or account for off-screen time. STRICT BRACKETS — pick the lowest that fits: Quick exchange (a few spoken sentences)=1-3. Short conversation (one topic discussed)=3-5. Extended dialogue scene (multiple topics, emotional shift)=5-10. Brief physical action (hug, hand something over, open a door)=1-2. Routine task (cooking, cleaning, getting dressed)=15-30. District travel on foot=30-60. Sleep=420-480 ONLY with sleep_hours set. SOCIAL MODE DEFAULT: If scene_mode is SOCIAL, default to 2 (not 15). The engine caps SOCIAL turns at 15m max. Combat round=1-5. If unsure, default LOW: 2 for dialogue, 15 for activity. Saying a single sentence is NOT 15 minutes."
     },
     biological_inputs: {
         type: Type.OBJECT,

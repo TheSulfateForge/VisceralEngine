@@ -112,7 +112,11 @@ export const TIME_CAPS = {
     AWAKE_MAX: 120,
     SLEEP_MAX: 540,
     COMBAT_MAX: 30,
+    SOCIAL_MAX: 15,       // v1.19.1: Hard cap for SOCIAL scene mode dialogue turns
 } as const;
+
+/** v1.19.1: Default time when AI returns 0 or undefined during non-sleep turns. */
+export const TIME_FLOOR_MINUTES = 1;
 
 // ---------------------------------------------------------------------------
 // Memory & Lore

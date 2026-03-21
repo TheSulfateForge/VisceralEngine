@@ -165,11 +165,12 @@ export const SimulationEngine = {
         }
 
         // ===================================================================
-        // 1. Time Pipeline
+        // 1. Time Pipeline (v1.19.1: scene-mode-aware clamping)
         // ===================================================================
         const hasSleep = (r.biological_inputs?.sleep_hours ?? 0) > 0;
         const isCombat = r.scene_mode === 'COMBAT';
-        const { delta, log: timeLog } = calculateTimeDelta(r.time_passed_minutes, hasSleep, isCombat);
+        const isSocial = r.scene_mode === 'SOCIAL';  // v1.19.1
+        const { delta, log: timeLog } = calculateTimeDelta(r.time_passed_minutes, hasSleep, isCombat, isSocial);
 
         if (timeLog) {
             debugLogs.push({ timestamp: new Date().toISOString(), message: timeLog, type: 'info' });

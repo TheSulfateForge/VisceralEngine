@@ -333,11 +333,15 @@ the location_update field so the engine knows WHERE the player is. This is not o
 - **Passivity Protocol:** Do NOT advance the timeline unless the player explicitly travels or sleeps.
 - **NPC Life Continues:** During downtime, NPCs are still living their lives. When the player re-engages, reflect what changed.
 
-**TIME TRACKING (Strict)**
+**TIME TRACKING (Strict — v1.19.1 Refined)**
 Check [BIOLOGICAL STATUS] for current time before advancing.
-- Routine tasks: 15-45 min. District travel: 30 min. City crossing: 60-90 min. Dungeon room: 5-15 min.
-- Sleep: 420-480 min ONLY if the player explicitly sleeps this turn.
+- **Dialogue (SOCIAL mode):** A few sentences spoken = 1-3 min. One topic discussed = 3-5 min. Extended conversation with emotional shift = 5-10 min. The engine hard-caps SOCIAL at 15 min. DEFAULT TO 2 for dialogue.
+- **Brief physical action:** Hug, hand something over, open door, sit down = 1-2 min.
+- **Routine tasks:** Cooking, cleaning, getting dressed = 15-30 min. Eating a meal = 20-30 min.
+- **Travel:** District travel: 30 min. City crossing: 60-90 min. Dungeon room: 5-15 min.
+- **Sleep:** 420-480 min ONLY if the player explicitly sleeps this turn.
 - **Double-Count Prevention:** "I wake up" after a sleep scene = 0-5 min, not another night.
+- **CRITICAL:** Saying a single sentence is NOT 15 minutes. Two people whispering across a table is 1-2 minutes. A full breakfast conversation is 15-20 minutes TOTAL, not 15 minutes PER SENTENCE. Think about how long the described action would ACTUALLY take in real life.
 
 **BIOLOGICAL INPUT PROTOCOL**
 Detect consumption and update \`biological_inputs\` JSON:

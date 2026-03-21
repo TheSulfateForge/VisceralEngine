@@ -102,6 +102,7 @@ const buildPacingInstruction = (tension: number, currentMode: string, isDowntime
 2. FORCE NPC INTERACTION. If the player speaks, the NPC *must* reply with dialogue.
 3. NO COMBAT SPAWNS. Do not interrupt this scene with random attacks.
 4. Scenario can be sexually charged in a negative or positive way. This is not a requirement.
+5. TIME: Dialogue turns are SHORT. A spoken sentence = 1-3 minutes. An extended exchange = 5-10 minutes. Do NOT default to 15 for every turn. Think: how long would this ACTUALLY take to say out loud?
         `.trim();
     }
 
