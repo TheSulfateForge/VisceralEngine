@@ -106,7 +106,8 @@ import {
     processThreatSeeds, extractEntityNamesFromDescription, extractBannedMechanismFromRejection,
     checkBannedMechanisms, extractProperNounFragments, checkAdversarialLore,
     updateEntityPresence, applyStatusTransitions, detectEntityDeaths, filterDeadEntityActions, detectLoreDeaths,
-    processLocationUpdate, inferPlayerLocation
+    validateConditionEntityCoherence, // v1.20
+    processLocationUpdate, inferPlayerLocation, deduplicateLocationGraph
 } from './engine';
 // ---------------------------------------------------------------------------
 // Pipeline Orchestrator
@@ -488,6 +489,12 @@ export const SimulationEngine = {
 
         // v1.14: Location Proximity Graph — Process location updates
         let updatedLocationGraph = currentWorld.locationGraph ?? { nodes: {}, edges: [], playerLocationId: '' };
+
+        // v1.20: One-time location graph migration — merge duplicate nodes.
+        // deduplicateLocationGraph is idempotent; on already-clean graphs it
+        // returns the input unchanged. Runs every first turn of a session.
+        updatedLocationGraph = deduplicateLocationGraph(updatedLocationGraph, debugLogs);
+
         if (r.location_update) {
             updatedLocationGraph = processLocationUpdate(
                 updatedLocationGraph,
@@ -1460,6 +1467,21 @@ const pendingLore: LoreItem[] = [];
         }
         for (const key of Object.keys(updatedTimestamps)) {
             if (!finalConditions.includes(key)) delete updatedTimestamps[key];
+        }
+
+        // --- v1.20: Entity/Condition Coherence Validation ---
+        // Removes conditions that reference entities whose status contradicts the
+        // condition (e.g. "Mounted (Gray Mare)" when Gray Mare is missing/dead).
+        const conditionPruneResult = validateConditionEntityCoherence(
+            finalConditions,
+            updatedKnownEntities,
+            debugLogs
+        );
+        if (conditionPruneResult.removed.length > 0) {
+            finalConditions = conditionPruneResult.conditions;
+            conditionPruneResult.removed.forEach(c => {
+                delete updatedTimestamps[c];
+            });
         }
 
         // --- Bio Modifier Passive Decay ---

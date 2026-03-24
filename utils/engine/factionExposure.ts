@@ -75,9 +75,15 @@ export const updateFactionExposure_v112 = (
         if (['HOSTILE', 'NEMESIS'].includes(entity.relationship_level)) {
             const roleLower = entity.role.toLowerCase();
             // Extract faction-like keywords from the role
+            // v1.20: Expanded keyword list — added common fantasy faction types
+            // that were missing (raider, bandit, mercenary, etc.)
             const factionKeywords = ['syndicate', 'vanguard', 'dominion', 'tharnic',
                 'guild', 'order', 'company', 'circle', 'cartel', 'brotherhood',
-                'sisterhood', 'clan', 'house', 'cult', 'legion', 'cabal'];
+                'sisterhood', 'clan', 'house', 'cult', 'legion', 'cabal',
+                'raider', 'raiders', 'bandit', 'bandits', 'mercenary', 'mercenaries',
+                'pirate', 'pirates', 'gang', 'horde', 'warband', 'militia',
+                'inquisition', 'enclave', 'covenant', 'conclave', 'chapter',
+                'pack', 'brood', 'coven', 'consortium', 'alliance', 'faction'];
             for (const kw of factionKeywords) {
                 if (roleLower.includes(kw) || entity.name.toLowerCase().includes(kw)) {
                     // Use the keyword as the faction identifier

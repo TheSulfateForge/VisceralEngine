@@ -381,12 +381,39 @@ const REGISTRY_BLACKLIST = new Set([
     'salvage', 'sash'
 ]);
 
+// v1.20: Expanded blacklist — common words that should never be registered
+// as name-collision candidates regardless of context.
+const REGISTRY_COMMON_WORDS = new Set([
+    'first', 'second', 'third', 'fourth', 'fifth',
+    'gray', 'grey', 'black', 'white', 'red', 'blue', 'green', 'dark', 'pale',
+    'mare', 'horse', 'hound', 'beast', 'steed', 'wolf', 'bear', 'hawk',
+    'old', 'new', 'young', 'great', 'high', 'low', 'upper', 'lower',
+    'raider', 'archer', 'squad', 'retrieval', 'specialist', 'hunter', 'tracker',
+]);
+
 export const extractRegistrableNames = (entityName: string): string[] => {
     const cleaned = entityName.replace(/\([^)]*\)/g, '').trim();
-    return cleaned
+    const parts = cleaned
         .split(/\s+/)
         .map(p => p.toLowerCase().trim())
-        .filter(p => p.length >= 3 && !REGISTRY_BLACKLIST.has(p));
+        .filter(p => p.length >= 3 && !REGISTRY_BLACKLIST.has(p) && !REGISTRY_COMMON_WORDS.has(p));
+
+    // v1.20: Always register the full name as a single entry (lowercased).
+    // Individual parts are only registered if they're likely proper nouns
+    // (i.e., not in the common-words blacklist). This prevents "gray", "mare",
+    // "retrieval", "specialist" from clogging the collision namespace.
+    const results: string[] = [];
+    const fullName = cleaned.toLowerCase();
+    if (fullName.length >= 3) results.push(fullName);
+
+    // Only add individual parts if they survived BOTH blacklists and
+    // there are 1 or fewer such parts (single distinctive name component).
+    // Multi-word entities rely on the full-name entry for collision detection.
+    if (parts.length === 1) {
+        results.push(parts[0]);
+    }
+
+    return [...new Set(results)];
 };
 
 /**

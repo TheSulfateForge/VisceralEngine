@@ -126,7 +126,12 @@ export const TIME_FLOOR_MINUTES = 1;
 export const MEMORY_CAP = 40;
 
 /** Jaccard similarity threshold for memory deduplication. */
-export const MEMORY_SIMILARITY_THRESHOLD = 0.55;
+// v1.20: Lowered from 0.55 to 0.42. The AI frequently rephrases the same event
+// with varied vocabulary (e.g. "shattered a Golem with Kinetic Resonance" vs
+// "used Kinetic Resonance to disintegrate a Golem's arm"), producing Jaccard
+// scores of 0.45-0.55 that slip past the old threshold. 0.42 catches these
+// while remaining above the 0.40 consolidation cluster threshold.
+export const MEMORY_SIMILARITY_THRESHOLD = 0.42;
 
 /** Jaccard similarity threshold for lore deduplication. */
 export const LORE_SIMILARITY_THRESHOLD = 0.60;

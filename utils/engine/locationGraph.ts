@@ -1,6 +1,66 @@
 import { LocationGraph, LocationUpdate, LocationEdge, LocationNode, DebugLogEntry } from '../../types';
 import { TRIANGLE_INEQUALITY_TOLERANCE } from '../../config/engineConfig';
 
+// v1.20: Fuzzy match threshold for location name dedup
+const LOCATION_FUZZY_THRESHOLD = 0.75;
+
+/**
+ * v1.20: Computes word-level Jaccard similarity between two location names.
+ * Used to detect when the AI generates a different name for the same place.
+ */
+const locationNameSimilarity = (a: string, b: string): number => {
+    const normalize = (s: string) => s.toLowerCase()
+        .replace(/[''()\-]/g, ' ')
+        .replace(/\b(the|a|an|of|at)\b/g, '')
+        .split(/\s+/).filter(w => w.length >= 2);
+    const wordsA = new Set(normalize(a));
+    const wordsB = new Set(normalize(b));
+    if (wordsA.size === 0 || wordsB.size === 0) return 0;
+    let intersection = 0;
+    for (const w of wordsA) if (wordsB.has(w)) intersection++;
+    return intersection / (wordsA.size + wordsB.size - intersection);
+};
+
+/**
+ * v1.20: Find an existing node that fuzzy-matches the given name.
+ * Returns the existing node's ID if a match is found at or above the threshold,
+ * or null if the name is genuinely new.
+ * 
+ * Exact ID match is checked first (fast path). Fuzzy match is only used when
+ * the normalized ID doesn't already exist.
+ */
+const findFuzzyMatchingNode = (
+    name: string,
+    nodes: Record<string, LocationNode>,
+    debugLogs: DebugLogEntry[]
+): string | null => {
+    const candidateId = normalizeLocationId(name);
+
+    // Exact ID match — no ambiguity
+    if (nodes[candidateId]) return candidateId;
+
+    // Fuzzy scan against all existing display names
+    let bestMatch: { id: string; similarity: number; displayName: string } | null = null;
+    for (const [nodeId, node] of Object.entries(nodes)) {
+        const sim = locationNameSimilarity(name, node.displayName);
+        if (sim >= LOCATION_FUZZY_THRESHOLD && (!bestMatch || sim > bestMatch.similarity)) {
+            bestMatch = { id: nodeId, similarity: sim, displayName: node.displayName };
+        }
+    }
+
+    if (bestMatch) {
+        debugLogs.push({
+            timestamp: new Date().toISOString(),
+            type: 'info',
+            message: `[LOCATION DEDUP — v1.20] "${name}" matched existing node "${bestMatch.displayName}" ` +
+                `(${(bestMatch.similarity * 100).toFixed(0)}% similar). Using ID: ${bestMatch.id}`
+        });
+        return bestMatch.id;
+    }
+
+    return null; // Genuinely new location
+};
+
 /** Normalize a location name to a graph node ID. */
 export const normalizeLocationId = (name: string): string => {
     return name.toLowerCase().trim().replace(/\s+/g, '_').replace(/^(the|a|an)_/i, '');
@@ -92,7 +152,9 @@ export const processLocationUpdate = (
         playerLocationId: graph.playerLocationId
     };
     
-    const currentLocationId = normalizeLocationId(update.location_name);
+    // v1.20: Fuzzy dedup — check if AI generated a different name for an existing place
+    const fuzzyMatchId = findFuzzyMatchingNode(update.location_name, newGraph.nodes, debugLogs);
+    const currentLocationId = fuzzyMatchId ?? normalizeLocationId(update.location_name);
     
     // Ensure current location node exists
     if (!newGraph.nodes[currentLocationId]) {
@@ -103,13 +165,18 @@ export const processLocationUpdate = (
             firstMentionedTurn: currentTurn,
             tags: update.tags || []
         };
+    } else if (update.description && !newGraph.nodes[currentLocationId].description) {
+        // v1.20: Backfill description if existing node was created without one
+        newGraph.nodes[currentLocationId].description = update.description;
     }
     
     newGraph.playerLocationId = currentLocationId;
     
     // Process traveled_from
     if (update.traveled_from && update.travel_time_minutes !== undefined) {
-        const fromId = normalizeLocationId(update.traveled_from);
+        // v1.20: Fuzzy dedup on traveled_from
+        const fromFuzzyId = findFuzzyMatchingNode(update.traveled_from, newGraph.nodes, debugLogs);
+        const fromId = fromFuzzyId ?? normalizeLocationId(update.traveled_from);
         
         if (!newGraph.nodes[fromId]) {
             newGraph.nodes[fromId] = {
@@ -149,7 +216,9 @@ export const processLocationUpdate = (
     // Process nearby_locations
     if (update.nearby_locations && Array.isArray(update.nearby_locations)) {
         for (const nearby of update.nearby_locations) {
-            const nearbyId = normalizeLocationId(nearby.name);
+            // v1.20: Fuzzy dedup on nearby locations
+            const nearbyFuzzyId = findFuzzyMatchingNode(nearby.name, newGraph.nodes, debugLogs);
+            const nearbyId = nearbyFuzzyId ?? normalizeLocationId(nearby.name);
             
             if (!newGraph.nodes[nearbyId]) {
                 newGraph.nodes[nearbyId] = {
@@ -240,4 +309,115 @@ export const inferPlayerLocation = (
     // This is risky, so we only do it if we're sure.
     // For now, we'll just return the current location to be safe.
     return currentLocationId;
+};
+
+// ============================================================================
+// v1.20: One-time save migration — merge duplicate location nodes
+// Runs on save load. Identifies clusters of nodes with high name similarity,
+// merges them into the earliest-created node, and re-points all edges.
+// ============================================================================
+export const deduplicateLocationGraph = (
+    graph: LocationGraph,
+    debugLogs: DebugLogEntry[]
+): LocationGraph => {
+    const nodes = { ...graph.nodes };
+    let edges = [...graph.edges];
+    let playerLocationId = graph.playerLocationId;
+
+    const nodeEntries = Object.entries(nodes);
+    const mergeMap: Record<string, string> = {}; // oldId → canonicalId
+
+    // Build clusters of similar nodes
+    const visited = new Set<string>();
+    for (let i = 0; i < nodeEntries.length; i++) {
+        const [idA, nodeA] = nodeEntries[i];
+        if (visited.has(idA)) continue;
+
+        const cluster: string[] = [idA];
+        visited.add(idA);
+
+        for (let j = i + 1; j < nodeEntries.length; j++) {
+            const [idB, nodeB] = nodeEntries[j];
+            if (visited.has(idB)) continue;
+
+            const sim = locationNameSimilarity(nodeA.displayName, nodeB.displayName);
+            if (sim >= LOCATION_FUZZY_THRESHOLD) {
+                cluster.push(idB);
+                visited.add(idB);
+            }
+        }
+
+        if (cluster.length > 1) {
+            // Canonical = earliest firstMentionedTurn, then longest description
+            cluster.sort((a, b) => {
+                const turnA = nodes[a].firstMentionedTurn ?? Infinity;
+                const turnB = nodes[b].firstMentionedTurn ?? Infinity;
+                if (turnA !== turnB) return turnA - turnB;
+                return (nodes[b].description?.length ?? 0) - (nodes[a].description?.length ?? 0);
+            });
+
+            const canonicalId = cluster[0];
+            const canonicalNode = nodes[canonicalId];
+
+            // Merge descriptions — keep the longest
+            for (let k = 1; k < cluster.length; k++) {
+                const mergingNode = nodes[cluster[k]];
+                if (mergingNode.description && (!canonicalNode.description ||
+                    mergingNode.description.length > canonicalNode.description.length)) {
+                    canonicalNode.description = mergingNode.description;
+                }
+                // Merge tags
+                if (mergingNode.tags) {
+                    canonicalNode.tags = [...new Set([...(canonicalNode.tags || []), ...mergingNode.tags])];
+                }
+                mergeMap[cluster[k]] = canonicalId;
+                delete nodes[cluster[k]];
+            }
+
+            const mergedNames = cluster.slice(1).map(id => nodeEntries.find(([nid]) => nid === id)?.[1]?.displayName ?? id);
+            debugLogs.push({
+                timestamp: new Date().toISOString(),
+                type: 'info',
+                message: `[LOCATION MERGE — v1.20] Merged ${cluster.length} nodes into "${canonicalNode.displayName}": ` +
+                    `[${mergedNames.join(', ')}]`
+            });
+        }
+    }
+
+    if (Object.keys(mergeMap).length === 0) return graph;
+
+    // Re-point edges
+    edges = edges.map(e => ({
+        ...e,
+        from: mergeMap[e.from] ?? e.from,
+        to: mergeMap[e.to] ?? e.to
+    }));
+
+    // Remove self-loops created by merging
+    edges = edges.filter(e => e.from !== e.to);
+
+    // Remove duplicate edges (same from/to pair — keep shortest travel time)
+    const edgeKey = (e: LocationEdge) => [e.from, e.to].sort().join('|');
+    const bestEdges: Record<string, LocationEdge> = {};
+    for (const e of edges) {
+        const key = edgeKey(e);
+        if (!bestEdges[key] || e.travelTimeMinutes < bestEdges[key].travelTimeMinutes) {
+            bestEdges[key] = e;
+        }
+    }
+    edges = Object.values(bestEdges);
+
+    // Fix playerLocationId if it was merged
+    if (mergeMap[playerLocationId]) {
+        playerLocationId = mergeMap[playerLocationId];
+    }
+
+    debugLogs.push({
+        timestamp: new Date().toISOString(),
+        type: 'info',
+        message: `[LOCATION MERGE — v1.20] Graph reduced: ${nodeEntries.length} → ${Object.keys(nodes).length} nodes, ` +
+            `${graph.edges.length} → ${edges.length} edges.`
+    });
+
+    return { nodes, edges, playerLocationId };
 };
