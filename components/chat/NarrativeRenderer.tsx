@@ -4,6 +4,7 @@ import { RollResultCard } from './RollResultCard';
 import { SceneModeDivider } from './SceneModeDivider';
 import { BargainCard } from './BargainCard';
 import { WorldTickAnnotations } from './WorldTickAnnotations';
+import { MarkdownRenderer } from '../common/MarkdownRenderer';
 
 interface NarrativeRendererProps {
     message: ChatMessage;
@@ -26,10 +27,11 @@ export const NarrativeRenderer: React.FC<NarrativeRendererProps> = ({ message, o
     
     const flushParagraph = () => {
         if (currentParagraph.length > 0) {
+            const paragraphText = currentParagraph.join('\n');
             blocks.push(
-                <p key={`p-${blocks.length}`} className="text-gray-300 leading-relaxed mb-4 whitespace-pre-wrap">
-                    {currentParagraph.join('\n')}
-                </p>
+                <div key={`p-${blocks.length}`} className="text-gray-300 leading-relaxed mb-4">
+                    <MarkdownRenderer content={paragraphText} />
+                </div>
             );
             currentParagraph = [];
         }
