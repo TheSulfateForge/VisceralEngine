@@ -257,3 +257,57 @@ export const detectLoreDeaths = (
         return entity;
     });
 };
+
+// ============================================================================
+// v1.20: Entity/Condition Coherence Validation
+// Removes conditions that reference entities whose current status contradicts
+// the condition's semantics.
+// ============================================================================
+
+/** Condition patterns that imply the referenced entity must be present/accessible. */
+const ENTITY_PRESENCE_CONDITIONS: { pattern: RegExp; requiredStatuses: string[] }[] = [
+    { pattern: /^Mounted\s*\((.+?)\)/i, requiredStatuses: ['present'] },
+    { pattern: /^Beast-Bonded\s*\((.+?)\)/i, requiredStatuses: ['present', 'nearby'] },
+    { pattern: /^Guarded by\s*\((.+?)\)/i, requiredStatuses: ['present'] },
+    { pattern: /^Accompanied by\s*\((.+?)\)/i, requiredStatuses: ['present'] },
+    { pattern: /^Intimacy:\s*(.+?)\s*\(/i, requiredStatuses: ['present'] },
+];
+
+export const validateConditionEntityCoherence = (
+    conditions: string[],
+    entities: { name: string; status: string }[],
+    debugLogs: { push: (log: { timestamp: string; message: string; type: string }) => void }
+): { conditions: string[]; removed: string[] } => {
+    const removed: string[] = [];
+    const surviving = conditions.filter(cond => {
+        for (const rule of ENTITY_PRESENCE_CONDITIONS) {
+            const match = rule.pattern.exec(cond);
+            if (!match) continue;
+
+            const referencedNames = match[1].split(/[,&]/).map(n => n.trim().toLowerCase());
+
+            for (const refName of referencedNames) {
+                if (refName.length < 3) continue;
+
+                const entity = entities.find(e => {
+                    const eName = e.name.toLowerCase();
+                    return eName === refName || eName.includes(refName) || refName.includes(eName);
+                });
+
+                if (entity && !rule.requiredStatuses.includes(entity.status)) {
+                    debugLogs.push({
+                        timestamp: new Date().toISOString(),
+                        message: `[CONDITION-ENTITY COHERENCE — v1.20] Removed "${cond}" — ` +
+                            `entity "${entity.name}" is ${entity.status}, requires: ${rule.requiredStatuses.join('/')}`,
+                        type: 'warning'
+                    });
+                    removed.push(cond);
+                    return false;
+                }
+            }
+        }
+        return true;
+    });
+
+    return { conditions: surviving, removed };
+};
