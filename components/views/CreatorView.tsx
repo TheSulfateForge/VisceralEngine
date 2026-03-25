@@ -55,7 +55,7 @@ type CreatorMode = 'manual' | 'neural';
 // ---- Main Component ----
 
 export const CreatorView: React.FC = () => {
-    const { character, setCharacter, setUI, gameWorld } = useGameStore();
+    const { character, setCharacter, setUI, gameWorld, setGameWorld } = useGameStore();
     const { handleGenerateScenarios, handleVisualize, handleGenerateCharacter, handleGenerateField } = useGeminiClient();
     const { showToast } = useToast();
     const { handleError } = useErrorHandler();
@@ -294,7 +294,10 @@ export const CreatorView: React.FC = () => {
             {/* ---- WORLD SEED SELECTOR (Stream 7) ---- */}
             <WorldSelector
                 selectedId={selectedWorldSeedId}
-                onSelect={(seed) => setSelectedWorldSeedId(seed?.id)}
+                onSelect={(seed) => {
+                    setSelectedWorldSeedId(seed?.id);
+                    setGameWorld(prev => ({ ...prev, worldSeedId: seed?.id }));
+                }}
             />
 
             {/* ---- SAVE TEMPLATE INLINE PROMPT ---- */}

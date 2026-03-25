@@ -156,7 +156,10 @@ export const useCharacterGen = () => {
    */
   const handleHydrateWorldSeed = useCallback(async (): Promise<void> => {
       const { gameWorld } = useGameStore.getState();
-      if (!gameWorld.worldSeedId) return;
+      if (!gameWorld.worldSeedId) {
+          console.warn('[Stream 7] No worldSeedId set in gameWorld — skipping world seed hydration. Was the seed selection persisted to the store?');
+          return;
+      }
 
       try {
           const seed = await db.loadWorldSeed(gameWorld.worldSeedId);
