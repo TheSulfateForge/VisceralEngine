@@ -14,6 +14,7 @@ export type MessageId = Brand<string, 'MessageId'>;
 export type LoreId    = Brand<string, 'LoreId'>;
 export type MemoryId  = Brand<string, 'MemoryId'>;
 export type TemplateId = Brand<string, 'TemplateId'>;
+export type WorldSeedId = Brand<string, 'WorldSeedId'>;
 
 // --- Scalar / Union Types ---
 
@@ -362,6 +363,114 @@ export interface WorldTick {
     emerging_threats: WorldTickEvent[];
 }
 
+// --- Stream 4: Trauma Narrative Effects ---
+export type TraumaEffectType =
+  | 'unreliable_narration'
+  | 'hallucinated_entity'
+  | 'sensory_distortion'
+  | 'flashback'
+  | 'paranoia'
+  | 'dissociation';
+
+export interface TraumaEffect {
+  type: TraumaEffectType;
+  tier: string;  // TraumaTier from engineConfig
+  description: string;
+}
+
+// --- Stream 6: Faction-Scale Conflict ---
+export interface Faction {
+  id: string;
+  name: string;
+  description: string;
+  territory: string[];
+  influence: number;
+  disposition: Record<string, FactionDisposition>;
+  resources: FactionResource[];
+  leader?: string;
+  memberEntityIds: string[];
+  playerStanding: FactionStanding;
+  activeObjective?: string;
+}
+
+export type FactionDisposition = 'allied' | 'neutral' | 'rival' | 'war';
+
+// --- Stream 7: Persistent World Seeds ---
+export interface WorldSeedLocation {
+  name: string;
+  description: string;
+  tags: string[];
+  connections: { to: string; travelTimeMinutes: number; mode?: string }[];
+  controllingFaction?: string;
+}
+
+export interface WorldSeedFaction {
+  name: string;
+  description: string;
+  territory: string[];
+  influence: number;
+  resources: string[];
+  dispositions: Record<string, string>;
+  leader?: string;
+  keyMembers: string[];
+}
+
+export interface WorldSeedLore {
+  keyword: string;
+  content: string;
+  category: 'history' | 'geography' | 'culture' | 'magic' | 'technology' | 'religion' | 'economy';
+}
+
+export interface WorldSeedNPC {
+  name: string;
+  role: string;
+  location: string;
+  faction?: string;
+  description: string;
+  personality: string;
+  goals: string[];
+}
+
+export interface WorldSeedRule {
+  name: string;
+  description: string;
+}
+
+export interface WorldSeed {
+  id: WorldSeedId;
+  name: string;
+  description: string;
+  timestamp: string;
+  lastModified: string;
+  locations: WorldSeedLocation[];
+  factions: WorldSeedFaction[];
+  lore: WorldSeedLore[];
+  npcs: WorldSeedNPC[];
+  rules: WorldSeedRule[];
+  tags: string[];
+  thumbnail?: string;
+}
+
+export interface FactionStanding {
+  reputation: number;
+  rank?: string;
+  knownActions: string[];
+}
+
+export type FactionResource = 'military' | 'economic' | 'intelligence' | 'magical' | 'political';
+
+export interface FactionConflict {
+  id: string;
+  aggressorId: string;
+  defenderId: string;
+  type: 'skirmish' | 'trade_war' | 'territory_dispute' | 'full_war' | 'cold_war';
+  startTurn: number;
+  stakes: string;
+  momentum: number;
+  lastEscalationTurn: number;
+  playerInvolvement: 'none' | 'observer' | 'participant' | 'catalyst';
+}
+
 // --- Location Proximity Graph (v1.14) ---
 
 export interface LocationNode {
@@ -400,6 +509,29 @@ export interface LocationUpdate {
     }>;
 }
 
+// --- Stream 5: Skill / Proficiency System ---
+export type ProficiencyLevel = 'untrained' | 'familiar' | 'trained' | 'expert' | 'master';
+
+export const PROFICIENCY_MODIFIERS: Record<ProficiencyLevel, number> = {
+  untrained: -2,
+  familiar: 0,
+  trained: 2,
+  expert: 4,
+  master: 6,
+};
+
+export interface Skill {
+  id: string;
+  name: string;
+  category: SkillCategory;
+  level: ProficiencyLevel;
+  source: string;
+  usageCount: number;
+  lastUsedTurn?: number;
+}
+
+export type SkillCategory = 'combat' | 'physical' | 'social' | 'knowledge' | 'craft';
+
 // --- Schema Types (Matches JSON Output) ---
 
 export interface RollRequest {
@@ -407,6 +539,7 @@ export interface RollRequest {
     bonus?: number;
     advantage?: boolean;
     disadvantage?: boolean;
+    relevant_skill?: string;
 }
 
 export interface BargainRequest {
@@ -444,6 +577,11 @@ export interface CharacterUpdates {
     bio_modifiers?: Partial<BioModifiers>;
     relationships?: string[];
     goals?: string[];
+    skill_updates?: Array<{
+        skill_name: string;
+        new_level: ProficiencyLevel;
+        reason: string;
+    }>;
 }
 
 export interface ModelResponseSchema {
@@ -467,6 +605,15 @@ export interface ModelResponseSchema {
     new_lore?: { keyword: string; content: string };
     biological_event?: boolean;
     location_update?: LocationUpdate;
+
+    faction_updates?: Array<{
+        faction_name: string;
+        influence_delta?: number;
+        territory_gained?: string[];
+        territory_lost?: string[];
+        player_reputation_delta?: number;
+        new_objective?: string;
+    }>;
 
     world_tick?: WorldTick;
 }
@@ -508,6 +655,7 @@ export interface Character {
     bio: BioMonitor;
     hiddenNotes?: string;
     conditionTimestamps?: Record<string, number>;
+    skills?: Skill[];
 }
 
 export interface CharacterTemplate {
@@ -625,6 +773,18 @@ export interface GameWorld {
     // Once a name appears, no new character may use it — even if the original
     // character is dead or retired. Prevents the 3-Tegwens problem.
     usedNameRegistry?: string[];
+
+    // Stream 4: Trauma Narrative Effects
+    activeTraumaEffect?: TraumaEffect;
+    lastTraumaEffectTurn?: number;
+
+    // Stream 6: Faction-Scale Conflict
+    factions?: Faction[];
+    factionConflicts?: FactionConflict[];
+
+    // Stream 7: World Seeds
+    worldRules?: string[];
+    worldSeedId?: WorldSeedId;
 }
 
 export interface WorldTime {

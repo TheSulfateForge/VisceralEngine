@@ -3,11 +3,13 @@ import { useCallback } from 'react';
 import { useGameStore } from '../store';
 import { useGeminiService } from './useGeminiService';
 import { useToast } from '../components/providers/ToastProvider';
+import { useErrorHandler } from './useErrorHandler';
 
 export const useScenarioGen = () => {
     const { character, setGameWorld } = useGameStore();
     const { getService } = useGeminiService();
     const { showToast } = useToast();
+    const { handleError } = useErrorHandler();
 
     const handleGenerateScenarios = useCallback(async () => {
         try {
@@ -24,12 +26,11 @@ export const useScenarioGen = () => {
           }));
           return scenarios;
         } catch (e) {
-          console.error("Scenario generation error:", e);
+          handleError(e, 'scenario_generation');
           setGameWorld(prev => ({ ...prev, isGeneratingScenarios: false }));
-          showToast("Scenario calculation failed.", "error");
           return [];
         }
-      }, [getService, character, setGameWorld, showToast]);
+      }, [getService, character, setGameWorld, handleError]);
 
     return { handleGenerateScenarios };
 };

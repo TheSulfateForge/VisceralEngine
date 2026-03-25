@@ -37,7 +37,7 @@ export const useGeminiClient = () => {
   const { getService, handleKeyLink } = useGeminiService();
   const { handleVisualize } = useVisualization();
   const { handleGenerateScenarios } = useScenarioGen();
-  const { handleGenerateCharacter, handleGenerateField, handleExtractDormantHooks } = useCharacterGen();
+  const { handleGenerateCharacter, handleGenerateField, handleExtractDormantHooks, handleHydrateWorldSeed } = useCharacterGen();
 
   const handleUndo = useCallback(() => {
     const { preTurnSnapshot } = useGameStore.getState();
@@ -269,5 +269,6 @@ export const useGeminiClient = () => {
     handleGenerateCharacter,
     handleGenerateField,
     handleExtractDormantHooks,  // v1.6
+    handleHydrateWorldSeed,     // Stream 7
   };
 };

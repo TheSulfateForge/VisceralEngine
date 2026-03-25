@@ -2,7 +2,35 @@ import React, { useState } from 'react';
 import { useGameStore } from '../../store';
 import { useGeminiClient } from '../../hooks/useGeminiClient';
 import { ImageCarousel } from '../common/ImageCarousel';
-import { Character } from '../../types';
+import { Character, PROFICIENCY_MODIFIERS } from '../../types';
+import { getTraumaTierLabel } from '../../utils/traumaSystem';
+
+const TraumaTierBadge: React.FC<{ trauma: number }> = ({ trauma }) => {
+    const { label, tier } = getTraumaTierLabel(trauma);
+    let colorClass = 'bg-green-900 text-green-400 border-green-800';
+
+    if (tier === 'STRESSED') colorClass = 'bg-yellow-900 text-yellow-400 border-yellow-800';
+    else if (tier === 'UNSTABLE') colorClass = 'bg-amber-900 text-amber-400 border-amber-800';
+    else if (tier === 'DISSOCIATING') colorClass = 'bg-red-900 text-red-400 border-red-800';
+    else if (tier === 'BREAKING') colorClass = 'bg-red-950 text-red-500 border-red-700 animate-pulse';
+
+    return (
+        <span className={`text-[9px] font-bold px-2 py-1 rounded border ${colorClass}`}>
+            {label}
+        </span>
+    );
+};
+
+const SkillLevelColor = (level: string) => {
+    switch (level) {
+        case 'untrained': return 'bg-gray-900 border-gray-700 text-gray-500';
+        case 'familiar': return 'bg-gray-800 border-gray-600 text-gray-300';
+        case 'trained': return 'bg-blue-950 border-blue-700 text-blue-400';
+        case 'expert': return 'bg-purple-950 border-purple-700 text-purple-400';
+        case 'master': return 'bg-yellow-950 border-yellow-700 text-yellow-400';
+        default: return 'bg-gray-900 border-gray-700 text-gray-400';
+    }
+};
 
 const EditableList: React.FC<{
     label: string;
@@ -131,15 +159,18 @@ export const CharacterView: React.FC = () => {
                 <section>
                     <label className="text-[11px] font-bold text-gray-400 uppercase tracking-[0.5em] block mb-8 border-l-4 border-red-900 pl-4">Trauma Monitor</label>
                     <div className="space-y-2">
-                        <div className="flex justify-between text-xs uppercase font-bold text-gray-500">
+                        <div className="flex justify-between items-center text-xs uppercase font-bold text-gray-500">
                             <span>Psychological Integrity</span>
-                            <span>{traumaPercent}% Destabilized</span>
+                            <div className="flex items-center gap-3">
+                                <span>{traumaPercent}% Destabilized</span>
+                                <TraumaTierBadge trauma={traumaPercent} />
+                            </div>
                         </div>
                         <div className="w-full h-4 bg-gray-900 border border-gray-800 rounded-sm overflow-hidden">
                             <div className={`h-full transition-all duration-700 ${traumaColor}`} style={{ width: `${traumaPercent}%` }}></div>
                         </div>
                         <p className="text-[10px] text-gray-500 italic">
-                            {traumaPercent < 20 ? "Stable." : 
+                            {traumaPercent < 20 ? "Stable." :
                              traumaPercent < 50 ? "Shaken. Minor tremors." :
                              traumaPercent < 80 ? "Unstable. Hallucinations possible." :
                              "Broken. Cognitive collapse imminent."}
@@ -196,14 +227,35 @@ export const CharacterView: React.FC = () => {
                     isEditing={isEditing} 
                 />
 
-                <EditableList 
-                    label="Directives" 
-                    items={character.goals} 
-                    field="goals" 
-                    character={character} 
-                    setCharacter={setCharacter} 
-                    isEditing={isEditing} 
+                <EditableList
+                    label="Directives"
+                    items={character.goals}
+                    field="goals"
+                    character={character}
+                    setCharacter={setCharacter}
+                    isEditing={isEditing}
                 />
+
+                {(character.skills && character.skills.length > 0) && (
+                    <section>
+                        <label className="text-[11px] font-bold text-gray-400 uppercase tracking-[0.5em] block mb-8 border-l-4 border-blue-900 pl-4">Proficiencies</label>
+                        <div className="flex flex-wrap gap-3">
+                            {character.skills.map((skill, i) => {
+                                const modifier = PROFICIENCY_MODIFIERS[skill.level];
+                                const modStr = modifier >= 0 ? `+${modifier}` : `${modifier}`;
+                                const colorClass = SkillLevelColor(skill.level);
+                                return (
+                                    <div key={i} className={`px-3 py-2 border rounded text-xs ${colorClass}`}>
+                                        <div className="font-semibold">{skill.name}</div>
+                                        <div className="text-[10px] opacity-75">
+                                            {skill.level} {modStr}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </section>
+                )}
                 </div>
             </div>
         </div>

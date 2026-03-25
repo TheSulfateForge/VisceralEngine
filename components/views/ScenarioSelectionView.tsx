@@ -45,7 +45,7 @@ const SCENARIO_META = [
 
 export const ScenarioSelectionView: React.FC = () => {
     const { gameWorld, setUI } = useGameStore();
-    const { handleSend, handleExtractDormantHooks } = useGeminiClient();
+    const { handleSend, handleExtractDormantHooks, handleHydrateWorldSeed } = useGeminiClient();
     const [customEntry, setCustomEntry] = useState('');
 
     const scenarios: Scenario[] = gameWorld?.scenarios ? gameWorld.scenarios : [];
@@ -53,6 +53,8 @@ export const ScenarioSelectionView: React.FC = () => {
     const handleSelectScenario = async (scenario: Scenario) => {
         // v1.6: Extract dormant hooks before first turn so Origin Gate has data
         await handleExtractDormantHooks();
+        // Stream 7: Hydrate world seed if selected
+        await handleHydrateWorldSeed();
         handleSend(`[SYSTEM: INITIALIZE SCENARIO: "${scenario.title}" | ${scenario.description} | Opening: ${scenario.opening_line}]`);
         setUI({ view: 'game' });
     };
@@ -61,6 +63,8 @@ export const ScenarioSelectionView: React.FC = () => {
         if (!customEntry.trim()) return;
         // v1.6: Extract dormant hooks before first turn so Origin Gate has data
         await handleExtractDormantHooks();
+        // Stream 7: Hydrate world seed if selected
+        await handleHydrateWorldSeed();
         handleSend(customEntry);
         setUI({ view: 'game' });
     };

@@ -56,7 +56,19 @@ export const RESPONSE_SCHEMA: Schema = {
             }
         },
         relationships: { type: Type.ARRAY, items: { type: Type.STRING } },
-        goals: { type: Type.ARRAY, items: { type: Type.STRING } }
+        goals: { type: Type.ARRAY, items: { type: Type.STRING } },
+        skill_updates: {
+          type: Type.ARRAY,
+          nullable: true,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              skill_name: { type: Type.STRING },
+              new_level: { type: Type.STRING },
+              reason: { type: Type.STRING }
+            }
+          }
+        }
       }
     },
     combat_context: {
@@ -128,7 +140,8 @@ export const RESPONSE_SCHEMA: Schema = {
         challenge: { type: Type.STRING },
         bonus: { type: Type.NUMBER },
         advantage: { type: Type.BOOLEAN },
-        disadvantage: { type: Type.BOOLEAN }
+        disadvantage: { type: Type.BOOLEAN },
+        relevant_skill: { type: Type.STRING, description: 'Skill name if applicable', nullable: true }
       },
       required: ["challenge"]
     },
@@ -200,9 +213,25 @@ export const RESPONSE_SCHEMA: Schema = {
         content: { type: Type.STRING, description: "Factual description of the discovered information. Must describe something actually encountered this turn. Must be observational, not prescriptive, and must not retroactively add threats or capabilities to existing established entities." }
       }
     },
-    biological_event: { 
-        type: Type.BOOLEAN, 
+    biological_event: {
+        type: Type.BOOLEAN,
         description: "CONCEPTION TRIGGER: Set true ONLY when unprotected vaginal insemination physically occurs in the narrative. This triggers an automatic pregnancy roll. Do NOT set true for lactation, arousal, pheromone events, combat stress, or other biological activity that is not direct insemination."
+    },
+    faction_updates: {
+      type: Type.ARRAY,
+      nullable: true,
+      description: 'Updates to factions when player actions affect them',
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          faction_name: { type: Type.STRING },
+          influence_delta: { type: Type.INTEGER },
+          territory_gained: { type: Type.ARRAY, items: { type: Type.STRING } },
+          territory_lost: { type: Type.ARRAY, items: { type: Type.STRING } },
+          player_reputation_delta: { type: Type.INTEGER },
+          new_objective: { type: Type.STRING },
+        }
+      }
     },
     world_tick: {
       type: Type.OBJECT,

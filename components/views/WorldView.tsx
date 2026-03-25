@@ -18,7 +18,7 @@ export const WorldView: React.FC = () => {
     const [newMemoryFact, setNewMemoryFact] = useState('');
 
     // Tabs
-    const [activeTab, setActiveTab] = useState<'chronicle' | 'locations' | 'memory' | 'lore'>('chronicle');
+    const [activeTab, setActiveTab] = useState<'chronicle' | 'locations' | 'memory' | 'lore' | 'factions'>('chronicle');
 
     const handleAddLore = () => {
         if (!newKeyword.trim() || !newContent.trim()) return;
@@ -96,11 +96,17 @@ export const WorldView: React.FC = () => {
                 >
                     Memory
                 </button>
-                <button 
+                <button
                     onClick={() => setActiveTab('lore')}
                     className={`text-sm font-bold uppercase tracking-widest transition-colors ${activeTab === 'lore' ? 'text-white' : 'text-gray-600 hover:text-gray-400'}`}
                 >
                     Lore
+                </button>
+                <button
+                    onClick={() => setActiveTab('factions')}
+                    className={`text-sm font-bold uppercase tracking-widest transition-colors ${activeTab === 'factions' ? 'text-white' : 'text-gray-600 hover:text-gray-400'}`}
+                >
+                    Factions
                 </button>
             </div>
 
@@ -310,6 +316,153 @@ export const WorldView: React.FC = () => {
                 ))}
                 {gameWorld.lore.length === 0 && !isAddingLore && <div className="text-gray-500 uppercase tracking-widest text-xs">No lore established.</div>}
                 </div>
+                </section>
+            )}
+
+            {/* FACTIONS SECTION */}
+            {activeTab === 'factions' && (
+                <section className="space-y-10 pt-8">
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+                    <label className="text-[14px] font-bold text-white uppercase tracking-[0.5em]">Faction Intelligence</label>
+                </div>
+
+                <div className="space-y-8">
+                {(gameWorld.factions ?? []).length === 0 ? (
+                    <div className="text-gray-500 uppercase tracking-widest text-xs">No factions encountered yet.</div>
+                ) : (
+                    (gameWorld.factions ?? []).map((faction) => {
+                        const rep = faction.playerStanding.reputation;
+                        const repLabel = rep >= 50 ? 'Revered' : rep >= 20 ? 'Respected' : rep >= -20 ? 'Unknown' : rep >= -50 ? 'Distrusted' : 'Hated';
+                        const repColor = rep >= 50 ? 'text-green-500' : rep >= 20 ? 'text-green-600' : rep >= -20 ? 'text-gray-400' : rep >= -50 ? 'text-orange-600' : 'text-red-600';
+
+                        return (
+                            <div key={faction.id} className="bg-black/40 border border-gray-800 p-8 space-y-6">
+                                <div className="flex justify-between items-start">
+                                    <div>
+                                        <h4 className="text-xl font-bold text-white mb-2">{faction.name}</h4>
+                                        <p className="text-sm text-gray-400 italic">{faction.description}</p>
+                                    </div>
+                                    <div className={`text-right ${repColor}`}>
+                                        <div className="text-2xl font-bold">{rep >= 0 ? '+' : ''}{rep}</div>
+                                        <div className="text-xs font-bold uppercase tracking-widest">{repLabel}</div>
+                                    </div>
+                                </div>
+
+                                {/* Influence Bar */}
+                                <div className="space-y-2">
+                                    <div className="flex justify-between text-xs font-bold uppercase tracking-widest text-gray-500">
+                                        <span>Influence</span>
+                                        <span>{faction.influence}/100</span>
+                                    </div>
+                                    <div className="w-full h-3 bg-gray-900 rounded-sm overflow-hidden">
+                                        <div
+                                            className="h-full bg-purple-700 transition-all duration-300"
+                                            style={{ width: `${faction.influence}%` }}
+                                        />
+                                    </div>
+                                </div>
+
+                                {/* Territory */}
+                                {faction.territory.length > 0 && (
+                                    <div className="space-y-2">
+                                        <label className="text-[9px] font-bold text-gray-500 uppercase tracking-widest">Territory</label>
+                                        <div className="flex flex-wrap gap-2">
+                                            {faction.territory.map((t, idx) => (
+                                                <span key={idx} className="px-3 py-1 bg-gray-900/60 border border-gray-700 text-xs text-gray-300 rounded-sm">
+                                                    {t}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Disposition */}
+                                {Object.keys(faction.disposition).length > 0 && (
+                                    <div className="space-y-2">
+                                        <label className="text-[9px] font-bold text-gray-500 uppercase tracking-widest">Disposition</label>
+                                        <div className="flex flex-wrap gap-2">
+                                            {Object.entries(faction.disposition).map(([otherId, disp]) => {
+                                                const other = (gameWorld.factions ?? []).find(f => f.id === otherId);
+                                                if (!other) return null;
+                                                const dispColor = disp === 'allied' ? 'bg-green-900/40 border-green-700' : disp === 'war' ? 'bg-red-900/40 border-red-700' : disp === 'rival' ? 'bg-orange-900/40 border-orange-700' : 'bg-gray-900/40 border-gray-700';
+                                                return (
+                                                    <span key={otherId} className={`px-3 py-1 border text-xs text-gray-300 rounded-sm ${dispColor}`}>
+                                                        {disp.toUpperCase()} with {other.name}
+                                                    </span>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Resources */}
+                                {faction.resources.length > 0 && (
+                                    <div className="space-y-2">
+                                        <label className="text-[9px] font-bold text-gray-500 uppercase tracking-widest">Resources</label>
+                                        <div className="flex flex-wrap gap-2">
+                                            {faction.resources.map((r, idx) => (
+                                                <span key={idx} className="px-3 py-1 bg-blue-900/40 border border-blue-700 text-xs text-blue-300 rounded-sm capitalize">
+                                                    {r}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Active Objective */}
+                                {faction.activeObjective && (
+                                    <div className="pt-4 border-t border-gray-700">
+                                        <label className="text-[9px] font-bold text-gray-500 uppercase tracking-widest block mb-2">Current Objective</label>
+                                        <p className="text-sm text-gray-300 italic">{faction.activeObjective}</p>
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })
+                )}
+                </div>
+
+                {/* Active Conflicts */}
+                {(gameWorld.factionConflicts ?? []).length > 0 && (
+                    <div className="pt-8 border-t border-gray-800 space-y-6">
+                        <h4 className="text-lg font-bold text-white uppercase tracking-wider">Active Conflicts</h4>
+                        {(gameWorld.factionConflicts ?? []).map((conflict) => {
+                            const agg = (gameWorld.factions ?? []).find(f => f.id === conflict.aggressorId);
+                            const def = (gameWorld.factions ?? []).find(f => f.id === conflict.defenderId);
+                            if (!agg || !def) return null;
+                            const momentum = conflict.momentum;
+                            const leader = momentum > 0 ? agg.name : momentum < 0 ? def.name : 'Stalemate';
+                            return (
+                                <div key={conflict.id} className="bg-black/60 border border-red-900/40 p-6 space-y-4">
+                                    <div className="flex justify-between items-start">
+                                        <div>
+                                            <h5 className="text-base font-bold text-white mb-1">{agg.name} vs {def.name}</h5>
+                                            <p className="text-sm text-gray-400">{conflict.type.toUpperCase()} • Stakes: {conflict.stakes}</p>
+                                        </div>
+                                        <span className="text-xs font-bold uppercase tracking-widest text-gray-500 text-right">
+                                            {conflict.playerInvolvement}
+                                        </span>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <div className="flex justify-between text-xs font-bold uppercase tracking-widest text-gray-500">
+                                            <span>{agg.name} ← Momentum → {def.name}</span>
+                                            <span>{momentum > 0 ? '+' : ''}{Math.round(momentum)}</span>
+                                        </div>
+                                        <div className="w-full h-2 bg-gray-900 rounded-sm overflow-hidden">
+                                            <div
+                                                className={`h-full transition-all duration-300 ${momentum > 0 ? 'bg-red-700' : momentum < 0 ? 'bg-blue-700' : 'bg-gray-700'}`}
+                                                style={{
+                                                    marginLeft: momentum > 0 ? 0 : `${(100 + momentum) / 2}%`,
+                                                    width: `${Math.abs(momentum) / 2}%`
+                                                }}
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
                 </section>
             )}
         </div>

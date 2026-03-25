@@ -1,14 +1,16 @@
 
 import React, { useState } from 'react';
-import { Character, CharacterTemplate } from '../../types';
+import { Character, CharacterTemplate, WorldSeedId } from '../../types';
 import { ListEditor } from '../common/ListEditor';
 import { useGameStore, EMPTY_CHARACTER } from '../../store';
 import { useImageLoader } from '../../hooks/useImageLoader';
 import { useToast } from '../providers/ToastProvider';
+import { useErrorHandler } from '../../hooks/useErrorHandler';
 import { useGeminiClient } from '../../hooks/useGeminiClient';
 import { AttributeInput, TextAreaInput } from '../ui/Inputs';
 import { db } from '../../db';
 import { generateTemplateId } from '../../idUtils';
+import { WorldSelector } from '../world/WorldSelector';
 
 // ---- Sub-Components ----
 
@@ -56,6 +58,7 @@ export const CreatorView: React.FC = () => {
     const { character, setCharacter, setUI, gameWorld } = useGameStore();
     const { handleGenerateScenarios, handleVisualize, handleGenerateCharacter, handleGenerateField } = useGeminiClient();
     const { showToast } = useToast();
+    const { handleError } = useErrorHandler();
     
     // UI State
     const [errors, setErrors] = useState<{name?: string; setting?: string}>({});
@@ -71,6 +74,9 @@ export const CreatorView: React.FC = () => {
     const [templates, setTemplates] = useState<CharacterTemplate[]>([]);
     const [showSaveTemplate, setShowSaveTemplate] = useState(false);
 
+    // World Seed State (Stream 7)
+    const [selectedWorldSeedId, setSelectedWorldSeedId] = useState<WorldSeedId | undefined>(gameWorld.worldSeedId);
+
     // ---- Template Methods ----
 
     const loadTemplates = async () => {
@@ -78,8 +84,7 @@ export const CreatorView: React.FC = () => {
             const all = await db.getAllTemplates();
             setTemplates(all);
         } catch (e) {
-            console.error("Failed to load templates:", e);
-            showToast("Failed to load templates.", "error");
+            handleError(e, 'load_templates');
         }
     };
 
@@ -115,8 +120,7 @@ export const CreatorView: React.FC = () => {
             setTemplateName('');
             setShowSaveTemplate(false);
         } catch (e) {
-            console.error("Template save failed:", e);
-            showToast("Template archive failed.", "error");
+            handleError(e, 'save_template');
         }
     };
 
@@ -267,8 +271,8 @@ export const CreatorView: React.FC = () => {
                     <button
                         onClick={() => setMode('manual')}
                         className={`px-6 py-2 text-[10px] font-bold uppercase tracking-widest transition-all ${
-                            mode === 'manual' 
-                                ? 'bg-red-900/30 border border-red-800 text-red-400' 
+                            mode === 'manual'
+                                ? 'bg-red-900/30 border border-red-800 text-red-400'
                                 : 'bg-gray-900 border border-gray-800 text-gray-500 hover:text-gray-300'
                         }`}
                     >
@@ -277,8 +281,8 @@ export const CreatorView: React.FC = () => {
                     <button
                         onClick={() => setMode('neural')}
                         className={`px-6 py-2 text-[10px] font-bold uppercase tracking-widest transition-all ${
-                            mode === 'neural' 
-                                ? 'bg-red-900/30 border border-red-800 text-red-400' 
+                            mode === 'neural'
+                                ? 'bg-red-900/30 border border-red-800 text-red-400'
                                 : 'bg-gray-900 border border-gray-800 text-gray-500 hover:text-gray-300'
                         }`}
                     >
@@ -286,6 +290,12 @@ export const CreatorView: React.FC = () => {
                     </button>
                 </div>
             </header>
+
+            {/* ---- WORLD SEED SELECTOR (Stream 7) ---- */}
+            <WorldSelector
+                selectedId={selectedWorldSeedId}
+                onSelect={(seed) => setSelectedWorldSeedId(seed?.id)}
+            />
 
             {/* ---- SAVE TEMPLATE INLINE PROMPT ---- */}
             {showSaveTemplate && (

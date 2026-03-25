@@ -5,6 +5,9 @@ import { retrieveRelevantContext, RAGResult } from './ragEngine';
 import { partitionConditions } from './contentValidation';
 import { applyExistingMap } from './nameResolver';
 import { DOWNTIME_KEYWORDS, DENIAL_SUPPRESSION_THRESHOLD } from '../config/engineConfig';
+import { buildTraumaPromptBlock } from './traumaSystem';
+import { buildSkillPromptBlock } from './skillSystem';
+import { buildFactionPromptBlock } from './factionSystem';
 
 export interface PromptResult {
     prompt: string;
@@ -123,6 +126,8 @@ const buildCharacterBlock = (character: Character): string => {
         ? `\n- **Character Traits (fixed, do NOT add/remove via character_updates):**\n${traits.map(t => `  • ${t}`).join('\n')}`
         : '';
 
+    const skillBlock = buildSkillPromptBlock(character.skills ?? []);
+
     return `
 **Primary Directive: Player Character Data**
 This is the player character. This data is ABSOLUTE TRUTH.
@@ -134,7 +139,7 @@ This is the player character. This data is ABSOLUTE TRUTH.
 - **Inventory:** ${character.inventory.join(', ')}
 - **Active Conditions (mechanical game-states, may be updated):** ${activeConditions.length > 0 ? activeConditions.join(', ') : 'None'}${traitsSection}
 - **Relationships:** ${character.relationships.join(', ')}
-- **Goals:** ${character.goals.join(', ')}
+- **Goals:** ${character.goals.join(', ')}${skillBlock}
     `.trim();
 };
 
@@ -377,6 +382,17 @@ export const constructGeminiPrompt = (
       gameWorld.threatDenialTracker
   );
 
+  // Stream 4: Trauma Narrative Effects
+  const traumaBlock = buildTraumaPromptBlock(character.trauma, gameWorld.activeTraumaEffect);
+
+  // Stream 6: Faction-Scale Conflict
+  const factionBlock = buildFactionPromptBlock(gameWorld.factions ?? [], gameWorld.factionConflicts ?? []);
+
+  // Stream 7: World Rules Injection
+  const worldRulesBlock = gameWorld.worldRules && gameWorld.worldRules.length > 0
+    ? `[WORLD RULES]\n${gameWorld.worldRules.map(rule => `- ${rule}`).join('\n')}`
+    : '';
+
   // v1.7: Final sanitisation pass — ensure no banned names leak into prompt
   const nameMap = gameWorld.bannedNameMap ?? {};
   const sanitise = (s: string) => applyExistingMap(s, nameMap);
@@ -400,6 +416,12 @@ ${sanitise(suppressionContext ? suppressionContext : '')}${sanitise(dormantHooks
 ${sanitise(characterBlock)}
 
 ${sanitise(pacingInstruction)}
+
+${sanitise(traumaBlock)}
+
+${sanitise(factionBlock)}
+
+${sanitise(worldRulesBlock ? `\n${worldRulesBlock}\n` : '')}
 
 ${sanitise(worldPressure ? `\n${worldPressure}\n` : '')}
 ${sanitise(encounterScopeLock ? `\n${encounterScopeLock}\n` : '')}

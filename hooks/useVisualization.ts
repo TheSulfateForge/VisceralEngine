@@ -3,6 +3,7 @@ import { useCallback } from 'react';
 import { useGameStore } from '../store';
 import { useGeminiService } from './useGeminiService';
 import { useToast } from '../components/providers/ToastProvider';
+import { useErrorHandler } from './useErrorHandler';
 import { db } from '../db';
 import { UI_CONFIG } from '../constants';
 
@@ -10,6 +11,7 @@ export const useVisualization = () => {
     const { setGameWorld, setUI } = useGameStore();
     const { getService } = useGeminiService();
     const { showToast } = useToast();
+    const { handleError } = useErrorHandler();
 
     const handleVisualize = useCallback(async () => {
         try {
@@ -34,8 +36,7 @@ export const useVisualization = () => {
                         isGeneratingVisual: false 
                     }));
                 } catch (dbError) {
-                    console.error("DB Save failed", dbError);
-                    showToast("Failed to save visual to memory.", "error");
+                    handleError(dbError, 'image_storage');
                     setGameWorld(prev => ({ ...prev, isGeneratingVisual: false }));
                 }
             } else {
@@ -43,18 +44,17 @@ export const useVisualization = () => {
                 showToast("Visual synthesis failed.", "error");
             }
         } catch (e: unknown) {
-            console.error("Visualization error:", e);
+            handleError(e, 'visualization');
             setGameWorld(prev => ({ ...prev, isGeneratingVisual: false }));
-            
+
             const errorMessage = e instanceof Error ? e.message : String(e);
             if (errorMessage.includes("Requested entity was not found") || errorMessage.includes("API key not valid")) {
                 if (window.aistudio) {
                     setUI({ showKeyPrompt: true });
                 }
             }
-            showToast("Visual synthesis error.", "error");
         }
-    }, [getService, setGameWorld, showToast, setUI]);
+    }, [getService, setGameWorld, handleError, setUI]);
 
     return { handleVisualize };
 };

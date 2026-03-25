@@ -219,3 +219,46 @@ export const AGGRESSION_KEYWORDS = [
     'draw my weapon', 'draw my sword', 'draw my knife', 'draw my gun',
     'look for trouble', 'looking for a fight', 'pick a fight',
 ] as const;
+
+// --- Stream 4: Trauma Narrative Effects ---
+export const TRAUMA_TIERS = {
+  STABLE:       { min: 0,  max: 29, label: 'Stable' },
+  STRESSED:     { min: 30, max: 49, label: 'Stressed' },
+  UNSTABLE:     { min: 50, max: 69, label: 'Unstable' },
+  DISSOCIATING: { min: 70, max: 84, label: 'Dissociating' },
+  BREAKING:     { min: 85, max: 100, label: 'Breaking' },
+} as const;
+
+export type TraumaTier = keyof typeof TRAUMA_TIERS;
+
+export const TRAUMA_EFFECT_CHANCE: Record<TraumaTier, number> = {
+  STABLE: 0,
+  STRESSED: 0,
+  UNSTABLE: 0.15,
+  DISSOCIATING: 0.35,
+  BREAKING: 0.60,
+};
+
+export const TRAUMA_EFFECT_COOLDOWN_TURNS = 2;
+
+// ---------------------------------------------------------------------------
+// Stream 5: Skill Advancement Thresholds
+// ---------------------------------------------------------------------------
+
+export const SKILL_ADVANCEMENT_THRESHOLD: Record<string, number> = {
+  untrained: 3,
+  familiar: 8,
+  trained: 20,
+  expert: 50,
+  master: Infinity,
+};
+
+// ---------------------------------------------------------------------------
+// Stream 6: Faction Conflict Configuration
+// ---------------------------------------------------------------------------
+
+export const FACTION_CONFLICT_TRIGGER_CHANCE = 0.15;
+export const FACTION_CONFLICT_MIN_INFLUENCE = 30;
+export const FACTION_CONFLICT_RESOLUTION_THRESHOLD = 80;
+export const FACTION_MOMENTUM_SHIFT_RANGE = 15;
+export const FACTION_MAX_CONFLICTS = 3;

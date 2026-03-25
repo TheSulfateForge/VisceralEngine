@@ -55,12 +55,15 @@ export const RollResultCard: React.FC<RollResultCardProps> = ({ text }) => {
         bgColor = 'bg-green-900/10';
     }
 
-    // Extract challenge/modifier if present
+    // Extract challenge/modifier/skill if present
     const challengeMatch = text.match(/Challenge:\s*([^,\]]+)/i);
     const modifierMatch = text.match(/Modifier:\s*([^,\]]+)/i);
-    
+    const skillMatch = text.match(/\[([A-Za-z\s]+):\s*([a-z]+)\]/i); // [Skill Name: level]
+
     const challenge = challengeMatch ? challengeMatch[1].trim() : null;
     const modifier = modifierMatch ? modifierMatch[1].trim() : null;
+    const skillName = skillMatch ? skillMatch[1].trim() : null;
+    const skillLevel = skillMatch ? skillMatch[2].trim() : null;
 
     return (
         <div className={`my-4 border ${borderColor} ${bgColor} ${animation} rounded-sm overflow-hidden`}>
@@ -69,17 +72,18 @@ export const RollResultCard: React.FC<RollResultCardProps> = ({ text }) => {
             </div>
             
             <div className="p-4 flex flex-col items-center justify-center space-y-3">
-                {(challenge || modifier) && (
+                {(challenge || modifier || skillName) && (
                     <div className="w-full text-center space-y-1 mb-2">
                         {challenge && <div className="text-xs text-gray-400">{challenge}</div>}
+                        {skillName && <div className="text-[10px] text-blue-400 uppercase tracking-widest">Skill: {skillName} ({skillLevel})</div>}
                         {modifier && <div className="text-[10px] text-gray-500 uppercase tracking-widest">Modifier: {modifier}</div>}
                     </div>
                 )}
-                
+
                 <div className={`text-4xl font-bold ${textColor} font-mono`}>
                     {rollValue}
                 </div>
-                
+
                 <div className={`text-[10px] font-bold tracking-widest uppercase ${textColor} bg-black/40 px-3 py-1 rounded-full border ${borderColor}`}>
                     {outcome}
                 </div>

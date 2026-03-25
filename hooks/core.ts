@@ -4,29 +4,48 @@
 // ============================================================================
 
 import { useState, useCallback } from 'react';
-import { 
-  RollRequest, 
-  RollStatistics
+import {
+  RollRequest,
+  RollStatistics,
+  Skill
 } from '../types';
 import {
   executeDiceRoll,
   getRollOutcome,
   formatModifier
 } from '../utils';
+import { getSkillModifier, incrementSkillUsage } from '../utils/skillSystem';
 
 // ============================================================================
 // ROLL SYSTEM HOOK (STATELESS)
 // ============================================================================
 
 export const useRollSystem = () => {
-  const executeRoll = useCallback((request: RollRequest, currentStats: RollStatistics) => {
+  const executeRoll = useCallback((
+    request: RollRequest,
+    currentStats: RollStatistics,
+    skills?: Skill[]
+  ) => {
     const { final, advText } = executeDiceRoll(
       request.advantage,
       request.disadvantage
     );
 
-    const modifier = request.bonus || 0;
-    const total = final + modifier;
+    // Calculate skill modifier if relevant_skill is set
+    let skillModifier = 0;
+    let skillInfo = '';
+    if (request.relevant_skill && skills && skills.length > 0) {
+      const { modifier, level, skill } = getSkillModifier(skills, request.relevant_skill);
+      skillModifier = modifier;
+      if (skill) {
+        skillInfo = ` [${skill.name}: ${level}]`;
+        // Increment skill usage (caller will handle persisting updated character)
+      }
+    }
+
+    const situationalModifier = request.bonus || 0;
+    const totalModifier = skillModifier + situationalModifier;
+    const total = final + totalModifier;
     const outcome = getRollOutcome(total);
 
     // Calculate new statistics based on current stats + this roll
@@ -44,7 +63,8 @@ export const useRollSystem = () => {
       },
     };
 
-    const logEntry = `${request.challenge}: d20(${final})${advText}${formatModifier(modifier)} = ${total} [${outcome}]`;
+    const modifierStr = totalModifier !== 0 ? formatModifier(totalModifier) : '';
+    const logEntry = `${request.challenge}: d20(${final})${advText}${modifierStr} = ${total} [${outcome}]${skillInfo}`;
 
     return {
       final,
@@ -52,7 +72,9 @@ export const useRollSystem = () => {
       outcome,
       logEntry,
       advText,
-      newStats
+      newStats,
+      skillModifier,
+      skillInfo
     };
   }, []);
 

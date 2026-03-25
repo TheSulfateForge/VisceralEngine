@@ -5,6 +5,7 @@ import { generateSaveId, generateTemplateId, AUTOSAVE_ID } from '../idUtils';
 import { db } from '../db';
 import { downloadFile, debounce } from '../utils';
 import { useToast } from '../components/providers/ToastProvider';
+import { useErrorHandler } from './useErrorHandler';
 import { TIMING } from '../constants';
 import { useGameStore } from '../store';
 import { sanitiseStateOnLoad } from '../utils/nameResolver';
@@ -98,7 +99,8 @@ export const useAutosave = () => {
  */
 export const usePersistence = () => {
   const { showToast } = useToast();
-  
+  const { handleError } = useErrorHandler();
+
   // Stable Setters (Zustand setters don't change)
   const setGameHistory = useGameStore(state => state.setGameHistory);
   const setGameWorld = useGameStore(state => state.setGameWorld);
@@ -145,6 +147,27 @@ export const usePersistence = () => {
       if (world.passiveAlliesDetected === undefined) {
         world.passiveAlliesDetected = false;
       }
+      // Stream 4: Trauma Narrative Effects
+      if (world.activeTraumaEffect === undefined) {
+        world.activeTraumaEffect = undefined;
+      }
+      if (world.lastTraumaEffectTurn === undefined) {
+        world.lastTraumaEffectTurn = undefined;
+      }
+      // Stream 6: Faction-Scale Conflict
+      if (world.factions === undefined) {
+        world.factions = [];
+      }
+      if (world.factionConflicts === undefined) {
+        world.factionConflicts = [];
+      }
+      // Stream 7: World Seeds
+      if (world.worldRules === undefined) {
+        world.worldRules = [];
+      }
+      if (world.worldSeedId === undefined) {
+        world.worldSeedId = undefined;
+      }
 
       setGameHistory(history);
       setGameWorld(world);
@@ -152,10 +175,9 @@ export const usePersistence = () => {
       setUI({ view: 'game', isSettingsOpen: false });
       showToast("Reality state reconstructed.", "success");
     } catch (e) {
-      console.error(e);
-      showToast("Import failed. Corrupt data.", "error");
+      handleError(e, 'save_import');
     }
-  }, [setGameHistory, setGameWorld, setCharacter, setUI, showToast]);
+  }, [setGameHistory, setGameWorld, setCharacter, setUI, showToast, handleError]);
 
   const saveToDb = useCallback(async (name: string) => {
     try {
@@ -169,10 +191,9 @@ export const usePersistence = () => {
       });
       showToast("Checkpoint saved to Core.", "success");
     } catch (e) {
-      console.error("Save Error:", e);
-      showToast("Save failed.", "error");
+      handleError(e, 'save_to_db');
     }
-  }, [showToast]);
+  }, [showToast, handleError]);
 
   const loadFromDb = useCallback(async (name: string) => {
     try {
@@ -190,6 +211,20 @@ export const usePersistence = () => {
         if (world.passiveAlliesDetected === undefined) {
           world.passiveAlliesDetected = false;
         }
+        // Stream 4: Trauma Narrative Effects
+        if (world.activeTraumaEffect === undefined) {
+          world.activeTraumaEffect = undefined;
+        }
+        if (world.lastTraumaEffectTurn === undefined) {
+          world.lastTraumaEffectTurn = undefined;
+        }
+        // Stream 6: Faction-Scale Conflict
+        if (world.factions === undefined) {
+          world.factions = [];
+        }
+        if (world.factionConflicts === undefined) {
+          world.factionConflicts = [];
+        }
 
         setGameHistory({ ...history, isThinking: false });
         setGameWorld({ ...world });
@@ -200,10 +235,9 @@ export const usePersistence = () => {
         showToast("Save file not found.", "error");
       }
     } catch (e) {
-      console.error("Load Error:", e);
-      showToast("Load failed.", "error");
+      handleError(e, 'load_from_db');
     }
-  }, [setGameHistory, setGameWorld, setCharacter, setUI, showToast]);
+  }, [setGameHistory, setGameWorld, setCharacter, setUI, showToast, handleError]);
 
   const handleExportTemplates = useCallback(async () => {
     try {
@@ -217,10 +251,9 @@ export const usePersistence = () => {
       downloadFile(JSON.stringify(templates, null, 2), filename, 'application/json');
       showToast(`${templates.length} template(s) exported.`, "success");
     } catch (e) {
-      console.error("Template export failed:", e);
-      showToast("Template export failed.", "error");
+      handleError(e, 'template_export');
     }
-  }, [showToast]);
+  }, [showToast, handleError]);
 
   const handleImportTemplates = useCallback(async (file: File) => {
     try {
@@ -248,10 +281,9 @@ export const usePersistence = () => {
 
       showToast(`${valid.length} template(s) imported.`, "success");
     } catch (e) {
-      console.error("Template import failed:", e);
-      showToast("Template import failed. Invalid file.", "error");
+      handleError(e, 'template_import');
     }
-  }, [showToast]);
+  }, [showToast, handleError]);
 
   return {
     handleExport,

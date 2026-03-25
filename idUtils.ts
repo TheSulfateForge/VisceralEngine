@@ -1,5 +1,5 @@
 
-import { MessageId, SaveId, MemoryId, LoreId, TemplateId } from './types';
+import { MessageId, SaveId, MemoryId, LoreId, TemplateId, WorldSeedId } from './types';
 
 // Use standard UUID if available, otherwise fall back to a high-entropy timestamp mix
 export const generateUUID = (): string => {
@@ -32,5 +32,8 @@ export const generateLoreId = (): LoreId => {
   return `lore_${generateUUID()}` as LoreId;
 };
 
-export const generateTemplateId = (): TemplateId => 
+export const generateTemplateId = (): TemplateId =>
   `tmpl_${generateUUID()}` as TemplateId;
+
+export const generateWorldSeedId = (): WorldSeedId =>
+  `world_${generateUUID()}` as WorldSeedId;

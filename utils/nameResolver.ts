@@ -303,6 +303,13 @@ export const sanitiseStateOnLoad = (
     cleanChar.inventory = (character.inventory ?? []).map(resolve);
     cleanChar.goals = (character.goals ?? []).map(resolve);
 
+    // Stream 5: Skills
+    cleanChar.skills = (character.skills ?? []).map(skill => ({
+        ...skill,
+        name: resolve(skill.name),
+        source: resolve(skill.source),
+    }));
+
     // --- History ---
     const cleanHistory = { ...history };
     cleanHistory.history = (history.history ?? []).map(msg => ({

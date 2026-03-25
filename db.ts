@@ -2,14 +2,15 @@
 // DB.TS - IndexedDB Wrapper
 // ============================================================================
 
-import { GameSave, SaveMetadata, CharacterTemplate } from "./types";
+import { GameSave, SaveMetadata, CharacterTemplate, WorldSeed } from "./types";
 import { generateSaveId, generateUUID } from "./idUtils";
 
 const DB_NAME = 'VisceralEngineDB';
-const DB_VERSION = 4; 
+const DB_VERSION = 5;
 const STORE_SAVES = 'saves';
 const STORE_IMAGES = 'images';
 const STORE_TEMPLATES = 'templates';
+const STORE_WORLDS = 'worlds';
 
 export class Database {
   private db: IDBDatabase | null = null;
@@ -54,6 +55,12 @@ export class Database {
         // Templates Store (NEW)
         if (!db.objectStoreNames.contains(STORE_TEMPLATES)) {
             const store = db.createObjectStore(STORE_TEMPLATES, { keyPath: 'id' });
+            store.createIndex('name', 'name', { unique: true });
+        }
+
+        // Worlds Store (Stream 7)
+        if (!db.objectStoreNames.contains(STORE_WORLDS)) {
+            const store = db.createObjectStore(STORE_WORLDS, { keyPath: 'id' });
             store.createIndex('name', 'name', { unique: true });
         }
       };
@@ -253,6 +260,35 @@ export class Database {
 
   async deleteTemplate(id: string): Promise<void> {
     await this.tx(STORE_TEMPLATES, 'readwrite', store => store.delete(id));
+  }
+
+  // --- World Seed Handling (Stream 7) ---
+
+  async saveWorldSeed(seed: WorldSeed): Promise<void> {
+    await this.init();
+    if (!this.db) throw new Error("DB not initialized");
+
+    return new Promise((resolve, reject) => {
+        const transaction = this.db!.transaction([STORE_WORLDS], 'readwrite');
+        const store = transaction.objectStore(STORE_WORLDS);
+        const putRequest = store.put(seed);
+
+        putRequest.onerror = () => reject(putRequest.error);
+        putRequest.onsuccess = () => resolve();
+    });
+  }
+
+  async loadWorldSeed(id: string): Promise<WorldSeed | undefined> {
+    return this.tx(STORE_WORLDS, 'readonly', store => store.get(id));
+  }
+
+  async getAllWorldSeeds(): Promise<WorldSeed[]> {
+    const results = await this.tx<WorldSeed[]>(STORE_WORLDS, 'readonly', store => store.getAll());
+    return results.sort((a, b) => new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime());
+  }
+
+  async deleteWorldSeed(id: string): Promise<void> {
+    await this.tx(STORE_WORLDS, 'readwrite', store => store.delete(id));
   }
 }
 

@@ -57,12 +57,19 @@ export const Sidebar: React.FC = () => {
     const bio = character.bio || { metabolism: { calories: 80, hydration: 80, stamina: 100 }, pressures: { lactation: 0 } };
     const timeDisplay = gameWorld.time?.display || "Day 1, 09:00";
 
+    const trauma = character.trauma || 0;
+    const isHighTrauma = trauma >= 70;
+
     return (
         <aside className={`
-            fixed lg:static inset-y-0 left-0 z-[102] w-80 bg-[#0a0a0a] border-r border-red-900/10 flex flex-col p-6 space-y-8 
+            fixed lg:static inset-y-0 left-0 z-[102] w-80 bg-[#0a0a0a] border-r border-red-900/10 flex flex-col p-6 space-y-8
             transition-transform duration-500 lg:translate-x-0 overflow-y-auto h-full max-h-screen
             ${ui.isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
-        `}>
+            ${isHighTrauma ? 'relative' : ''}
+        `}
+        style={isHighTrauma ? {
+            boxShadow: 'inset 0 0 40px rgba(0, 0, 0, 0.8), inset 0 0 80px rgba(153, 27, 27, 0.1)'
+        } : undefined}>
             <div className="flex items-center justify-between mb-8 shrink-0">
                 <div className="flex items-center space-x-3 cursor-pointer" onClick={() => setUI({ view: 'landing' })}>
                     <div className="w-3 h-3 bg-red-900 shadow-[0_0_12px_rgba(153,27,27,0.6)] animate-pulse"></div>
