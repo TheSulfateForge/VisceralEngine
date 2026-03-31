@@ -188,6 +188,86 @@ export const RAG_ENTITY_LIMIT = 6;
 export const SUMMARIZATION_INTERVAL = 20;
 
 // ---------------------------------------------------------------------------
+// v1.21: Model-Adaptive Context Profiles
+// ---------------------------------------------------------------------------
+// Lite models have reduced instruction-following capacity and shorter effective
+// attention spans. Sending 30 messages of history + 63KB system instructions
+// overwhelms them, causing context drift by turn 10-15. These profiles scale
+// context aggressively based on model capability.
+
+export interface ModelContextProfile {
+  /** Max chat messages retained in history sent to the API. */
+  maxHistory: number;
+  /** Turns between automatic history summarization. */
+  summarizationInterval: number;
+  /** Max memory items injected into prompt (others dropped by recency). */
+  memoryLimit: number;
+  /** Override RAG lore retrieval limit. */
+  loreLimitOverride?: number;
+  /** Override RAG entity retrieval limit. */
+  entityLimitOverride?: number;
+  /** How many recent messages to keep at full length (older ones get compressed). */
+  recentFullMessages: number;
+  /** Max characters for compressed (older) history messages. */
+  compressedMessageLength: number;
+  /** RAG lookback: how many recent model responses to analyze for relevance. */
+  ragLookback: number;
+}
+
+export const MODEL_CONTEXT_PROFILES: Record<string, ModelContextProfile> = {
+  'gemini-3-flash-preview': {
+    maxHistory: 30,
+    summarizationInterval: 20,
+    memoryLimit: 40,
+    recentFullMessages: 10,
+    compressedMessageLength: 500,
+    ragLookback: 5,
+  },
+  'gemini-3.1-flash-lite-preview': {
+    maxHistory: 14,
+    summarizationInterval: 8,
+    memoryLimit: 15,
+    loreLimitOverride: 6,
+    entityLimitOverride: 5,
+    recentFullMessages: 6,
+    compressedMessageLength: 300,
+    ragLookback: 6,
+  },
+  'gemini-2.5-flash': {
+    maxHistory: 30,
+    summarizationInterval: 20,
+    memoryLimit: 40,
+    recentFullMessages: 10,
+    compressedMessageLength: 500,
+    ragLookback: 5,
+  },
+  'gemini-2.5-flash-lite': {
+    maxHistory: 14,
+    summarizationInterval: 10,
+    memoryLimit: 15,
+    loreLimitOverride: 6,
+    entityLimitOverride: 5,
+    recentFullMessages: 6,
+    compressedMessageLength: 300,
+    ragLookback: 6,
+  },
+};
+
+/** Default profile when model name is unknown. */
+export const DEFAULT_CONTEXT_PROFILE: ModelContextProfile = {
+  maxHistory: 20,
+  summarizationInterval: 15,
+  memoryLimit: 25,
+  recentFullMessages: 8,
+  compressedMessageLength: 400,
+  ragLookback: 5,
+};
+
+/** Resolve the context profile for a given model name. */
+export const getContextProfile = (modelName: string): ModelContextProfile =>
+  MODEL_CONTEXT_PROFILES[modelName] ?? DEFAULT_CONTEXT_PROFILE;
+
+// ---------------------------------------------------------------------------
 // Prompt Construction
 // ---------------------------------------------------------------------------
 

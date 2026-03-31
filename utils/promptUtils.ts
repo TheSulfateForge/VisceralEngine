@@ -1,10 +1,10 @@
-import { GameHistory, GameWorld, Character, SceneMode, MemoryItem, LoreItem, KnownEntity, BioMonitor, ActiveThreat, DormantHook, FactionExposure, ThreatDenialTracker } from '../types';
+import { GameHistory, GameWorld, Character, SceneMode, MemoryItem, LoreItem, KnownEntity, BioMonitor, ActiveThreat, DormantHook, FactionExposure, ThreatDenialTracker, ChatMessage, Role } from '../types';
 import { retrieveRelevantContext, RAGResult } from './ragEngine';
 // v1.19: Section reminders moved to trailing position on user message (useGeminiClient.ts)
 // import { getSectionReminders } from '../sectionReminders';
 import { partitionConditions } from './contentValidation';
 import { applyExistingMap } from './nameResolver';
-import { DOWNTIME_KEYWORDS, DENIAL_SUPPRESSION_THRESHOLD } from '../config/engineConfig';
+import { DOWNTIME_KEYWORDS, DENIAL_SUPPRESSION_THRESHOLD, getContextProfile } from '../config/engineConfig';
 import { buildTraumaPromptBlock } from './traumaSystem';
 import { buildSkillPromptBlock } from './skillSystem';
 import { buildFactionPromptBlock } from './factionSystem';
@@ -16,9 +16,57 @@ export interface PromptResult {
 
 // --- Builder Functions ---
 
-const buildMemoryContext = (memory: MemoryItem[]): string => {
+// v1.21: Memory items are now capped per model profile. Most recent memories
+// are kept (recency heuristic) since older memories are likelier to be stale
+// or superseded. Full RAG scoring of memories is a future enhancement.
+const buildMemoryContext = (memory: MemoryItem[], limit?: number): string => {
     if (memory.length === 0) return "";
-    return memory.map(m => `• ${m.fact}`).join('\n');
+    const capped = limit && memory.length > limit
+        ? memory.slice(-limit)
+        : memory;
+    return capped.map(m => `• ${m.fact}`).join('\n');
+};
+
+/**
+ * v1.21: Situation Recap — a concise anchor block injected at the TOP of dynamic
+ * context. Gives the model a clear snapshot of "what is happening right now"
+ * without requiring it to reconstruct this from scattered context blocks.
+ * Critical for lite models that lose the thread when context is large.
+ */
+const buildSituationRecap = (
+    character: Character,
+    world: GameWorld,
+    recentHistory: ChatMessage[]
+): string => {
+    const locGraph = world.locationGraph;
+    const location = locGraph?.playerLocationId
+        ? (locGraph.nodes?.[locGraph.playerLocationId]?.displayName ?? locGraph.playerLocationId)
+        : 'Unknown';
+    const presentEntities = (world.knownEntities || [])
+        .filter(e => !e.status || e.status === 'present')
+        .map(e => `${e.name} (${e.role})`)
+        .slice(0, 5)
+        .join(', ');
+    const activeThreats = (world.emergingThreats || [])
+        .filter(t => (t.turns_until_impact ?? 99) <= 3)
+        .map(t => t.description.slice(0, 60))
+        .slice(0, 2);
+    const threatLine = activeThreats.length > 0
+        ? `\nImminent: ${activeThreats.join('; ')}`
+        : '';
+    // Grab a brief snippet of the last model output for continuity
+    const lastModelText = recentHistory
+        .filter(m => m.role === Role.MODEL)
+        .slice(-1)[0]?.text || '';
+    const lastSnippet = lastModelText.length > 120
+        ? lastModelText.slice(0, 120) + '…'
+        : lastModelText;
+
+    return `[SITUATION RECAP — Read this first]
+${character.name} is at: ${location}
+Present: ${presentEntities || 'No one nearby'}
+Scene: ${world.sceneMode || 'NARRATIVE'} | Tension: ${world.tensionLevel ?? 0}/100${threatLine}
+Last: ${lastSnippet}`;
 };
 
 const buildLoreContext = (lore: LoreItem[]): string => {
@@ -325,20 +373,28 @@ export const constructGeminiPrompt = (
   gameWorld: GameWorld,
   character: Character,
   userInput: string,
-  playerRemovedConditions: string[] = []
+  playerRemovedConditions: string[] = [],
+  modelName: string = 'gemini-3-flash-preview',        // v1.21
+  historicalSummary?: string                             // v1.21: Moved from geminiClient
 ): PromptResult => {
-  // 1. RAG Retrieval
+  // v1.21: Resolve model-specific context limits
+  const profile = getContextProfile(modelName);
+
+  // 1. RAG Retrieval — use model-adaptive limits and lookback
   const activeThreatNames = (gameWorld.activeThreats || []).map(t => t.name);
   const { relevantLore, relevantEntities, debugInfo } = retrieveRelevantContext(
     userInput,
     gameHistory.history,
     gameWorld.lore,
     gameWorld.knownEntities || [],
-    activeThreatNames
+    activeThreatNames,
+    profile.loreLimitOverride,   // v1.21: model-adaptive
+    profile.entityLimitOverride, // v1.21: model-adaptive
+    profile.ragLookback          // v1.21: wider lookback for better entity recall
   );
 
-  // 2. Build Context Strings
-  const memoryContext = buildMemoryContext(gameWorld.memory);
+  // 2. Build Context Strings — memory now capped by model profile
+  const memoryContext = buildMemoryContext(gameWorld.memory, profile.memoryLimit);
   const loreContext = buildLoreContext(relevantLore);
   const knownEntitiesContext = buildEntityContext(relevantEntities);
 
@@ -397,8 +453,21 @@ export const constructGeminiPrompt = (
   const nameMap = gameWorld.bannedNameMap ?? {};
   const sanitise = (s: string) => applyExistingMap(s, nameMap);
 
+  // v1.21: Situation Recap — concise anchor at the top of dynamic context
+  const situationRecap = buildSituationRecap(character, gameWorld, gameHistory.history);
+
+  // v1.21: Historical summary now lives in the dynamic prompt (top position)
+  // instead of being appended to the end of 63KB system instructions where
+  // lite models can't attend to it.
+  const summaryBlock = historicalSummary
+      ? `[PREVIOUSLY ON...]\n${sanitise(historicalSummary)}\n`
+      : '';
+
   // 8. Assembly
   const promptString = `
+${summaryBlock}
+${sanitise(situationRecap)}
+
 [CONTEXT]
 ${sanitise(memoryContext)}
 ${sanitise(loreContext)}

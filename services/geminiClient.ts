@@ -1,9 +1,10 @@
 
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
-import { GEMINI_SAFETY_SETTINGS, MAX_CONTEXT_HISTORY, THINKING_DEFAULTS } from "../constants";
+import { GEMINI_SAFETY_SETTINGS, THINKING_DEFAULTS } from "../constants";
 import { ChatMessage, Role, ModelResponseSchema, SCENE_MODES, SceneMode, Lighting, LIGHTING_LEVELS } from "../types";
 import { RESPONSE_SCHEMA } from "../schemas/responseSchema";
 import { sanitiseHistory } from '../utils/nameResolver';
+import { getContextProfile } from '../config/engineConfig';
 
 const REQUEST_TIMEOUT_MS = 60000;
 
@@ -267,27 +268,41 @@ export class GeminiClient {
       trailingReminder?: string | null   // v1.19: Appended to user message for recency compliance
   ): Promise<ModelResponseSchema> {
     
+    // v1.21: Model-adaptive context limits — lite models get shorter history
+    // and progressive compression of older messages to preserve attention budget.
+    const profile = getContextProfile(this.modelName);
+
     const contextHistory = history.length > 0 ? history.slice(0, -1) : [];
-    const recentHistory = contextHistory.slice(-MAX_CONTEXT_HISTORY);
+    const recentHistory = contextHistory.slice(-profile.maxHistory);
 
     // v1.7: Sanitise history to remove any banned names before sending to AI.
-    // The nameMap must be passed in or accessed from the prompt context.
-    // Since sendMessage doesn't have direct world access, we add nameMap as
-    // an optional parameter (see signature change below).
     const cleanHistory = nameMap
       ? sanitiseHistory(recentHistory, nameMap)
       : recentHistory;
 
-    const apiHistory = cleanHistory
+    // v1.21: Progressive history compression — keep recent messages at full
+    // length, but truncate older messages to save tokens for system instructions.
+    // This preserves narrative continuity while freeing attention budget.
+    const compressedHistory = cleanHistory.map((msg, i) => {
+      const isRecent = i >= cleanHistory.length - profile.recentFullMessages;
+      if (isRecent || msg.text.length <= profile.compressedMessageLength) return msg;
+      return {
+        ...msg,
+        text: msg.text.slice(0, profile.compressedMessageLength) + '…'
+      };
+    });
+
+    const apiHistory = compressedHistory
       .filter(msg => msg.role === Role.USER || msg.role === Role.MODEL)
       .map(msg => ({
         role: msg.role,
         parts: [{ text: msg.text }]
       }));
 
-    const fullSystemInstruction = historicalSummary 
-        ? `${systemPrompt}\n\n[PREVIOUSLY ON...]\n${historicalSummary}`
-        : systemPrompt;
+    // v1.21: Historical summary moved into the dynamic prompt (constructGeminiPrompt)
+    // where it sits at the TOP of context for better attention. The systemPrompt
+    // param now arrives with the summary already embedded in the right position.
+    const fullSystemInstruction = systemPrompt;
 
     const currentUserMsg = history[history.length - 1];
 

@@ -18,7 +18,7 @@ import { useCharacterGen } from './useCharacterGen';
 import { processCharacterUpdates } from '../utils/characterDelta';
 import { deduplicateConditions } from '../utils/characterUtils';
 import { significantWords } from '../utils/contentValidation';
-import { SUMMARIZATION_INTERVAL } from '../config/engineConfig';
+import { getContextProfile } from '../config/engineConfig';
 import { extractDeniedMechanisms } from '../utils/mechanismDenial';
 
 export const useGeminiClient = () => {
@@ -106,8 +106,11 @@ export const useGeminiClient = () => {
             return;
         }
 
+        // v1.21: Model-adaptive summarization interval — lite models summarize
+        // much more frequently to prevent context loss in shorter windows.
+        const contextProfile = getContextProfile(service.modelName);
         const historyForSummarization = useGameStore.getState().gameHistory;
-        if (historyForSummarization.history.length > 0 && historyForSummarization.history.length % SUMMARIZATION_INTERVAL === 0) {
+        if (historyForSummarization.history.length > 0 && historyForSummarization.history.length % contextProfile.summarizationInterval === 0) {
             performSummarization(service, historyForSummarization.history).catch(console.error);
         }
 
@@ -115,7 +118,18 @@ export const useGeminiClient = () => {
         const playerRemovedConditions = preCallState.playerRemovedConditions;
         useGameStore.getState().clearPlayerRemovedConditions();
 
-        const { prompt: contextPrompt, ragDebug } = constructGeminiPrompt(preCallState.gameHistory, preCallState.gameWorld, preCallState.character, text, playerRemovedConditions);
+        // v1.21: Pass modelName for model-adaptive context limits, and
+        // historicalSummary so it can be positioned at the TOP of dynamic context
+        // (moved from geminiClient.ts where it was buried after 63KB of instructions).
+        const { prompt: contextPrompt, ragDebug } = constructGeminiPrompt(
+            preCallState.gameHistory,
+            preCallState.gameWorld,
+            preCallState.character,
+            text,
+            playerRemovedConditions,
+            service.modelName,
+            preCallState.gameHistory.lastActiveSummary
+        );
         
         // Debug Log the injected reminder if active
         // v1.5: Pass entityCount and goalCount to match updated signature.

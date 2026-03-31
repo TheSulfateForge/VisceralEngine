@@ -129,10 +129,11 @@ export function retrieveRelevantContext(
   knownEntities: KnownEntity[],
   activeThreatNames: string[],
   loreLimit: number = 8,
-  entityLimit: number = 6
+  entityLimit: number = 6,
+  lookback: number = 5  // v1.21: Configurable lookback (was hardcoded 3)
 ): RAGResult {
-  // 1. Analyze Query
-  const queryAnalysis = analyzeQuery(userInput, recentHistory);
+  // 1. Analyze Query — v1.21: use configurable lookback for wider entity recall
+  const queryAnalysis = analyzeQuery(userInput, recentHistory, lookback);
   
   // 2. Prepare Corpus & Analyze Documents
   // We treat Lore and Entities as a single corpus for IDF calculation to normalize term weights globally
