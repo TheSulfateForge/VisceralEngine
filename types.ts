@@ -418,7 +418,7 @@ export interface WorldSeedFaction {
 export interface WorldSeedLore {
   keyword: string;
   content: string;
-  category: 'history' | 'geography' | 'culture' | 'magic' | 'technology' | 'religion' | 'economy';
+  category: string;
 }
 
 export interface WorldSeedNPC {

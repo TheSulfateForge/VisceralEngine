@@ -9,11 +9,11 @@ export const WORLD_DECOMPOSITION_SCHEMA: Schema = {
         type: Type.OBJECT,
         properties: {
           name: { type: Type.STRING, description: "Location name" },
-          description: { type: Type.STRING, description: "Brief description" },
+          description: { type: Type.STRING, description: "1-2 sentence description of this location" },
           tags: {
             type: Type.ARRAY,
             items: { type: Type.STRING },
-            description: "Tags like 'settlement', 'wilderness', 'interior', 'ruin', etc."
+            description: "Setting-appropriate tags describing the location type (e.g., fantasy: settlement, wilderness, dungeon, ruin; sci-fi: station, planet, orbital; modern: urban, suburban, government)"
           },
           connections: {
             type: Type.ARRAY,
@@ -22,7 +22,7 @@ export const WORLD_DECOMPOSITION_SCHEMA: Schema = {
               properties: {
                 to: { type: Type.STRING, description: "Name of connected location" },
                 travelTimeMinutes: { type: Type.INTEGER, description: "Travel time in minutes" },
-                mode: { type: Type.STRING, description: "Movement mode (optional, e.g. 'horseback')" }
+                mode: { type: Type.STRING, description: "Setting-appropriate movement mode (e.g., foot, horse, ship, car, shuttle, teleporter)" }
               },
               required: ["to", "travelTimeMinutes"]
             }
@@ -42,7 +42,7 @@ export const WORLD_DECOMPOSITION_SCHEMA: Schema = {
         type: Type.OBJECT,
         properties: {
           name: { type: Type.STRING, description: "Faction name" },
-          description: { type: Type.STRING, description: "Faction description" },
+          description: { type: Type.STRING, description: "2-3 sentences covering governance, culture, and key policies" },
           territory: {
             type: Type.ARRAY,
             items: { type: Type.STRING },
@@ -52,11 +52,11 @@ export const WORLD_DECOMPOSITION_SCHEMA: Schema = {
           resources: {
             type: Type.ARRAY,
             items: { type: Type.STRING },
-            description: "List of resource types (military, economic, intelligence, magical, political)"
+            description: "Setting-appropriate resource types (e.g., military, economic, intelligence, magical, political, technological, cultural, industrial)"
           },
           dispositions: {
             type: Type.OBJECT,
-            description: "Dispositions toward other factions (allied, neutral, rival, war)"
+            description: "Dispositions toward other factions (e.g., allied, neutral, rival, war, vassal, trade-partner)"
           },
           leader: {
             type: Type.STRING,
@@ -77,12 +77,11 @@ export const WORLD_DECOMPOSITION_SCHEMA: Schema = {
       items: {
         type: Type.OBJECT,
         properties: {
-          keyword: { type: Type.STRING, description: "Short keyword for this lore entry" },
-          content: { type: Type.STRING, description: "Detailed content" },
+          keyword: { type: Type.STRING, description: "Unique topic name (2-5 words) specific enough to distinguish from all other entries" },
+          content: { type: Type.STRING, description: "1-3 concrete sentences about this single topic" },
           category: {
             type: Type.STRING,
-            enum: ["history", "geography", "culture", "magic", "technology", "religion", "economy"],
-            description: "Category of lore"
+            description: "Setting-appropriate category for this lore entry (e.g., history, geography, culture, magic, technology, religion, economy, law, biology, military, social, science, dungeon, combat, faction-detail, racial-trait)"
           }
         },
         required: ["keyword", "content", "category"]
@@ -117,8 +116,8 @@ export const WORLD_DECOMPOSITION_SCHEMA: Schema = {
       items: {
         type: Type.OBJECT,
         properties: {
-          name: { type: Type.STRING, description: "Rule name (e.g. 'Magic System', 'Social Structure')" },
-          description: { type: Type.STRING, description: "Detailed rule description" }
+          name: { type: Type.STRING, description: "Specific rule name" },
+          description: { type: Type.STRING, description: "The exact mechanical rule as described in the source" }
         },
         required: ["name", "description"]
       }
@@ -126,7 +125,7 @@ export const WORLD_DECOMPOSITION_SCHEMA: Schema = {
     tags: {
       type: Type.ARRAY,
       items: { type: Type.STRING },
-      description: "World tags (e.g. 'dark-fantasy', 'low-magic', 'steampunk')"
+      description: "World tags describing genre, tone, and setting (e.g., dark-fantasy, cyberpunk, post-apocalyptic, hard-sci-fi, urban-modern)"
     }
   },
   required: ["locations", "factions", "lore", "npcs", "rules", "tags"]
