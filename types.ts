@@ -656,6 +656,13 @@ export interface Character {
     hiddenNotes?: string;
     conditionTimestamps?: Record<string, number>;
     skills?: Skill[];
+    /**
+     * v1.19 — Languages the character can speak/read. When the character
+     * encounters speech/writing in a language NOT in this list, the model
+     * must render it as unintelligible (paraphrased subtext / body language
+     * only). Missing/empty ⇒ legacy behavior (all languages understood).
+     */
+    languagesKnown?: string[];
 }
 
 export interface CharacterTemplate {

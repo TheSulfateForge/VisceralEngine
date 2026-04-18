@@ -112,6 +112,7 @@ export const CreatorView: React.FC = () => {
                     relationships: [...character.relationships],
                     conditions: [...character.conditions],
                     goals: [...character.goals],
+                    languagesKnown: [...(character.languagesKnown ?? [])],
                 }
             };
 
@@ -139,6 +140,7 @@ export const CreatorView: React.FC = () => {
             relationships: [...t.relationships],
             conditions: [...t.conditions],
             goals: [...t.goals],
+            languagesKnown: [...(t.languagesKnown ?? [])],
         }));
         setShowTemplateModal(false);
         setMode('manual'); // Switch to manual so they can edit
@@ -518,6 +520,17 @@ export const CreatorView: React.FC = () => {
                         <ListEditor label="Ties" items={character.relationships} field="relationships" character={character} setCharacter={setCharacter} tooltip="Existing relationships." />
                         <ListEditor label="States" items={character.conditions} field="conditions" character={character} setCharacter={setCharacter} tooltip="Active conditions." />
                         <ListEditor label="Directives" items={character.goals} field="goals" character={character} setCharacter={setCharacter} tooltip="Core motivations." />
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8 border-t border-gray-900 pt-12">
+                        <ListEditor
+                            label="Languages"
+                            items={character.languagesKnown ?? []}
+                            field="languagesKnown"
+                            character={character}
+                            setCharacter={setCharacter}
+                            tooltip="Languages the subject can speak & read. Unknown languages render as untranslated subtext (tone, gesture, partial loanwords only)."
+                        />
                     </div>
                     
                     {/* ---- PREVIEW & ACTIONS ---- */}

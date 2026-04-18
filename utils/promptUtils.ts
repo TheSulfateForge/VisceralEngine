@@ -4,7 +4,7 @@ import { retrieveRelevantContext, RAGResult } from './ragEngine';
 // import { getSectionReminders } from '../sectionReminders';
 import { partitionConditions } from './contentValidation';
 import { applyExistingMap } from './nameResolver';
-import { DOWNTIME_KEYWORDS, DENIAL_SUPPRESSION_THRESHOLD, getContextProfile } from '../config/engineConfig';
+import { DOWNTIME_KEYWORDS, DENIAL_SUPPRESSION_THRESHOLD, getContextProfile, SLEEP_KEYWORDS, DREAM_TRAUMA_THRESHOLD } from '../config/engineConfig';
 import { buildTraumaPromptBlock } from './traumaSystem';
 import { buildSkillPromptBlock } from './skillSystem';
 import { buildFactionPromptBlock } from './factionSystem';
@@ -187,6 +187,7 @@ This is the player character. This data is ABSOLUTE TRUTH.
 - **Inventory:** ${character.inventory.join(', ')}
 - **Active Conditions (mechanical game-states, may be updated):** ${activeConditions.length > 0 ? activeConditions.join(', ') : 'None'}${traitsSection}
 - **Relationships:** ${character.relationships.join(', ')}
+- **Languages Known:** ${(character.languagesKnown && character.languagesKnown.length > 0) ? character.languagesKnown.join(', ') : 'Unspecified — treat as common tongue only; render foreign speech as unintelligible subtext.'}
 - **Goals:** ${character.goals.join(', ')}${skillBlock}
     `.trim();
 };
@@ -368,6 +369,60 @@ ${list}
     `.trim();
 };
 
+/**
+ * v1.19 — Dream/Nightmare Seed Builder
+ *
+ * Returns a [DREAM SEED] block when the player is sleeping AND the character's
+ * trauma is at or above DREAM_TRAUMA_THRESHOLD AND at least one memory fragment
+ * exists. The seeded fragment is handed to the AI, which renders a bracketed
+ * [DREAM]...[/DREAM] non-canonical scene per the Section 11 protocol in
+ * systemInstructions.ts.
+ *
+ * Intentionally returns '' when conditions are not met — this keeps the default
+ * (no dream) cheap and keeps dreams rare and dramatic.
+ */
+const buildDreamSeed = (
+    character: Character,
+    world: GameWorld,
+    userInput: string
+): string => {
+    if ((character.trauma ?? 0) < DREAM_TRAUMA_THRESHOLD) return '';
+    const input = userInput.toLowerCase();
+    const isSleeping = SLEEP_KEYWORDS.some(kw => input.includes(kw));
+    if (!isSleeping) return '';
+
+    const pool = world.memory ?? [];
+    if (pool.length === 0) return '';
+
+    // Weight recent memories slightly higher (last 10 get 2x weight).
+    const recent = pool.slice(-10);
+    const weighted = [...pool, ...recent];
+    const picked = weighted[Math.floor(Math.random() * weighted.length)];
+
+    return `
+[DREAM SEED — NIGHTMARE TRIGGER ACTIVE]
+The player is sleeping. Character trauma is ${character.trauma}/100 (≥ ${DREAM_TRAUMA_THRESHOLD}).
+A dream MUST be rendered this turn, per Section 11 of the system instructions.
+
+Seed fragment (the dream should riff on, distort, or re-contextualize this memory — do NOT retell it literally):
+  "${picked.fact}"
+
+REQUIRED OUTPUT:
+- Open the narrative with "[DREAM]" on its own line.
+- Render a non-canonical sensory/symbolic scene. Distorted time, impossible
+  geography, and symbolic stand-ins for NPCs are all permitted.
+- No roll_request. No emerging_threats. No legal events. No location change.
+- End with the PC waking (breath, sweat, sheets, heartbeat, the real room).
+- Close with "[/DREAM]" on its own line, then render the brief waking beat.
+- Set \`time_passed_minutes\` to 0–3 (just the waking moment; sleep time is
+  already counted upstream).
+- Apply \`character_updates.trauma_delta\`:
+    +5 to +15 if the dream re-traumatizes or opens an unresolved wound,
+    -3 to -10 if the dream lets the character process or integrate.
+  Never submit 0 — the dream must move the trauma needle.
+`.trim();
+};
+
 export const constructGeminiPrompt = (
   gameHistory: GameHistory,
   gameWorld: GameWorld,
@@ -456,6 +511,10 @@ export const constructGeminiPrompt = (
   // v1.21: Situation Recap — concise anchor at the top of dynamic context
   const situationRecap = buildSituationRecap(character, gameWorld, gameHistory.history);
 
+  // v1.19: Dream/Nightmare seed — only injected when the player is sleeping
+  // and trauma ≥ DREAM_TRAUMA_THRESHOLD. Empty string otherwise.
+  const dreamSeed = buildDreamSeed(character, gameWorld, userInput);
+
   // v1.21: Historical summary now lives in the dynamic prompt (top position)
   // instead of being appended to the end of 63KB system instructions where
   // lite models can't attend to it.
@@ -467,6 +526,7 @@ export const constructGeminiPrompt = (
   const promptString = `
 ${summaryBlock}
 ${sanitise(situationRecap)}
+${sanitise(dreamSeed ? `\n${dreamSeed}\n` : '')}
 
 [CONTEXT]
 ${sanitise(memoryContext)}

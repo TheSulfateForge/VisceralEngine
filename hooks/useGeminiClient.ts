@@ -133,6 +133,24 @@ export const useGeminiClient = () => {
         
         // Debug Log the injected reminder if active
         // v1.5: Pass entityCount and goalCount to match updated signature.
+        // v1.19 (Prompt Diet): Compute triggers for moved content so the
+        // reminder selector can inject full protocol text exactly when needed.
+        const dreamSeedActive = contextPrompt.includes('[DREAM SEED]');
+
+        const conditions = preCallState.character.conditions ?? [];
+        const HEAL_MARKER_RE = /\[\s*HEAL\s*:\s*T\s*\d+\s*\]/i;
+        const INJURY_KEYWORDS = /fracture|fractured|wound|bleeding|gash|laceration|sprain|broken|concuss|hemorrhage|severed|torn|dislocat/i;
+        const recentInjuryAdded = conditions.some(
+            c => INJURY_KEYWORDS.test(c) && !HEAL_MARKER_RE.test(c)
+        );
+
+        const languagesKnown = preCallState.character.languagesKnown ?? [];
+        // Foreign-speech reminder rotates in every 8 turns when the PC has a
+        // language list at all — rare signal, low token cost on off-turns.
+        const foreignSpeechPending = languagesKnown.length > 0
+            && preCallState.gameHistory.turnCount > 0
+            && preCallState.gameHistory.turnCount % 8 === 0;
+
         const activeReminders = getSectionReminders(
             preCallState.gameHistory.turnCount,
             preCallState.gameWorld.sceneMode,
@@ -142,7 +160,10 @@ export const useGeminiClient = () => {
             (preCallState.gameWorld.knownEntities ?? []).length,
             (preCallState.character.goals ?? []).length,
             (preCallState.gameWorld.emergingThreats ?? []).length,
-            !!preCallState.gameWorld.passiveAlliesDetected
+            !!preCallState.gameWorld.passiveAlliesDetected,
+            dreamSeedActive,
+            foreignSpeechPending,
+            recentInjuryAdded,
         );
         // Join multiple reminders into a single string for the prompt
         const activeReminder = activeReminders.length > 0 

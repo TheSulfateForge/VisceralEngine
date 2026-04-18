@@ -8,6 +8,7 @@ import {
     partitionConditions
 } from '../../contentValidation';
 import { validateConditionEntityCoherence } from '../../engine/entityLifecycle';
+import { removeHealedConditions } from '../../conditionUtils';
 
 /**
  * Step 10: Condition Pipeline (~100 lines from original)
@@ -93,6 +94,24 @@ export const conditionPipelineStep: PipelineStep = {
             ctx.debugLogs.push({
                 timestamp: new Date().toISOString(),
                 message: `[CONDITION EXPIRY] Removed ${expiredConditions.length} expired conditions`,
+                type: 'info'
+            });
+        }
+
+        // =====================================================================
+        // 2b. INJURY HEAL MARKER RESOLUTION (v1.19)
+        // ---------------------------------------------------------------------
+        // Conditions tagged "[HEAL:T<N>]" are removed once ctx.currentTurn >= N.
+        // Permanent injuries (amputation, severed nerve, etc.) omit the marker
+        // and are therefore never auto-removed here.
+        // =====================================================================
+
+        const healResult = removeHealedConditions(conditionUpdate, ctx.currentTurn);
+        if (healResult.removed.length > 0) {
+            conditionUpdate = healResult.kept;
+            ctx.debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[CONDITION HEAL] Turn ${ctx.currentTurn}: healed ${healResult.removed.length} condition(s) — ${healResult.removed.map(c => `"${c}"`).join(', ')}`,
                 type: 'info'
             });
         }

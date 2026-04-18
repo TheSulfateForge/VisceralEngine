@@ -75,17 +75,24 @@ export const ROLL_OUTCOMES: Record<RollOutcome, { min?: number; max?: number }> 
 } as const;
 
 // ============================================================================
-// BANNED NAMES (mirrors the FORBIDDEN VOCABULARY list in systemInstructions.ts)
-// Used by runtime validation to catch AI violations before they enter saved state.
-// When updating systemInstructions, update this list too.
+// BANNED NAMES — SINGLE SOURCE OF TRUTH (v1.19)
+// Union of every name previously listed in systemInstructions.ts and
+// constants.tsx. systemInstructions.ts now interpolates this list at runtime
+// via BANNED_NAMES_PROMPT_STRING so the prompt and runtime validator cannot
+// drift again. To ban a new name, add it here only.
 // ============================================================================
 
 export const BANNED_NAMES: readonly string[] = [
-  'Elara', 'Kaela', 'Lyra', 'Aria', 'Kaelith', 'Kaelin', 'Kael', 'Anya',
-  'Vex', 'Velarius', 'Kaelen', 'Fenris', 'Nyx', 'Vane', 'Thorne', 'Thorn',
-  'Valerius', 'Seraphina', 'Aurelia', 'Isolde', 'Rowan', 'Raven', 'Zephyr',
-  'Sable', 'Draven', 'Aethelgard', 'Kaelthas',
+  'Aelindra', 'Aethelgard', 'Alara', 'Aldric', 'Anya', 'Aria', 'Aurelia',
+  'Caelan', 'Caelum', 'Calen', 'Celeste', 'Draven', 'Elara', 'Eryndor',
+  'Fenris', 'Isolde', 'Kael', 'Kaela', 'Kaelen', 'Kaelin', 'Kaelith',
+  'Kaelthas', 'Lyra', 'Mira', 'Nyx', 'Raven', 'Rhea', 'Rowan', 'Sable',
+  'Seraphina', 'Soraya', 'Sylva', 'Thorn', 'Thorne', 'Tristan', 'Valerius',
+  'Vane', 'Velarius', 'Vex', 'Zara', 'Zephyr',
 ] as const;
+
+/** Comma-joined banned-name string for interpolation into SYSTEM_INSTRUCTIONS. */
+export const BANNED_NAMES_PROMPT_STRING: string = BANNED_NAMES.join(', ');
 
 // ============================================================================
 // CONDITION SEVERITY KEYWORDS

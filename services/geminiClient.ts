@@ -5,6 +5,8 @@ import { ChatMessage, Role, ModelResponseSchema, SCENE_MODES, SceneMode, Lightin
 import { RESPONSE_SCHEMA } from "../schemas/responseSchema";
 import { sanitiseHistory } from '../utils/nameResolver';
 import { getContextProfile } from '../config/engineConfig';
+import { systemInstructionCache } from './geminiCache';
+import { SYSTEM_INSTRUCTIONS } from '../systemInstructions';
 
 const REQUEST_TIMEOUT_MS = 60000;
 
@@ -260,12 +262,24 @@ export class GeminiClient {
     };
   }
 
+  /**
+   * v1.19: Streams the response from Gemini. When `onChunk` is provided, it is
+   * called on every delta with the *accumulated* text so far — useful for
+   * showing live "typing" in the UI. The final parsed ModelResponseSchema is
+   * returned only after the stream completes (we need the full JSON to parse).
+   *
+   * When `onChunk` is omitted, the behavior is identical to the legacy
+   * non-streaming send — same inputs, same outputs, same error handling —
+   * except that the transport under the hood is always streaming, which
+   * reduces first-byte latency on long generations.
+   */
   async sendMessage(
-      systemPrompt: string, 
-      history: ChatMessage[], 
+      systemPrompt: string,
+      history: ChatMessage[],
       historicalSummary?: string,
       nameMap?: Record<string, string>,  // v1.7
-      trailingReminder?: string | null   // v1.19: Appended to user message for recency compliance
+      trailingReminder?: string | null,  // v1.19: Appended to user message for recency compliance
+      onChunk?: (textSoFar: string) => void  // v1.19: Streaming callback
   ): Promise<ModelResponseSchema> {
     
     // v1.21: Model-adaptive context limits — lite models get shorter history
@@ -310,11 +324,33 @@ export class GeminiClient {
     // Gemini 2.5 → thinkingBudget (tokens), Gemini 3.x → thinkingLevel (0-3).
     const thinkingConfig = this.buildThinkingConfig();
 
-    const chat = this.ai.chats.create({
-      model: this.modelName,
-      history: apiHistory,
-      config: {
-        systemInstruction: fullSystemInstruction,
+    // v1.19: Context caching for the static SYSTEM_INSTRUCTIONS block.
+    // We detect whether the caller prefixed the system prompt with the
+    // SYSTEM_INSTRUCTIONS constant; if so, we split it off and cache it.
+    // The dynamic remainder is passed as the normal systemInstruction.
+    // This is best-effort — if the Gemini caches API isn't available for
+    // this model or the cache creation fails, we transparently fall back
+    // to the uncached path (see geminiCache.ts).
+    let cachedContentName: string | null = null;
+    let effectiveSystemInstruction = fullSystemInstruction;
+    if (fullSystemInstruction.startsWith(SYSTEM_INSTRUCTIONS)) {
+        const cacheResult = await systemInstructionCache.getOrCreate(
+            this.ai,
+            this.modelName,
+            SYSTEM_INSTRUCTIONS,
+        );
+        if (cacheResult) {
+            cachedContentName = cacheResult;
+            // Strip the cached portion (and the two-newline separator) from
+            // what we send inline — the model still "sees" SYSTEM_INSTRUCTIONS
+            // because the cache is attached via config.cachedContent below.
+            effectiveSystemInstruction = fullSystemInstruction
+                .slice(SYSTEM_INSTRUCTIONS.length)
+                .replace(/^\n{1,2}/, '');
+        }
+    }
+
+    const chatConfig: Record<string, unknown> = {
         temperature: parseFloat(localStorage.getItem('visceral_temperature') || '0.9'),
         topP: 0.95,
         topK: 40,
@@ -322,7 +358,31 @@ export class GeminiClient {
         responseMimeType: "application/json",
         responseSchema: RESPONSE_SCHEMA,
         ...(thinkingConfig ? { thinkingConfig } : {}),
-      },
+    };
+
+    if (cachedContentName) {
+        // When using cached content, the cached systemInstruction is already
+        // baked in — Google rejects requests that set both. We pass the
+        // dynamic remainder as a USER-role preamble at the top of history.
+        chatConfig.cachedContent = cachedContentName;
+        if (effectiveSystemInstruction.trim().length > 0) {
+            apiHistory.unshift({
+                role: Role.USER,
+                parts: [{ text: `[DYNAMIC CONTEXT]\n${effectiveSystemInstruction}` }],
+            });
+            apiHistory.splice(1, 0, {
+                role: Role.MODEL,
+                parts: [{ text: 'Acknowledged. Proceeding with current state.' }],
+            });
+        }
+    } else {
+        chatConfig.systemInstruction = effectiveSystemInstruction;
+    }
+
+    const chat = this.ai.chats.create({
+      model: this.modelName,
+      history: apiHistory,
+      config: chatConfig,
     });
 
     try {
@@ -333,16 +393,36 @@ export class GeminiClient {
           ? `${currentUserMsg.text}\n\n[SYSTEM REFRESH — MANDATORY COMPLIANCE]\n${trailingReminder}`
           : currentUserMsg.text;
 
-      const result = await this.withRetry(() => Promise.race([
-          chat.sendMessage({ message: userMessageWithReminder }),
-          new Promise<never>((_, reject) => 
+      // v1.19: Always use streaming transport. When `onChunk` is provided,
+      // we surface each accumulated delta to the caller; otherwise we simply
+      // accumulate and return the final text as before. Streaming reduces
+      // perceived latency dramatically on long generations.
+      const runStream = async (): Promise<string> => {
+          const chatAsStream = chat as unknown as {
+              sendMessageStream: (args: { message: string }) =>
+                  Promise<AsyncIterable<GenerateContentResponse>>;
+          };
+          const stream = await chatAsStream.sendMessageStream({ message: userMessageWithReminder });
+          let accumulated = '';
+          for await (const piece of stream) {
+              const delta = (piece as GenerateContentResponse).text ?? '';
+              if (delta) {
+                  accumulated += delta;
+                  if (onChunk) {
+                      try { onChunk(accumulated); } catch { /* swallow UI errors */ }
+                  }
+              }
+          }
+          return accumulated;
+      };
+
+      const text: string = await this.withRetry(() => Promise.race([
+          runStream(),
+          new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error("Request Timed Out")), REQUEST_TIMEOUT_MS)
           )
       ]));
 
-      const response = result as GenerateContentResponse; 
-      const text = response.text;
-      
       if (!text) throw new Error("Empty response from model.");
       
       const jsonStr = this.cleanJsonOutput(text);
@@ -368,7 +448,13 @@ export class GeminiClient {
     } catch (e: unknown) {
       console.error("Gemini Execution Error:", e);
       const errMsg = e instanceof Error ? e.message : String(e);
-      
+
+      // v1.19: If the failure was a cache miss (expired cachedContent name),
+      // drop the local entry so the next turn rebuilds it cleanly.
+      if (cachedContentName && (errMsg.includes('404') || errMsg.toLowerCase().includes('cached'))) {
+          systemInstructionCache.invalidate(this.modelName);
+      }
+
       if (errMsg.includes('503')) {
           return {
             narrative: `[SYSTEM ALERT] The neural lattice is currently overloaded (503). Retrying the connection usually resolves this. Please resubmit your command.`,

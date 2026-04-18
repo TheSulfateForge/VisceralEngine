@@ -2,10 +2,17 @@
 import React, { useState } from 'react';
 import { Character } from '../../types';
 
+type ListEditorField =
+    | 'inventory'
+    | 'relationships'
+    | 'conditions'
+    | 'goals'
+    | 'languagesKnown';
+
 interface ListEditorProps {
     label: string;
     items: string[];
-    field: keyof Pick<Character, 'inventory' | 'relationships' | 'conditions' | 'goals'>;
+    field: ListEditorField;
     character: Character;
     setCharacter: React.Dispatch<React.SetStateAction<Character>>;
     tooltip?: string;
@@ -13,20 +20,20 @@ interface ListEditorProps {
 
 export const ListEditor: React.FC<ListEditorProps> = ({ label, items, field, character, setCharacter, tooltip }) => {
     const [val, setVal] = useState('');
-    
-    const addItem = () => { 
-        if (!val.trim()) return; 
-        setCharacter((prev: Character) => ({ 
-            ...prev, 
-            [field]: [...prev[field], val.trim()] 
-        })); 
-        setVal(''); 
+
+    const addItem = () => {
+        if (!val.trim()) return;
+        setCharacter((prev: Character) => ({
+            ...prev,
+            [field]: [...((prev[field] as string[] | undefined) ?? []), val.trim()]
+        }));
+        setVal('');
     };
 
     const removeItem = (indexToRemove: number) => {
         setCharacter((prev: Character) => ({
             ...prev,
-            [field]: prev[field].filter((_, idx) => idx !== indexToRemove)
+            [field]: ((prev[field] as string[] | undefined) ?? []).filter((_, idx) => idx !== indexToRemove)
         }));
     };
 

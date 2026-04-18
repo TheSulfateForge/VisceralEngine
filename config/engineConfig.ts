@@ -271,6 +271,17 @@ export const getContextProfile = (modelName: string): ModelContextProfile =>
 // Prompt Construction
 // ---------------------------------------------------------------------------
 
+/** v1.19: Keywords that signal explicit sleep intent (not just rest).
+ *  Used to trigger the dream/nightmare sequence system when trauma ≥ 60. */
+export const SLEEP_KEYWORDS: readonly string[] = [
+    'sleep', 'pass out', 'bed down', 'go to bed', 'doze off',
+    'drift off', 'fall asleep', 'turn in', 'lay down for the night',
+    'close my eyes', 'rest through the night', 'sleep through',
+];
+
+/** v1.19: Minimum trauma value required to trigger a dream/nightmare. */
+export const DREAM_TRAUMA_THRESHOLD = 60;
+
 /** Keywords that indicate player downtime intent (skip threat escalation). */
 export const DOWNTIME_KEYWORDS = [
     'sleep', 'rest', 'wait', 'camp', 'hide',

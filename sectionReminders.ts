@@ -1,5 +1,15 @@
 // ============================================================================
-// SECTIONREMINDERS.TS — v1.10
+// SECTIONREMINDERS.TS — v1.19
+//
+// v1.19 changes (Prompt Diet):
+//   - Moved DREAM_PROTOCOL out of SYSTEM_INSTRUCTIONS — it now fires only
+//     when the runtime detects an active [DREAM SEED] in context.
+//   - Moved LANGUAGES_FOREIGN out of SYSTEM_INSTRUCTIONS — fires only when
+//     the caller signals that a foreign-language NPC interaction is pending.
+//   - Moved HEALING_TIMELINE out of SYSTEM_INSTRUCTIONS — fires only when an
+//     injury was just added this turn, or on a low-frequency rotation.
+//   This keeps the base systemInstruction short while still surfacing the
+//   full rule text exactly when it's needed.
 //
 // v1.3 changes:
 //   - Added BARGAIN_CHECK reminder.
@@ -329,6 +339,57 @@ FIDELITY CHECK: Is everything you are about to render grounded in established fa
 → NPCs do not have knowledge they could not have obtained through shown means.
 → The world does not bend to create convenient drama — it operates on its own logic.`,
 
+    DREAM_PROTOCOL: `[SYSTEM REMINDER: DREAM / NIGHTMARE PROTOCOL v1.19]
+A [DREAM SEED] block is present in this turn's context. The player character
+is asleep and traumatised enough for a dream to surface. Render this turn
+as a DREAM, not waking narrative.
+
+Required structure:
+1. Open the narrative with the explicit marker "[DREAM]".
+2. Riff on the seeded memory fragment — distorted, sensory, symbolic. This
+   is non-canonical: no location changes, no inventory changes, no legal or
+   faction consequences.
+3. DO NOT populate roll_request, bargain_request, emerging_threats, or
+   known_entity_updates. Dreams cannot seed waking-world state machines.
+4. End with the PC waking. Close with the marker "[/DREAM]".
+5. time_passed_minutes = 0-3 only (the waking moment; sleep time is already
+   counted by the engine).
+6. character_updates.trauma_delta is REQUIRED and must be non-zero:
+   +5 to +15 for re-traumatising or unresolved dreams.
+   -3 to -10 for dreams the character processes or integrates.
+7. Dreams may feature hallucinated figures, but they cost no seed budget and
+   cannot carry into waking play.`,
+
+    LANGUAGES_FOREIGN: `[SYSTEM REMINDER: LANGUAGE BARRIER PROTOCOL v1.19]
+The PC's \`languagesKnown\` list does not include a language present in this
+turn's likely NPC interaction. Render the exchange as follows:
+
+1. Write the dialogue the way the PC PERCEIVES it — cadence, tone, emotional
+   register, volume — but NO intelligible semantic content. Do NOT smuggle
+   the literal meaning into the narrative.
+2. npc_interaction.subtext MUST carry every signal the PC can infer from
+   body language, voice stress, facial tells, and biological cues.
+3. If a known NPC translates, the translation is INDIRECT speech through
+   that NPC — subject to their biases, omissions, and goals.
+4. A PC who studies / is coached can add a language to languagesKnown via
+   character_updates. Do not unilaterally grant comprehension.`,
+
+    HEALING_TIMELINE: `[SYSTEM REMINDER: INJURY HEALING TIMELINE v1.19]
+When you add a healing injury condition this turn, append a turn marker
+EXACTLY in this format:
+    "Fractured Forearm [HEAL:T<N>]"   where N = turn this heals by.
+
+Typical horizons:
+- Bruising / minor strain:      10–25 turns
+- Sprain / deep cut:             30–60 turns
+- Fracture / serious laceration: 80–150 turns
+- Major organ trauma:           150–300 turns
+- Permanent (amputation, severed nerve, maiming): OMIT the [HEAL:T] marker.
+
+The engine auto-removes conditions whose [HEAL:T<N>] marker is ≤ current
+turn. Do NOT attach [HEAL:T] to truly permanent injuries, NPC/location-bound
+conditions, or Devil's Bargain costs — those are intentionally sticky.`,
+
     CONDITION_AUDIT: `[SYSTEM REMINDER: CONDITION AUDIT — MANDATORY PRUNE REQUIRED]
 The character's condition list has exceeded 25 entries. MANDATORY PRUNE IS ACTIVE.
 
@@ -383,9 +444,22 @@ export const getSectionReminders = (
     entityCount: number = 0,
     goalCount: number = 999,
     emergingThreatsCount: number = 0,
-    passiveAlliesDetected: boolean = false
+    passiveAlliesDetected: boolean = false,
+    // v1.19 (Prompt Diet): conditional content moved out of SYSTEM_INSTRUCTIONS.
+    dreamSeedActive: boolean = false,
+    foreignSpeechPending: boolean = false,
+    recentInjuryAdded: boolean = false,
 ): string[] => {
     const reminders: string[] = [];
+
+    // -----------------------------------------------------------------------
+    // BAND 0: Turn-shape overrides (max 1) — these CHANGE the output format
+    // and must win over everything else.
+    // -----------------------------------------------------------------------
+    if (dreamSeedActive) {
+        reminders.push(REMINDERS.DREAM_PROTOCOL);
+        return reminders; // Dream turns are self-contained — no other reminders apply.
+    }
 
     // -----------------------------------------------------------------------
     // BAND 1: Critical (max 1) — conditions that demand immediate attention
@@ -394,6 +468,14 @@ export const getSectionReminders = (
         reminders.push(REMINDERS.CONDITION_AUDIT);
     } else if (passiveAlliesDetected) {
         reminders.push(REMINDERS.LOGISTICS_CHECK);
+    } else if (foreignSpeechPending) {
+        // Foreign-language NPC interaction requires strict rendering rules.
+        reminders.push(REMINDERS.LANGUAGES_FOREIGN);
+    } else if (recentInjuryAdded) {
+        // Healing timeline reminder when the model has just added an injury —
+        // helps it remember to append the [HEAL:T<N>] marker next turn if it
+        // hasn't already.
+        reminders.push(REMINDERS.HEALING_TIMELINE);
     }
 
     // -----------------------------------------------------------------------
@@ -478,12 +560,27 @@ export const getSectionReminder = (
     entityCount: number = 0,
     goalCount: number = 999,
     emergingThreatsCount: number = 0,
-    passiveAlliesDetected: boolean = false  // v1.10
+    passiveAlliesDetected: boolean = false,  // v1.10
+    dreamSeedActive: boolean = false,        // v1.19
+    foreignSpeechPending: boolean = false,   // v1.19
+    recentInjuryAdded: boolean = false,      // v1.19
 ): string | null => {
+    // Priority -2 (Turn-shape override): Dream turns change the whole output
+    // structure and must beat everything else.
+    if (dreamSeedActive) return REMINDERS.DREAM_PROTOCOL;
+
     // Priority -1 (Absolute): Mandatory Condition Audit when conditions > 30
     if (conditionsCount > 30) {
         return REMINDERS.CONDITION_AUDIT;
     }
+
+    // Priority -0.75 (v1.19): Language barrier — foreign speech must be
+    // rendered correctly or the scene breaks.
+    if (foreignSpeechPending) return REMINDERS.LANGUAGES_FOREIGN;
+
+    // Priority -0.6 (v1.19): Healing marker reminder when an injury was
+    // just added — low-cost, only fires on injury turns.
+    if (recentInjuryAdded) return REMINDERS.HEALING_TIMELINE;
 
     if (turnCount < 3) return null;
 
