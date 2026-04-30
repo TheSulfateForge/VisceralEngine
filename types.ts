@@ -792,6 +792,12 @@ export interface GameWorld {
     // Stream 7: World Seeds
     worldRules?: string[];
     worldSeedId?: WorldSeedId;
+    /**
+     * Top-level world tags hydrated from the active WorldSeed (e.g. "high-fantasy",
+     * "matriarchal", "gritty"). Surfaced in the runtime prompt as tone/genre
+     * anchors so the AI doesn't drift away from the seed's setting.
+     */
+    worldTags?: string[];
 }
 
 export interface WorldTime {

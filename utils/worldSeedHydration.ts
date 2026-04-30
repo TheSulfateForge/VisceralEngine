@@ -78,6 +78,13 @@ export function hydrateWorldSeed(seed: WorldSeed): Partial<GameWorld> {
   // Convert rules to string array
   const worldRules = seed.rules.map(r => `${r.name}: ${r.description}`);
 
+  // Top-level world tags — copied verbatim so the runtime prompt can use
+  // them as tone/genre anchors. De-duplicated and trimmed defensively in
+  // case the seed picked up duplicates from successive Expand passes.
+  const worldTags = Array.from(
+    new Set((seed.tags || []).map(t => t.trim()).filter(Boolean))
+  );
+
   return {
     locationGraph,
     lore,
@@ -85,6 +92,7 @@ export function hydrateWorldSeed(seed: WorldSeed): Partial<GameWorld> {
     factions,
     factionConflicts: [],
     worldRules,
+    worldTags,
     worldSeedId: seed.id,
   };
 }

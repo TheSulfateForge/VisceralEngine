@@ -168,6 +168,9 @@ export const usePersistence = () => {
       if (world.worldSeedId === undefined) {
         world.worldSeedId = undefined;
       }
+      if (world.worldTags === undefined) {
+        world.worldTags = [];
+      }
 
       setGameHistory(history);
       setGameWorld(world);

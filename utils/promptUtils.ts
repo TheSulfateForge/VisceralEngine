@@ -504,6 +504,20 @@ export const constructGeminiPrompt = (
     ? `[WORLD RULES]\n${gameWorld.worldRules.map(rule => `- ${rule}`).join('\n')}`
     : '';
 
+  // Stream 7b: World Tone/Genre Anchors. The seed's top-level tags
+  // (e.g. "high-fantasy", "matriarchal", "gritty", "magitech") are
+  // load-bearing setting constraints, not flavor. The framing below
+  // pushes the model to honor them when choosing tone, vocabulary,
+  // technology level, and social defaults — and to refuse contradictions.
+  const worldTagsBlock = gameWorld.worldTags && gameWorld.worldTags.length > 0
+    ? `[WORLD TONE / GENRE ANCHORS]
+This world is fundamentally: ${gameWorld.worldTags.join(', ')}.
+- Treat these tags as load-bearing tone and setting constraints, not flavor.
+- Vocabulary, technology level, aesthetics, and social defaults must align with them.
+- When choosing between narrative directions, pick the one that more strongly expresses these anchors.
+- Do NOT introduce elements that contradict them (e.g. modern tech in a medieval setting, patriarchal defaults in a matriarchal world, levity in a grimdark one).`
+    : '';
+
   // v1.7: Final sanitisation pass — ensure no banned names leak into prompt
   const nameMap = gameWorld.bannedNameMap ?? {};
   const sanitise = (s: string) => applyExistingMap(s, nameMap);
@@ -549,6 +563,8 @@ ${sanitise(pacingInstruction)}
 ${sanitise(traumaBlock)}
 
 ${sanitise(factionBlock)}
+
+${sanitise(worldTagsBlock ? `\n${worldTagsBlock}\n` : '')}
 
 ${sanitise(worldRulesBlock ? `\n${worldRulesBlock}\n` : '')}
 
