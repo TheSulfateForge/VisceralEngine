@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import type { WorldSeed, WorldSeedId } from '../../types';
 import { useWorldSeeds } from '../../hooks/useWorldSeeds';
 import { WorldForge } from './WorldForge';
+import { WorldSeedEditor } from './WorldSeedEditor';
 
 interface WorldSelectorProps {
   selectedId?: WorldSeedId;
@@ -12,6 +13,8 @@ export const WorldSelector: React.FC<WorldSelectorProps> = ({ selectedId, onSele
   const { seeds, saveWorldSeed, deleteWorldSeed } = useWorldSeeds();
   const [showForge, setShowForge] = useState(false);
   const [editingSeed, setEditingSeed] = useState<WorldSeed | undefined>(undefined);
+  const [showFineEditor, setShowFineEditor] = useState(false);
+  const [fineEditTarget, setFineEditTarget] = useState<WorldSeed | undefined>(undefined);
 
   const selectedSeed = selectedId ? seeds.find(s => s.id === selectedId) : undefined;
 
@@ -92,6 +95,16 @@ export const WorldSelector: React.FC<WorldSelectorProps> = ({ selectedId, onSele
               Expand
             </button>
             <button
+              onClick={() => {
+                setFineEditTarget(selectedSeed);
+                setShowFineEditor(true);
+              }}
+              className="flex-1 px-3 py-2 text-[9px] font-bold uppercase tracking-widest bg-red-900/10 border border-red-900/30 text-red-400 hover:bg-red-900 hover:text-white transition-all rounded"
+              title="View parsed RAG contents and add/edit/remove items and tags"
+            >
+              Edit Seed
+            </button>
+            <button
               onClick={() => onSelect(undefined)}
               className="flex-1 px-3 py-2 text-[9px] font-bold uppercase tracking-widest border border-gray-700 text-gray-500 hover:bg-gray-800 transition-all rounded"
             >
@@ -164,6 +177,22 @@ export const WorldSelector: React.FC<WorldSelectorProps> = ({ selectedId, onSele
         }}
         onSave={editingSeed ? handleExpand : handleCreateNew}
         existingSeed={editingSeed}
+      />
+
+      {/* Fine-grained Seed Editor */}
+      <WorldSeedEditor
+        show={showFineEditor}
+        seed={fineEditTarget}
+        onClose={() => {
+          setShowFineEditor(false);
+          setFineEditTarget(undefined);
+        }}
+        onSave={async updated => {
+          // saveWorldSeed accepts the existing id and replaces the record in place.
+          const persisted = await saveWorldSeed(updated);
+          // Keep the selection in sync so the panel reflects the new counts.
+          if (selectedId === persisted.id) onSelect(persisted);
+        }}
       />
     </div>
   );
