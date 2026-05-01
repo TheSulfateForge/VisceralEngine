@@ -41,12 +41,18 @@ interface DecompositionResult {
 
 const SYSTEM_INSTRUCTION_DECOMPOSE =
   "You are a precise extraction engine. Faithfully decompose world descriptions into structured JSON. " +
-  "Prefer granularity over compression — every distinct concept, faction, rule, and mechanic in the " +
-  "source MUST appear as its own entry. Never summarize multiple topics into one entry. Output only valid JSON.";
+  "PRESERVE SOURCE WORDING VERBATIM in every text field — descriptions, personalities, goals, lore content, " +
+  "and rule text must copy the source as written. Never paraphrase, summarize, condense, or drop sentences. " +
+  "If the source devotes four sentences to an NPC's appearance, your description field has four sentences. " +
+  "Prefer granularity over compression — every distinct concept, faction, rule, NPC, location, and mechanic " +
+  "in the source MUST appear as its own entry. Never summarize multiple topics into one entry. " +
+  "When the source uses '=== Name ===' headers, treat each header as a separate top-level entity to extract. " +
+  "Output only valid JSON.";
 
 const SYSTEM_INSTRUCTION_EXPAND =
   "You are a precise world-building assistant. Merge new content into existing world data without " +
-  "duplicating entries. Update existing entries when new detail is provided. Output only valid JSON.";
+  "duplicating entries. Update existing entries when new detail is provided. PRESERVE SOURCE WORDING VERBATIM " +
+  "in every text field — never paraphrase or condense. Output only valid JSON.";
 
 function buildDecomposePrompt(description: string): string {
   return `You are a world-building extraction engine. Your job is to faithfully decompose a world description into structured data for a retrieval-augmented generation (RAG) database.
@@ -54,24 +60,42 @@ function buildDecomposePrompt(description: string): string {
 WORLD DESCRIPTION:
 ${description}
 
+VERBATIM PRESERVATION (highest priority):
+- Every text field (descriptions, personalities, goals, lore content, rule descriptions) MUST preserve the source wording verbatim or as close to verbatim as possible.
+- Do NOT paraphrase, summarize, or condense. Do NOT drop sentences. Do NOT collapse multiple sentences into one.
+- If the source has four sentences on an NPC's appearance, your "description" field has those four sentences.
+- If the source lists three goals as separate bullet/sentence items, your "goals" array has three entries — copy each verbatim.
+- Personality fields with multiple traits ("Calm. Patient. Slow to surprise. Believes hospitality is the cheapest defense...") must include EVERY trait — do not drop the trailing beliefs/quirks.
+- Faction fields (territory, resources, dispositions, key members) must include EVERY entry the source lists, with parenthetical qualifiers preserved.
+- Location connections: if the source lists multiple travel modes for the same destination, emit one connection per mode.
+
+HEADER CONVENTION:
+- The source uses "=== Name ===" as a header for each entity. Every header MUST become an entry. Do not skip any.
+- Classify each "=== Name ===" section by the metadata fields in its body:
+    • "Role:" / "Personality:" / "Goals:" → NPC
+    • "Territory:" / "Influence:" / "Dispositions:" / "Leader:" → Faction
+    • "Connections:" / "Population" / "Controlling Faction:" → Location
+    • Explicit "Rule:" or mechanical "must / cannot / always" wording with no other typed fields → Rule
+    • Otherwise (or "Category:" line present) → Lore
+
 EXTRACTION RULES:
 - Extract ALL explicitly stated information. Do not omit, merge, or compress details that are distinct in the source.
 - Each lore entry must cover exactly ONE distinct concept. Never combine multiple topics (e.g., six magic types) into a single entry — each gets its own entry.
 - Each lore keyword must be unique and specific enough to distinguish it from every other entry (e.g., "Fire Magic" not "Magic Types", "Hucow Biology" not "Races").
-- Lore content should be 1-3 sentences of concrete, retrievable detail — not vague summaries.
+- Lore content must include EVERY sentence the source devotes to that topic — never reduce to a one-line summary.
 - Extract ALL factions/powers/nations described. Do not cap at an arbitrary number.
-- Extract ALL mechanical rules described (magic systems, restrictions, laws, policies, dungeon mechanics, tracking/communication limits, biological traits) — each as its own entry.
+- Extract ALL mechanical rules described (magic systems, restrictions, laws, policies, dungeon mechanics, tracking/communication limits, biological traits) — each as its own entry, with the full rule text.
 - Extract ALL races/species with their unique traits, abilities, and limitations as separate lore entries.
-- Lore categories are freeform — use whatever category best fits the content (e.g., history, geography, culture, magic, technology, religion, economy, law, biology, military, social, dungeon, combat, faction-detail, racial-trait, etc.). Do NOT force entries into ill-fitting categories.
-- Location tags, travel modes, and faction resource types are freeform — use whatever terms best fit the setting described (fantasy, sci-fi, modern, or otherwise).
-- Only invent details to fill structural gaps (e.g., travel times between locations, NPC personality traits) — never invent lore, factions, or rules that contradict or dilute what is explicitly described.
+- Lore categories are freeform — if the source supplies "Category: X", use X exactly. Otherwise pick the best fit.
+- Location tags, travel modes, and faction resource types are freeform — use whatever terms appear in the source.
+- Only invent details to fill structural gaps (e.g., travel times not stated, default NPC personality when none provided) — never invent lore, factions, rules, or NPC traits that contradict or dilute the source.
 
 QUANTITY GUIDANCE (scale with input detail):
-- Locations: Extract every named location. Invent connections to form a connected graph.
-- Factions: Extract every named faction, power, nation, or political entity. No maximum.
-- Lore: Create one entry per distinct concept. A detailed world may produce 30-80+ entries. Err heavily on the side of more granular entries rather than fewer compressed ones. If in doubt, split rather than merge.
-- NPCs: 1-2 per faction minimum. Invent names and traits consistent with the faction's culture if not provided.
-- Rules: Extract every stated mechanical rule, restriction, or law as its own entry. A complex world may have 10-30+ distinct rules.
+- Locations: Extract every named location and every "===" header that classifies as a location.
+- Factions: Extract every named faction, power, nation, political entity, or "===" header with Territory/Influence/Dispositions.
+- Lore: Create one entry per distinct concept. A detailed world may produce 30-80+ entries. Err heavily on the side of more granular entries.
+- NPCs: Extract every "===" header with Role/Personality/Goals fields. Do NOT cap at faction membership — every named character with a profile is an NPC entry. If the source has 13 NPC profiles, your output has 13 NPCs.
+- Rules: Extract every stated mechanical rule, restriction, or law as its own entry, with the full rule text preserved.
 - Tags: 3-10 tags describing genre, tone, and setting.
 
 Return ONLY the JSON object, no other text.`;
@@ -83,13 +107,29 @@ function buildPass1Prompt(description: string): string {
 WORLD DESCRIPTION:
 ${description}
 
+VERBATIM PRESERVATION (highest priority):
+- Every text field (location descriptions, faction descriptions, NPC descriptions, NPC personalities, NPC goals) MUST preserve the source wording verbatim or as close to verbatim as possible.
+- Do NOT paraphrase, summarize, or condense. Do NOT drop sentences. Do NOT collapse multiple sentences into one.
+- If the source has four sentences on an NPC's appearance, your "description" field has those four sentences.
+- If the source lists three goals, your "goals" array has three entries — each verbatim.
+- Faction territory, resources, dispositions, and key members must include EVERY entry the source lists, with parenthetical qualifiers preserved.
+- Location connections: if the source lists multiple travel modes for the same destination, emit one connection per mode.
+
+HEADER CONVENTION:
+- The source uses "=== Name ===" as a header. Every header that is a Location, Faction, or NPC MUST become an entry. Do not skip any.
+- Classify each "=== Name ===" section by its body fields:
+    • "Role:" / "Personality:" / "Goals:" → NPC
+    • "Territory:" / "Influence:" / "Dispositions:" / "Leader:" → Faction
+    • "Connections:" / "Population" / "Controlling Faction:" → Location
+    • Other headers → ignore in this pass (they are lore/rules, handled in Pass 2)
+
 EXTRACTION RULES:
 - Extract ALL locations, factions, NPCs, and world tags. This is PASS 1 — lore and rules will be extracted separately.
-- Extract every named location. Invent connections to form a connected graph.
-- Extract every named faction, power, nation, or political entity. No maximum. Include full detail on governance, territory, resources, and inter-faction dispositions.
-- Generate 1-2 NPCs per faction minimum, with names and traits consistent with the faction's culture.
-- Location tags, travel modes, and faction resource types are freeform — use whatever terms best fit the described setting.
-- Only invent details to fill structural gaps — never invent content that contradicts the source.
+- Extract every named location and every location-classified "===" header.
+- Extract every named faction and every faction-classified "===" header. Include full detail on governance, territory, resources, and inter-faction dispositions.
+- Extract every NPC-classified "===" header — copy Role, Description, Personality, and Goals VERBATIM. Do NOT cap at "1-2 per faction"; if the source has 13 NPC profiles, output 13 NPCs.
+- Location tags, travel modes, and faction resource types are freeform — use the source's terms.
+- Only invent details to fill structural gaps (e.g., travel times not stated) — never invent content that contradicts the source.
 - Leave lore and rules arrays EMPTY (they will be filled in Pass 2).
 
 Return ONLY the JSON object, no other text.`;
@@ -104,15 +144,25 @@ ${description}
 ALREADY EXTRACTED (for reference — do not duplicate these as lore):
 ${pass1Summary}
 
+VERBATIM PRESERVATION (highest priority):
+- Lore "content" and rule "description" MUST preserve the source wording verbatim or as close to verbatim as possible.
+- Do NOT paraphrase, summarize, or condense. Include EVERY sentence the source devotes to the topic, with all numbers, examples, baselines, and exceptions intact.
+
+HEADER CONVENTION:
+- The source uses "=== Name ===" as a header. Every header that is NOT already extracted as a Location/Faction/NPC in Pass 1 MUST become a Lore or Rule entry.
+- Classify each remaining "===" header:
+    • Mechanical rule, restriction, or biological/magical limit (uses words like "must", "cannot", "always", "is", with concrete mechanics) → Rule
+    • Otherwise (concept, race, system, history, culture, "Category:" line) → Lore
+
 EXTRACTION RULES:
 - This pass extracts ONLY lore entries and mechanical rules. Leave locations, factions, npcs, and tags as empty arrays.
 - Each lore entry must cover exactly ONE distinct concept. Never combine multiple topics into a single entry.
-- Each lore keyword must be unique and specific enough to distinguish it from every other entry.
-- Lore content should be 1-3 sentences of concrete, retrievable detail — not vague summaries.
-- Lore categories are freeform — use whatever category best fits (history, geography, culture, magic, technology, religion, economy, law, biology, military, social, dungeon, combat, faction-detail, racial-trait, etc.).
-- Extract ALL mechanical rules, restrictions, laws, policies, dungeon mechanics, biological traits — each as its own rule entry.
+- Each lore keyword must be unique. If the source uses a "===" header for the topic, use that header verbatim as the keyword.
+- Lore content must include EVERY sentence the source devotes to it — no one-line summaries.
+- Lore categories: if the source supplies "Category: X", use X exactly. Otherwise pick the best fit.
+- Extract ALL mechanical rules, restrictions, laws, policies, dungeon mechanics, biological traits — each as its own rule entry, with the full rule text preserved.
 - Extract ALL races/species with their unique traits as separate lore entries.
-- Extract ALL magic types/elements/systems as separate lore entries (not one combined entry).
+- Extract ALL magic types/elements/systems as separate lore entries.
 - Extract ALL dungeon mechanics, trap types, loot systems, monster behaviors as separate entries.
 - Extract ALL legal systems, treaties, social structures as separate entries.
 
@@ -132,10 +182,15 @@ ${existingContext}
 ADDITIONAL DESCRIPTION TO INTEGRATE:
 ${additionalDescription}
 
+VERBATIM PRESERVATION (highest priority):
+- For NEW entries (or new detail added to existing entries), preserve the source wording verbatim. Do NOT paraphrase or summarize.
+- When updating an existing entry with new detail, append or splice in the new wording rather than rewriting the existing text in your own words.
+
 RULES:
 - Merge the new content into the existing world. Return the COMPLETE updated world as a JSON object.
 - Deduplicate entries — if a location/NPC/faction/lore entry already exists, update it rather than creating a duplicate.
 - New lore entries must each cover exactly ONE distinct concept with a unique keyword.
+- The source uses "=== Name ===" headers. Every new header MUST become an entry, classified as NPC / Faction / Location / Rule / Lore by its body fields (Role/Personality/Goals → NPC; Territory/Influence/Dispositions → Faction; Connections/Population → Location; mechanical "must/cannot" with no other typed fields → Rule; otherwise Lore).
 - Lore categories, location tags, travel modes, and faction resources are freeform — match the setting.
 - Do not remove any existing entries unless the new description explicitly contradicts them.
 
@@ -146,8 +201,90 @@ Return ONLY the JSON object, no other text.`;
  * Validation helpers
  * ──────────────────────────────────────────────────────────────────────────── */
 
+type EntityKind = 'npc' | 'faction' | 'location' | 'rule' | 'lore';
+
+interface ParsedHeader {
+  name: string;
+  kind: EntityKind;
+  /** Lowercased, normalized name used for matching. */
+  key: string;
+}
+
+/**
+ * Parse `=== Name ===` headers (and legacy `[FACTION — Name]` headers) from a
+ * world description and classify each by the metadata fields in its body.
+ *
+ * Classification heuristics, applied to the section body (text between this
+ * header and the next):
+ *   - NPC      : has `Role:` AND (`Personality:` OR `Goals:`)
+ *   - Faction  : has `Territory:` OR `Dispositions:` OR `Influence:`
+ *   - Location : has `Connections:` OR `Controlling Faction:` OR `Population`
+ *   - Rule     : explicit `Rule:` marker, OR no other typed fields and the
+ *                body reads as a single mechanical statement
+ *   - Lore     : default fallback (also if `Category:` line is present)
+ */
+function parseSourceHeaders(description: string): ParsedHeader[] {
+  const headers: ParsedHeader[] = [];
+  const normalize = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
+
+  // Match === Name === headers and capture position
+  const headerRegex = /^[ \t]*={3,}\s*(.+?)\s*={3,}[ \t]*$/gm;
+  const matches: { name: string; start: number; end: number }[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = headerRegex.exec(description)) !== null) {
+    matches.push({ name: m[1].trim(), start: m.index, end: m.index + m[0].length });
+  }
+
+  for (let i = 0; i < matches.length; i++) {
+    const cur = matches[i];
+    const next = matches[i + 1];
+    const body = description.slice(cur.end, next ? next.start : description.length);
+    const kind = classifyBody(body);
+    headers.push({ name: cur.name, kind, key: normalize(cur.name) });
+  }
+
+  // Legacy [FACTION — Name] support
+  const factionBracket = description.match(/\[FACTION[^\[\]]*\]/gi) ?? [];
+  for (const h of factionBracket) {
+    const nm = h.match(/FACTION\s*[—\-–:]\s*(.+?)\s*\]/i);
+    if (nm) {
+      const name = nm[1].trim();
+      headers.push({ name, kind: 'faction', key: normalize(name) });
+    }
+  }
+
+  return headers;
+}
+
+function classifyBody(body: string): EntityKind {
+  const has = (re: RegExp) => re.test(body);
+
+  // NPC markers (most specific first)
+  if (has(/^\s*Role\s*:/im) && (has(/^\s*Personality\s*:/im) || has(/^\s*Goals?\s*:/im))) {
+    return 'npc';
+  }
+  // Faction markers
+  if (has(/^\s*Territory\s*:/im) || has(/^\s*Dispositions?\s*:/im) || has(/^\s*Influence\s*:/im) || has(/^\s*Key\s*Members?\s*:/im)) {
+    return 'faction';
+  }
+  // Location markers
+  if (has(/^\s*Connections?\s*:/im) || has(/^\s*Controlling\s*Faction\s*:/im) || has(/Population\s*[:~]?\s*[\d,]/i)) {
+    return 'location';
+  }
+  // Explicit rule marker
+  if (has(/^\s*Rule\s*:/im)) {
+    return 'rule';
+  }
+  // Default: lore
+  return 'lore';
+}
+
 interface ValidationReport {
+  npcsMissing: string[];
   factionsMissing: string[];
+  locationsMissing: string[];
+  loreMissing: string[];
+  rulesMissing: string[];
   loreTooFew: boolean;
   rulesTooFew: boolean;
   expectedLoreMin: number;
@@ -156,36 +293,70 @@ interface ValidationReport {
   actualRules: number;
 }
 
+/** Fuzzy contains-match used for header-vs-extracted-name comparison. */
+function nameMatches(headerKey: string, candidates: Set<string>): boolean {
+  if (candidates.has(headerKey)) return true;
+  for (const c of candidates) {
+    if (c.includes(headerKey) || headerKey.includes(c)) return true;
+    // Strip leading title words from the header (Mayor, Den-Mother, Hearth-Empress, etc.)
+    // and try again. Titles appear before the first space-separated word that looks like a proper noun.
+    const stripped = headerKey.replace(/^(?:mayor|hearth-empress|den-mother|pack-mother|harbor-matriarch|matriarch|commander|spinner|greatmother|velvet\s+sovereign|the\s+|sir|lady|lord|captain|general|king|queen|prince|princess|duke|duchess|baron|baroness|count|countess|chief|elder|high\s+\w+)\s+/i, '');
+    if (stripped !== headerKey && (c.includes(stripped) || stripped.includes(c))) return true;
+  }
+  return false;
+}
+
 /**
  * Heuristically check whether the extraction captured enough of the source material.
  * Returns a report; the caller decides whether to retry.
  */
 function validateExtraction(description: string, result: DecompositionResult): ValidationReport {
-  const text = description.toUpperCase();
+  const headers = parseSourceHeaders(description);
 
-  // Count [FACTION — ...] style headers or similar patterns
-  const factionHeaders = description.match(/\[FACTION[^[\]]*\]/gi) ?? [];
-  const extractedFactionNames = new Set(result.factions.map(f => f.name.toUpperCase()));
-  const factionsMissing: string[] = [];
-  for (const header of factionHeaders) {
-    // Extract faction name from header like "[FACTION — The Verdant Compact]"
-    const nameMatch = header.match(/FACTION\s*[—\-–:]\s*(.+?)\s*\]/i);
-    if (nameMatch) {
-      const name = nameMatch[1].trim().toUpperCase();
-      const found = [...extractedFactionNames].some(
-        en => en.includes(name) || name.includes(en)
-      );
-      if (!found) factionsMissing.push(nameMatch[1].trim());
+  const normalize = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
+  const npcKeys      = new Set(result.npcs.map(n => normalize(n.name ?? '')));
+  const factionKeys  = new Set(result.factions.map(f => normalize(f.name ?? '')));
+  const locationKeys = new Set(result.locations.map(l => normalize(l.name ?? '')));
+  const loreKeys     = new Set(result.lore.map(l => normalize(l.keyword ?? '')));
+  const ruleKeys     = new Set(result.rules.map(r => normalize(r.name ?? '')));
+
+  const npcsMissing: string[]      = [];
+  const factionsMissing: string[]  = [];
+  const locationsMissing: string[] = [];
+  const loreMissing: string[]      = [];
+  const rulesMissing: string[]     = [];
+
+  for (const h of headers) {
+    switch (h.kind) {
+      case 'npc':
+        if (!nameMatches(h.key, npcKeys)) npcsMissing.push(h.name);
+        break;
+      case 'faction':
+        if (!nameMatches(h.key, factionKeys)) factionsMissing.push(h.name);
+        break;
+      case 'location':
+        if (!nameMatches(h.key, locationKeys)) locationsMissing.push(h.name);
+        break;
+      case 'rule':
+        if (!nameMatches(h.key, ruleKeys)) rulesMissing.push(h.name);
+        break;
+      case 'lore':
+        if (!nameMatches(h.key, loreKeys)) loreMissing.push(h.name);
+        break;
     }
   }
 
-  // Estimate expected lore count from word count
+  // Estimate expected lore/rules count from word count (kept as a backstop)
   const wordCount = description.split(/\s+/).length;
   const expectedLoreMin = Math.max(10, Math.floor(wordCount / 150));
   const expectedRulesMin = Math.max(3, Math.floor(wordCount / 500));
 
   return {
+    npcsMissing,
     factionsMissing,
+    locationsMissing,
+    loreMissing,
+    rulesMissing,
     loreTooFew: result.lore.length < expectedLoreMin,
     rulesTooFew: result.rules.length < expectedRulesMin,
     expectedLoreMin,
@@ -198,19 +369,33 @@ function validateExtraction(description: string, result: DecompositionResult): V
 function buildRetryPrompt(description: string, currentResult: DecompositionResult, report: ValidationReport): string {
   const issues: string[] = [];
 
+  if (report.npcsMissing.length > 0) {
+    issues.push(`MISSING NPCS — These named NPC profiles appear under "=== Name ===" headers in the source but are NOT in the extracted output: ${report.npcsMissing.join('; ')}. Extract every one. Copy the Role, Description, Personality, and Goals fields VERBATIM from the source — do not paraphrase or drop sentences.`);
+  }
   if (report.factionsMissing.length > 0) {
-    issues.push(`MISSING FACTIONS — The following factions are explicitly described but were not extracted: ${report.factionsMissing.join(', ')}. Extract them now.`);
+    issues.push(`MISSING FACTIONS — These factions appear under "=== Name ===" headers but were not extracted: ${report.factionsMissing.join('; ')}. Extract them now with the full Description, Territory, Influence, Resources, Dispositions, Leader, and Key Members from the source — VERBATIM.`);
   }
-  if (report.loreTooFew) {
-    issues.push(`INSUFFICIENT LORE — You produced ${report.actualLore} lore entries but the source material warrants at least ${report.expectedLoreMin}. Re-read the source and extract every distinct concept you missed. Each magic type, race, dungeon mechanic, legal system, biological trait, and social structure should be its own entry.`);
+  if (report.locationsMissing.length > 0) {
+    issues.push(`MISSING LOCATIONS — These locations appear under "=== Name ===" headers but were not extracted: ${report.locationsMissing.join('; ')}. Extract them with the full Description, Tags, Connections, and Controlling Faction — VERBATIM.`);
   }
-  if (report.rulesTooFew) {
-    issues.push(`INSUFFICIENT RULES — You produced ${report.actualRules} rules but the source material warrants at least ${report.expectedRulesMin}. Extract every mechanical rule, restriction, policy, and law as a separate entry.`);
+  if (report.loreMissing.length > 0) {
+    issues.push(`MISSING LORE — These "=== Name ===" headers describe lore concepts that were not extracted: ${report.loreMissing.join('; ')}. Add one lore entry per missing header, with the keyword set to the header text and content set to the EVERY sentence the source devotes to it (verbatim).`);
+  }
+  if (report.rulesMissing.length > 0) {
+    issues.push(`MISSING RULES — These "=== Name ===" headers describe mechanical rules that were not extracted: ${report.rulesMissing.join('; ')}. Add one rule entry per header with the full rule text verbatim.`);
+  }
+  if (report.loreTooFew && report.loreMissing.length === 0) {
+    issues.push(`INSUFFICIENT LORE — You produced ${report.actualLore} lore entries but the source warrants at least ${report.expectedLoreMin}. Re-read the source and split any compressed entries — each magic type, race, dungeon mechanic, legal system, biological trait, and social structure should be its own entry.`);
+  }
+  if (report.rulesTooFew && report.rulesMissing.length === 0) {
+    issues.push(`INSUFFICIENT RULES — You produced ${report.actualRules} rules but the source warrants at least ${report.expectedRulesMin}. Extract every mechanical rule, restriction, policy, and law as a separate entry.`);
   }
 
+  const currentNpcNames     = currentResult.npcs.map(n => n.name).join(', ');
   const currentFactionNames = currentResult.factions.map(f => f.name).join(', ');
+  const currentLocationNames = currentResult.locations.map(l => l.name).join(', ');
   const currentLoreKeywords = currentResult.lore.map(l => l.keyword).join(', ');
-  const currentRuleNames = currentResult.rules.map(r => r.name).join(', ');
+  const currentRuleNames    = currentResult.rules.map(r => r.name).join(', ');
 
   return `You are a world-building extraction engine performing a SUPPLEMENTAL PASS to capture missed content.
 
@@ -218,12 +403,16 @@ WORLD DESCRIPTION:
 ${description}
 
 ALREADY EXTRACTED (do NOT duplicate — only add NEW entries):
+- NPCs: ${currentNpcNames}
 - Factions: ${currentFactionNames}
+- Locations: ${currentLocationNames}
 - Lore keywords: ${currentLoreKeywords}
 - Rules: ${currentRuleNames}
 
 ISSUES TO FIX:
 ${issues.map((s, i) => `${i + 1}. ${s}`).join('\n')}
+
+VERBATIM REQUIREMENT: Every text field in the new entries (descriptions, personalities, goals, lore content, rule descriptions) MUST preserve the source wording verbatim or as close to verbatim as possible. Do NOT paraphrase or summarize.
 
 Return a JSON object with ONLY the new/missing entries. Include empty arrays for categories that need no additions.
 Return ONLY the JSON object, no other text.`;
@@ -367,7 +556,11 @@ export class WorldService {
     const report = validateExtraction(description, result);
 
     const needsRetry =
+      report.npcsMissing.length > 0 ||
       report.factionsMissing.length > 0 ||
+      report.locationsMissing.length > 0 ||
+      report.loreMissing.length > 0 ||
+      report.rulesMissing.length > 0 ||
       report.loreTooFew ||
       report.rulesTooFew;
 
@@ -377,7 +570,11 @@ export class WorldService {
     }
 
     console.log('[WorldService] Validation failed — running supplemental pass:', {
+      missingNpcs: report.npcsMissing,
       missingFactions: report.factionsMissing,
+      missingLocations: report.locationsMissing,
+      missingLore: report.loreMissing,
+      missingRules: report.rulesMissing,
       lore: `${report.actualLore}/${report.expectedLoreMin}`,
       rules: `${report.actualRules}/${report.expectedRulesMin}`,
     });
