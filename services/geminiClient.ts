@@ -183,6 +183,25 @@ export class GeminiClient {
             fact: asString(safeData.new_memory.fact, "Unknown Memory")
         } : undefined,
 
+        // v1.22: array form — preferred over singleton new_memory.
+        new_memories: Array.isArray(safeData.new_memories)
+            ? safeData.new_memories
+                .filter((m: unknown): m is Record<string, unknown> => isObject(m))
+                .map((m: Record<string, unknown>) => {
+                    const out: { fact: string; salience?: number; tags?: string[] } = {
+                        fact: asString(m.fact, ''),
+                    };
+                    const sal = asOptionalNumber(m.salience);
+                    if (sal !== undefined) out.salience = Math.max(1, Math.min(5, Math.round(sal)));
+                    if (Array.isArray(m.tags)) {
+                        const tags = m.tags.filter((t: unknown): t is string => typeof t === 'string');
+                        if (tags.length > 0) out.tags = tags;
+                    }
+                    return out;
+                })
+                .filter(m => m.fact.trim().length > 0)
+            : undefined,
+
         new_lore: isObject(safeData.new_lore) ? {
             keyword: asString(safeData.new_lore.keyword, "Unknown"),
             content: asString(safeData.new_lore.content, "")

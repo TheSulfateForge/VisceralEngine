@@ -253,9 +253,17 @@ Pregnancy discovery appears in narrative; update \`hidden_update\`.
 - DREAMS: when [DREAM SEED] appears in context, render the turn framed by
   [DREAM]…[/DREAM], non-canonical, with mandatory \`trauma_delta\`.
 
-**Memory fragments.** Record significant PERMANENT events via \`new_memory\`
-(intimacies, kills, achievements, betrayals, irreversible changes). Do NOT
-record mundane actions, temporary states, or dialogue snippets.
+**Memory fragments (v1.22).** Record significant PERMANENT events via
+\`new_memories\` — an array of \`{ fact, salience, tags? }\` entries. Up to 4
+per turn for major scenes; 0 for mundane turns. Salience: 5 = pivotal
+(death, vow, identity reveal); 4 = major shift; 3 = notable; 2 = moderate
+(default); 1 = minor. Tagged memories are pinned — always injected into
+future context — so use tags ('vow', 'oath', 'debt', 'reveal', 'death',
+'identity', 'betrayal', 'romantic', 'kill', 'victory', 'loss',
+'discovery') for anything you want the future engine to anchor on. Do NOT
+record mundane actions, temporary states, or routine dialogue. Prefer ONE
+self-contained sentence per fact. The legacy \`new_memory\` singleton is
+deprecated but still accepted (treated as a single entry of salience 3).
 
 // §12 CONDITIONS ==========================================================
 Conditions are the character's CURRENT STATE, not a log.

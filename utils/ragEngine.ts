@@ -1,5 +1,5 @@
 
-import { LoreItem, KnownEntity, ChatMessage, Role } from '../types';
+import { LoreItem, KnownEntity, ChatMessage, MemoryItem, SummarySegment, Role } from '../types';
 import { RAG_LORE_LIMIT } from '../config/engineConfig';
 
 // Extended Stop Words list for better noise filtering
@@ -46,17 +46,23 @@ function analyzeText(text: string): TokenAnalysis {
 }
 
 /**
- * Build a query analysis from user input and recent model context.
- * Including recent history ensures we catch references to things the AI just said.
+ * Build a query analysis from the current user input plus recent context.
+ *
+ * v1.22: Previously this function only included recent MODEL turns, which
+ * meant entities the player explicitly named in their own turn weren't
+ * boosted unless the AI had also recently mentioned them. That caused the
+ * "I greet the priest Caelum" → Caelum-not-retrieved bug. We now include
+ * both roles in the lookback window. The current user input is appended
+ * separately (not subject to the lookback slice) so it always counts.
  */
 function analyzeQuery(userInput: string, recentHistory: ChatMessage[], lookback: number = 3): TokenAnalysis {
-  const modelTexts = recentHistory
-    .filter(m => m.role === Role.MODEL)
+  const recentRelevant = recentHistory
+    .filter(m => m.role === Role.MODEL || m.role === Role.USER)
     .slice(-lookback)
     .map(m => m.text)
     .join(' ');
 
-  return analyzeText(`${userInput} ${modelTexts}`);
+  return analyzeText(`${userInput} ${recentRelevant}`);
 }
 
 /**
@@ -122,6 +128,71 @@ export interface RAGResult {
   };
 }
 
+/**
+ * v1.22: Detect entities the player explicitly named in this turn (or one of
+ * the last few user turns). These are force-included regardless of their
+ * status decay or RAG score — fixes "the priest you've been talking to is
+ * gone from context because he's marked DISTANT" symptoms.
+ *
+ * Matching strategy:
+ *   1. Any name token of length ≥ 3 appearing as a whole word in the input.
+ *   2. Role tokens of length ≥ 4 — but only when exactly one entity has
+ *      that role (otherwise "I look at the guard" pulls in every guard).
+ */
+export function findAliasMatchedEntities(
+  userInput: string,
+  recentUserHistory: ChatMessage[],
+  entities: KnownEntity[],
+): KnownEntity[] {
+  const lower = (
+    userInput + ' ' +
+    recentUserHistory
+      .filter(m => m.role === Role.USER)
+      .slice(-3)
+      .map(m => m.text)
+      .join(' ')
+  ).toLowerCase();
+
+  const matched = new Map<string, KnownEntity>();
+
+  // 1. Name token match
+  for (const e of entities) {
+    if (!e.name) continue;
+    const tokens = e.name.toLowerCase().split(/\s+/).filter(t => t.length >= 3);
+    for (const tok of tokens) {
+      // Anchor with word boundaries; escape regex metachars in the token.
+      const safe = tok.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (new RegExp(`\\b${safe}\\b`).test(lower)) {
+        matched.set(e.id, e);
+        break;
+      }
+    }
+  }
+
+  // 2. Unique-role match
+  const roleGroups = new Map<string, KnownEntity[]>();
+  for (const e of entities) {
+    if (!e.role) continue;
+    const r = e.role.toLowerCase();
+    const existing = roleGroups.get(r) ?? [];
+    existing.push(e);
+    roleGroups.set(r, existing);
+  }
+  for (const [role, group] of roleGroups) {
+    if (group.length !== 1) continue;
+    const tokens = role.split(/\s+/).filter(t => t.length >= 4);
+    for (const tok of tokens) {
+      const safe = tok.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (new RegExp(`\\b${safe}\\b`).test(lower)) {
+        matched.set(group[0].id, group[0]);
+        break;
+      }
+    }
+  }
+
+  return [...matched.values()];
+}
+
 export function retrieveRelevantContext(
   userInput: string,
   recentHistory: ChatMessage[],
@@ -130,14 +201,15 @@ export function retrieveRelevantContext(
   activeThreatNames: string[],
   loreLimit: number = 8,
   entityLimit: number = 6,
-  lookback: number = 5  // v1.21: Configurable lookback (was hardcoded 3)
+  lookback: number = 5,  // v1.21: Configurable lookback (was hardcoded 3)
+  currentTurn: number = 0,  // v1.22: drives lore freshness boost
 ): RAGResult {
   // 1. Analyze Query — v1.21: use configurable lookback for wider entity recall
   const queryAnalysis = analyzeQuery(userInput, recentHistory, lookback);
-  
+
   // 2. Prepare Corpus & Analyze Documents
   // We treat Lore and Entities as a single corpus for IDF calculation to normalize term weights globally
-  
+
   interface ScoredItem<T> {
     item: T;
     analysis: TokenAnalysis;
@@ -151,6 +223,10 @@ export function retrieveRelevantContext(
   const items: ScoredItem<LoreItem | KnownEntity>[] = [];
   const HIGH_PRIORITY_LEVELS = new Set(['ALLIED', 'DEVOTED']);
   const threatNameSet = new Set(activeThreatNames.map(n => n.toLowerCase()));
+
+  // v1.22: alias-matched entities are mandatory — the player just named them.
+  const aliasMatched = findAliasMatchedEntities(userInput, recentHistory, knownEntities);
+  const aliasIds = new Set(aliasMatched.map(e => e.id));
 
   // Process Lore
   for (const l of lore) {
@@ -169,9 +245,10 @@ export function retrieveRelevantContext(
   for (const e of knownEntities) {
     const isPriority = HIGH_PRIORITY_LEVELS.has(e.relationship_level);
     const isThreat = threatNameSet.has(e.name.toLowerCase());
+    const isAlias = aliasIds.has(e.id);
     // Entities that are in the room or highly important are "Mandatory"
-    const isMandatory = isPriority || isThreat;
-    
+    const isMandatory = isPriority || isThreat || isAlias;
+
     items.push({
       item: e,
       analysis: analyzeText(`${e.name} ${e.role} ${e.location} ${e.impression}`),
@@ -189,8 +266,20 @@ export function retrieveRelevantContext(
   // 4. Score Documents
   for (const doc of items) {
     doc.score = scoreDocument(doc.analysis, queryAnalysis, idfMap);
-    
-    // Boost mandatory items to ensure they survive the sort, 
+
+    // v1.22: Lore freshness boost — recently established lore stays sticky for
+    // a few turns instead of being immediately outranked by older heavily-cited
+    // entries. Decay constant is intentionally short (~5 turns half-life-ish).
+    if (doc.type === 'lore' && currentTurn > 0) {
+      const turnCreated = (doc.item as LoreItem).turnCreated;
+      if (turnCreated !== undefined) {
+        const age = Math.max(0, currentTurn - turnCreated);
+        const freshness = 1 + 0.5 * Math.exp(-age / 5);
+        doc.score *= freshness;
+      }
+    }
+
+    // Boost mandatory items to ensure they survive the sort,
     // but we will also handle them specifically in filtering
     if (doc.isMandatory) {
         doc.score += 50.0; // Massive boost ensures they are top rank
@@ -218,7 +307,7 @@ export function retrieveRelevantContext(
   for (const candidate of entityCandidates) {
     const isSlotAvailable = selectedEntities.length < entityLimit;
     const isRelevant = candidate.score > 0.5;
-    
+
     // Always include mandatory items, otherwise respect limits and score threshold
     if (candidate.isMandatory || (isSlotAvailable && isRelevant)) {
         selectedEntities.push(candidate.item as KnownEntity);
@@ -239,4 +328,87 @@ export function retrieveRelevantContext(
       topScores: debugScores.slice(0, RAG_LORE_LIMIT)
     }
   };
+}
+
+// ============================================================================
+// v1.22: Memory & summary-segment retrieval (reuses the TF-IDF/bigram engine)
+// ============================================================================
+
+/**
+ * Score a pool of memories against the current query and return the top N.
+ *
+ * Used by promptUtils → buildMemoryContext for the RAG-tier of the tiered
+ * memory injection. Pinned memories should be filtered OUT of `memories`
+ * before this is called — they're handled in their own tier.
+ *
+ * Scoring tweaks specific to memories:
+ *   - Salience adds a small additive boost (max ~0.5 at salience 5).
+ *   - Memories more than 30 turns old without a salience boost are
+ *     mildly penalised, since stale low-salience facts crowd out relevant
+ *     ones in long campaigns.
+ */
+export function retrieveRelevantMemories(
+  userInput: string,
+  recentHistory: ChatMessage[],
+  memories: MemoryItem[],
+  limit: number,
+  lookback: number = 5,
+  currentTurn: number = 0,
+): MemoryItem[] {
+  if (memories.length === 0 || limit <= 0) return [];
+
+  const queryAnalysis = analyzeQuery(userInput, recentHistory, lookback);
+
+  const analysed = memories.map(m => ({
+    m,
+    analysis: analyzeText(m.fact),
+  }));
+
+  const idfMap = calculateIDF(analysed.map(a => a.analysis));
+
+  const scored = analysed.map(({ m, analysis }) => {
+    let score = scoreDocument(analysis, queryAnalysis, idfMap);
+    if (m.salience !== undefined) {
+      score += 0.1 * m.salience;
+    }
+    if (currentTurn > 0 && m.turnCreated !== undefined) {
+      const age = currentTurn - m.turnCreated;
+      if (age > 30 && (m.salience ?? 2) <= 2) {
+        score *= 0.85;
+      }
+    }
+    return { m, score };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+
+  return scored
+    .filter(s => s.score > 0.4)
+    .slice(0, limit)
+    .map(s => s.m);
+}
+
+/**
+ * v1.22: Score the rolling summary segments for relevance to the current
+ * scene. The most recent segment is always considered relevant (returned
+ * separately by the caller); this function ranks the older segments.
+ */
+export function retrieveRelevantSegments(
+  userInput: string,
+  recentHistory: ChatMessage[],
+  segments: SummarySegment[],
+  limit: number,
+  lookback: number = 5,
+): SummarySegment[] {
+  if (segments.length === 0 || limit <= 0) return [];
+
+  const queryAnalysis = analyzeQuery(userInput, recentHistory, lookback);
+  const analysed = segments.map(s => ({ s, analysis: analyzeText(s.summary) }));
+  const idfMap = calculateIDF(analysed.map(a => a.analysis));
+
+  const scored = analysed
+    .map(({ s, analysis }) => ({ s, score: scoreDocument(analysis, queryAnalysis, idfMap) }))
+    .sort((a, b) => b.score - a.score);
+
+  return scored.filter(x => x.score > 0.5).slice(0, limit).map(x => x.s);
 }

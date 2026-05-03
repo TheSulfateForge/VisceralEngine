@@ -1,5 +1,5 @@
 import { useRef, useCallback } from 'react';
-import { ChatMessage, Role, ModelResponseSchema } from '../types';
+import { ChatMessage, Role, ModelResponseSchema, SummarySegment } from '../types';
 import { generateMessageId } from '../idUtils';
 import { mapSystemErrorToNarrative } from '../utils';
 import { useToast } from '../components/providers/ToastProvider';
@@ -52,14 +52,59 @@ export const useGeminiClient = () => {
     showToast("Last turn reverted.", "success");
   }, [setGameHistory, setGameWorld, setCharacter, showToast]);
 
-  const performSummarization = useCallback(async (service: GeminiService, history: ChatMessage[]) => {
-      const summary = await service.summarizeHistory(history);
-      if (summary) {
-          setGameHistory(prev => ({
-             ...prev,
-             lastActiveSummary: summary
-          }));
-      }
+  /**
+   * v1.22: Segment-based summarisation.
+   *
+   * Instead of regenerating one flat summary over the whole transcript every
+   * N turns, we summarise only the *new* window (since the last segment) and
+   * append it to `summarySegments`. The prompt builder then RAG-ranks the
+   * stored segments at injection time, so a 200-turn campaign keeps a chain
+   * of ~10 small segments and the model still only sees 2-3 of them at once.
+   *
+   * Backward compat: if `lastActiveSummary` exists from an older save and no
+   * segments yet, treat the legacy string as a single segment covering turns
+   * 0..(currentTurn - intervalSize) on first run, then start appending.
+   */
+  const performSegmentSummarization = useCallback(async (
+      service: GeminiService,
+      history: ChatMessage[],
+      currentTurn: number,
+      intervalSize: number,
+  ) => {
+      // Slice only the new window — the messages added since the last segment.
+      const window = history.slice(-intervalSize);
+      if (window.length === 0) return;
+
+      const summary = await service.summarizeHistory(window);
+      if (!summary) return;
+
+      setGameHistory(prev => {
+          const existing = prev.summarySegments ?? [];
+          const lastEnd = existing.length > 0
+              ? existing[existing.length - 1].endTurn
+              : 0;
+          const startTurn = lastEnd + 1;
+          const endTurn = currentTurn;
+
+          // Guard: don't append a segment that doesn't advance the timeline.
+          // Can happen if the user calls summarisation rapidly via debug tools.
+          if (endTurn <= lastEnd) return prev;
+
+          const next: SummarySegment = {
+              startTurn,
+              endTurn,
+              summary,
+              timestamp: new Date().toISOString(),
+          };
+
+          return {
+              ...prev,
+              summarySegments: [...existing, next],
+              // Keep the legacy string in sync so any older consumer still
+              // sees the most recent narrative summary.
+              lastActiveSummary: summary,
+          };
+      });
   }, [setGameHistory]);
 
   // Main Turn Orchestrator
@@ -106,12 +151,22 @@ export const useGeminiClient = () => {
             return;
         }
 
-        // v1.21: Model-adaptive summarization interval — lite models summarize
-        // much more frequently to prevent context loss in shorter windows.
+        // v1.21/v1.22: Model-adaptive segment summarisation. Lite models
+        // summarise more often so each segment stays small and recall-able.
+        // Only the new window is summarised — older segments stay intact and
+        // are RAG-ranked at prompt-build time.
         const contextProfile = getContextProfile(service.modelName);
         const historyForSummarization = useGameStore.getState().gameHistory;
-        if (historyForSummarization.history.length > 0 && historyForSummarization.history.length % contextProfile.summarizationInterval === 0) {
-            performSummarization(service, historyForSummarization.history).catch(console.error);
+        if (
+            historyForSummarization.history.length > 0 &&
+            historyForSummarization.history.length % contextProfile.summarizationInterval === 0
+        ) {
+            performSegmentSummarization(
+                service,
+                historyForSummarization.history,
+                historyForSummarization.turnCount,
+                contextProfile.summarizationInterval,
+            ).catch(console.error);
         }
 
         const preCallState = useGameStore.getState();
@@ -293,7 +348,7 @@ export const useGeminiClient = () => {
         }));
         showToast("Signal Lost.", "error");
     }
-  }, [getService, setGameHistory, setGameWorld, setCharacter, showToast, setUI, performSummarization, setPendingLore]);
+  }, [getService, setGameHistory, setGameWorld, setCharacter, showToast, setUI, performSegmentSummarization, setPendingLore]);
 
   return {
     handleSend,

@@ -1,14 +1,15 @@
 import type { PipelineStep, TurnContext } from '../types';
-import type { LoreItem } from '../../../types';
+import type { LoreItem, MemoryItem } from '../../../types';
 import {
     findExistingLore,
     checkLoreDuplicate,
     checkMemoryDuplicate,
-    autoConsolidateMemory
+    autoConsolidateMemory,
+    evictBySalience,
 } from '../../contentValidation';
 import { generateLoreId, generateMemoryId } from '../../../idUtils';
 import { checkBannedMechanisms, checkAdversarialLore } from '../../engine';
-import { MEMORY_CAP } from '../../../config/engineConfig';
+import { MEMORY_CAP, DEFAULT_MEMORY_SALIENCE } from '../../../config/engineConfig';
 
 /**
  * Step 7: Lore & Memory Pipeline
@@ -96,97 +97,108 @@ export const memoryLoreStep: PipelineStep = {
         }
 
         // --- Memory ---
-        let finalMemory = [...ctx.previousWorld.memory];
+        // v1.22: Process new_memories[] (preferred) and new_memory (legacy)
+        // through a single code path. Each candidate is deduped against the
+        // current pool AND against earlier candidates from the same turn.
+        // After all candidates are processed, autoConsolidateMemory clusters
+        // any near-duplicates and evictBySalience trims the pool to MEMORY_CAP.
+        let finalMemory: MemoryItem[] = [...ctx.previousWorld.memory];
 
-        if (r.new_memory) {
-            ctx.debugLogs.push({
-                timestamp: new Date().toISOString(),
-                message: `[MEMORY-WRITE-ATTEMPT] AI provided new_memory: "${r.new_memory.fact?.substring(0, 80) ?? '(empty fact)'}"`,
-                type: 'info'
-            });
-
-            if (finalMemory.length >= MEMORY_CAP) {
-                const consolidated = autoConsolidateMemory(finalMemory, ctx.debugLogs);
-                if (consolidated.length < MEMORY_CAP) {
-                    finalMemory = consolidated;
-                    const { isDuplicate, isUpdate, existingIndex } = checkMemoryDuplicate(
-                        r.new_memory.fact,
-                        finalMemory
-                    );
-
-                    if (isDuplicate) {
-                        ctx.debugLogs.push({
-                            timestamp: new Date().toISOString(),
-                            message: `[MEMORY] Post-consolidation duplicate suppressed: "${r.new_memory.fact.substring(0, 80)}"`,
-                            type: 'info'
-                        });
-                    } else if (isUpdate) {
-                        finalMemory[existingIndex] = {
-                            id: finalMemory[existingIndex].id,
-                            fact: r.new_memory.fact,
-                            timestamp: new Date().toISOString()
-                        };
-                        ctx.debugLogs.push({
-                            timestamp: new Date().toISOString(),
-                            message: `[MEMORY] Post-consolidation update (supersedes #${existingIndex}): "${r.new_memory.fact.substring(0, 80)}"`,
-                            type: 'success'
-                        });
-                    } else {
-                        finalMemory = [...finalMemory, {
-                            id: generateMemoryId(),
-                            fact: r.new_memory.fact,
-                            timestamp: new Date().toISOString()
-                        }];
-                        ctx.debugLogs.push({
-                            timestamp: new Date().toISOString(),
-                            message: `[MEMORY] Post-consolidation engram created: "${r.new_memory.fact.substring(0, 80)}"`,
-                            type: 'success'
-                        });
-                    }
-                } else {
-                    ctx.debugLogs.push({
-                        timestamp: new Date().toISOString(),
-                        message: `[MEMORY] Cap reached (${MEMORY_CAP}) — consolidation unable to free slots. Fragment suppressed: "${r.new_memory.fact.substring(0, 60)}"`,
-                        type: 'warning'
+        const candidates: Array<{ fact: string; salience?: number; tags?: string[]; src: 'array' | 'legacy' }> = [];
+        if (Array.isArray(r.new_memories)) {
+            for (const m of r.new_memories) {
+                if (m && typeof m.fact === 'string' && m.fact.trim().length > 0) {
+                    candidates.push({
+                        fact: m.fact.trim(),
+                        salience: typeof m.salience === 'number' ? m.salience : undefined,
+                        tags: Array.isArray(m.tags) ? m.tags.filter(t => typeof t === 'string') : undefined,
+                        src: 'array',
                     });
                 }
-            } else {
-                const { isDuplicate, isUpdate, existingIndex } = checkMemoryDuplicate(
-                    r.new_memory.fact,
-                    ctx.previousWorld.memory
-                );
+            }
+        }
+        if (r.new_memory && typeof r.new_memory.fact === 'string' && r.new_memory.fact.trim().length > 0) {
+            // Legacy single-memory path. Treat as "default salience" so it
+            // doesn't accidentally outrank intentionally-tagged entries.
+            candidates.push({
+                fact: r.new_memory.fact.trim(),
+                salience: undefined,
+                tags: undefined,
+                src: 'legacy',
+            });
+        }
+
+        if (candidates.length > 0) {
+            ctx.debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[MEMORY-WRITE-ATTEMPT] AI provided ${candidates.length} memory candidate(s) (${candidates.filter(c => c.src === 'array').length} array, ${candidates.filter(c => c.src === 'legacy').length} legacy).`,
+                type: 'info',
+            });
+
+            for (const cand of candidates) {
+                const clampedSalience = cand.salience !== undefined
+                    ? Math.max(1, Math.min(5, Math.round(cand.salience)))
+                    : DEFAULT_MEMORY_SALIENCE;
+
+                const { isDuplicate, isUpdate, existingIndex } = checkMemoryDuplicate(cand.fact, finalMemory);
 
                 if (isDuplicate) {
                     ctx.debugLogs.push({
                         timestamp: new Date().toISOString(),
-                        message: `[MEMORY] Duplicate fragment suppressed (matches fragment #${existingIndex}): "${r.new_memory.fact.substring(0, 80)}"`,
-                        type: 'info'
+                        message: `[MEMORY] Duplicate suppressed (matches #${existingIndex}): "${cand.fact.substring(0, 80)}"`,
+                        type: 'info',
                     });
-                } else if (isUpdate) {
-                    const updated = [...ctx.previousWorld.memory];
-                    updated[existingIndex] = {
-                        id: updated[existingIndex].id,
-                        fact: r.new_memory.fact,
-                        timestamp: new Date().toISOString()
-                    };
-                    finalMemory = updated;
-                    ctx.debugLogs.push({
-                        timestamp: new Date().toISOString(),
-                        message: `[MEMORY] Fragment updated (supersedes #${existingIndex}): "${r.new_memory.fact.substring(0, 80)}"`,
-                        type: 'success'
-                    });
-                } else {
-                    finalMemory = [...ctx.previousWorld.memory, {
-                        id: generateMemoryId(),
-                        fact: r.new_memory.fact,
-                        timestamp: new Date().toISOString()
-                    }];
-                    ctx.debugLogs.push({
-                        timestamp: new Date().toISOString(),
-                        message: `[MEMORY] Engram Created: "${r.new_memory.fact.substring(0, 80)}"`,
-                        type: 'success'
-                    });
+                    continue;
                 }
+
+                if (isUpdate) {
+                    const prev = finalMemory[existingIndex];
+                    finalMemory = [
+                        ...finalMemory.slice(0, existingIndex),
+                        {
+                            id: prev.id,
+                            fact: cand.fact,
+                            timestamp: new Date().toISOString(),
+                            // Preserve highest seen salience and union of tags so
+                            // updates never demote an entry's pinning status.
+                            salience: Math.max(prev.salience ?? DEFAULT_MEMORY_SALIENCE, clampedSalience),
+                            tags: Array.from(new Set([...(prev.tags ?? []), ...(cand.tags ?? [])])),
+                            turnCreated: prev.turnCreated ?? ctx.currentTurn,
+                        },
+                        ...finalMemory.slice(existingIndex + 1),
+                    ];
+                    ctx.debugLogs.push({
+                        timestamp: new Date().toISOString(),
+                        message: `[MEMORY] Updated #${existingIndex} (salience ${clampedSalience}): "${cand.fact.substring(0, 80)}"`,
+                        type: 'success',
+                    });
+                    continue;
+                }
+
+                const newItem: MemoryItem = {
+                    id: generateMemoryId(),
+                    fact: cand.fact,
+                    timestamp: new Date().toISOString(),
+                    salience: clampedSalience,
+                    tags: cand.tags && cand.tags.length > 0 ? cand.tags : undefined,
+                    turnCreated: ctx.currentTurn,
+                };
+                finalMemory = [...finalMemory, newItem];
+                ctx.debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    message: `[MEMORY] Engram created (s${clampedSalience}${newItem.tags ? `, tags: ${newItem.tags.join(',')}` : ''}): "${cand.fact.substring(0, 80)}"`,
+                    type: 'success',
+                });
+            }
+
+            // Cap enforcement: try consolidation first (cheap, semantic), then
+            // fall back to salience-weighted eviction if still over.
+            if (finalMemory.length > MEMORY_CAP) {
+                const consolidated = autoConsolidateMemory(finalMemory, ctx.debugLogs);
+                finalMemory = consolidated.length < finalMemory.length ? consolidated : finalMemory;
+            }
+            if (finalMemory.length > MEMORY_CAP) {
+                finalMemory = evictBySalience(finalMemory, MEMORY_CAP, ctx.currentTurn, ctx.debugLogs);
             }
         }
 

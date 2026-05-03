@@ -199,9 +199,30 @@ export const RESPONSE_SCHEMA: Schema = {
     new_memory: {
       type: Type.OBJECT,
       nullable: true,
-      description: "PERSISTENT HISTORY: Record major life events (sexual partners, major kills, permanent loss).",
+      description: "DEPRECATED v1.22 — prefer new_memories[]. Kept for back-compat. PERSISTENT HISTORY: Record one major life event.",
       properties: {
         fact: { type: Type.STRING, description: "The absolute truth to remember forever." }
+      }
+    },
+    new_memories: {
+      type: Type.ARRAY,
+      nullable: true,
+      description: "PERSISTENT HISTORY (v1.22 — preferred over new_memory). Record any number of significant events from THIS turn that should persist forever (sexual partners, major kills, vows, betrayals, identity reveals, irreversible changes, debts owed/owing). Up to 4 per turn for major scenes; 0 for mundane turns. Each entry MUST include a salience score and SHOULD include tags so the engine can pin and rank correctly.",
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          fact: { type: Type.STRING, description: "The absolute truth to remember forever — one self-contained sentence." },
+          salience: {
+            type: Type.INTEGER,
+            description: "1–5. 5 = pivotal/permanent (death, oath of vengeance, identity reveal). 4 = major shift (faction defection, first intimate encounter). 3 = notable (first meaningful meeting, location discovery). 2 = moderate (default). 1 = minor flavor beat. Be honest — most memories are 2."
+          },
+          tags: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description: "Optional. Pick from: 'vow', 'oath', 'debt', 'reveal', 'death', 'identity', 'betrayal', 'romantic', 'kill', 'victory', 'loss', 'discovery'. Tagged memories are PINNED — always injected into future context regardless of recency or relevance."
+          }
+        },
+        required: ["fact"]
       }
     },
     new_lore: {

@@ -122,8 +122,29 @@ export const TIME_FLOOR_MINUTES = 1;
 // Memory & Lore
 // ---------------------------------------------------------------------------
 
-/** Maximum memory fragments before consolidation triggers. */
-export const MEMORY_CAP = 40;
+/** Maximum memory fragments retained in storage.
+ *  v1.22: Raised from 40 → 200. Storage is local; only ~20 memories ever get
+ *  injected into a given prompt (see MODEL_CONTEXT_PROFILES.memoryLimit).
+ *  A larger pool means RAG has more material to draw from for niche callbacks
+ *  ("the priest mentioned 60 turns ago") without inflating per-turn tokens.
+ *  When the pool fills, autoConsolidateMemory clusters near-duplicates first;
+ *  evictBySalience is the fallback when consolidation can't free enough room.
+ */
+export const MEMORY_CAP = 200;
+
+/** v1.22: Tags on a MemoryItem that flag it as "always-pinned" — these are
+ *  injected into context regardless of relevance or recency. Keep this list
+ *  short; over-tagging defeats the purpose. */
+export const PINNED_MEMORY_TAGS: readonly string[] = [
+    'vow', 'oath', 'debt', 'reveal', 'death',
+    'identity', 'betrayal', 'romantic', 'kill',
+] as const;
+
+/** v1.22: Default salience when the model omits the field on a new memory. */
+export const DEFAULT_MEMORY_SALIENCE = 2;
+
+/** v1.22: Salience at or above this counts as "pinned" even without a tag. */
+export const PINNED_MEMORY_SALIENCE_THRESHOLD = 4;
 
 /** Jaccard similarity threshold for memory deduplication. */
 // v1.20: Lowered from 0.55 to 0.42. The AI frequently rephrases the same event

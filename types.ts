@@ -601,7 +601,18 @@ export interface ModelResponseSchema {
     roll_request?: RollRequest;
     bargain_request?: BargainRequest;
     hidden_update?: string;
+    /**
+     * @deprecated v1.22 — kept for back-compat. The pipeline promotes a
+     * non-null `new_memory` into a single-element `new_memories` array.
+     */
     new_memory?: { fact: string };
+    /**
+     * v1.22: Multi-fact memory writes per turn. Each entry may include a
+     * salience score (1–5) and tags ('vow' | 'oath' | 'debt' | 'reveal' |
+     * 'death' | 'identity' | 'betrayal' | ...). Tags drive pinning, salience
+     * drives eviction order when at MEMORY_CAP.
+     */
+    new_memories?: Array<{ fact: string; salience?: number; tags?: string[] }>;
     new_lore?: { keyword: string; content: string };
     biological_event?: boolean;
     location_update?: LocationUpdate;
@@ -690,6 +701,39 @@ export interface MemoryItem {
     id: MemoryId;
     fact: string;
     timestamp: string;
+    /**
+     * v1.22: Salience score 1–5. Drives RAG pinning and salience-weighted
+     * eviction when MEMORY_CAP is reached. Default 2 when unspecified.
+     *  5 = pivotal/permanent (death, vow of vengeance, identity reveal)
+     *  4 = major (significant relationship shift, faction reveal)
+     *  3 = notable (first encounter, location discovery)
+     *  2 = moderate (default — normal in-fiction events)
+     *  1 = minor (small flavor beats)
+     */
+    salience?: number;
+    /**
+     * v1.22: Optional category tags. Memories tagged with any of
+     * {vow, oath, debt, reveal, death, identity, betrayal} are pinned —
+     * always injected into context regardless of recency or RAG score.
+     */
+    tags?: string[];
+    /** v1.22: Turn this memory was created. Drives age decay during eviction. */
+    turnCreated?: number;
+}
+
+/**
+ * v1.22: Hierarchical / segmented historical summary.
+ * Each segment summarises a fixed window of turns (typically
+ * SUMMARIZATION_INTERVAL turns wide). At prompt-build time the segments are
+ * RAG-ranked against the current user input so only the relevant ones are
+ * injected — letting us cover much more total history without inflating the
+ * per-turn token budget.
+ */
+export interface SummarySegment {
+    startTurn: number;
+    endTurn: number;
+    summary: string;
+    timestamp: string;
 }
 
 export interface RollStatistics {
@@ -708,7 +752,19 @@ export interface GameHistory {
     isThinking: boolean;
     debugLog: DebugLogEntry[];
     turnCount: number;
+    /**
+     * @deprecated v1.22 — kept for save-file backward compatibility. New code
+     * should read/write `summarySegments`. When loading a save with only this
+     * field set, the prompt builder treats it as a single segment covering
+     * turns 0..turnCount.
+     */
     lastActiveSummary?: string;
+    /**
+     * v1.22: Rolling segmented summaries. Each segment covers a window of
+     * turns. Replaces the single flat string above so we can keep older
+     * windows around and RAG-rank them against the current scene.
+     */
+    summarySegments?: SummarySegment[];
 }
 
 // --- Low Frequency State ---

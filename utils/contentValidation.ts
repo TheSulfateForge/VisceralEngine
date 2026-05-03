@@ -115,9 +115,18 @@ export const sanitiseAllFields = (
         r.character_updates.added_conditions = r.character_updates.added_conditions.map(clean);
     }
 
-    // 4. new_memory.fact
+    // 4. new_memory.fact (legacy singleton — back-compat path)
     if (r.new_memory?.fact) {
         r.new_memory.fact = clean(r.new_memory.fact);
+    }
+
+    // 4b. new_memories[] — v1.22 array form. Sanitise each fact in place.
+    if (Array.isArray(r.new_memories)) {
+        r.new_memories = r.new_memories.map(m =>
+            m && typeof m === 'object' && typeof m.fact === 'string'
+                ? { ...m, fact: clean(m.fact) }
+                : m
+        );
     }
 
     // 5. new_lore — keyword and content
@@ -218,7 +227,9 @@ import {
     MEMORY_SIMILARITY_THRESHOLD, LORE_SIMILARITY_THRESHOLD,
     LORE_SAME_TOPIC_SIMILARITY_THRESHOLD,
     BIO_MODIFIER_CEILING, BIO_MODIFIER_DECAY_RATE,
-    CONDITION_SIMILARITY_THRESHOLD
+    CONDITION_SIMILARITY_THRESHOLD,
+    PINNED_MEMORY_TAGS, PINNED_MEMORY_SALIENCE_THRESHOLD,
+    DEFAULT_MEMORY_SALIENCE,
 } from '../config/engineConfig';
 
 export const significantWords = (text: string): Set<string> => {
@@ -353,6 +364,84 @@ export const autoConsolidateMemory = (
     });
 
     return consolidated;
+};
+
+/**
+ * v1.22: Salience-weighted eviction.
+ *
+ * Used as the fallback when autoConsolidateMemory can't free enough slots
+ * under MEMORY_CAP. Evicts the least-valuable memories until the pool fits
+ * the target size, where "value" is roughly salience-per-age.
+ *
+ *   evictionScore = (currentTurn - turnCreated) / max(1, salience)
+ *
+ * Higher score → more evictable. Pinned memories (matching tag in
+ * PINNED_MEMORY_TAGS, or salience >= PINNED_MEMORY_SALIENCE_THRESHOLD)
+ * are NEVER evicted as long as they collectively fit under targetCount.
+ * Storage order is preserved on the survivors.
+ */
+export const evictBySalience = (
+    memory: MemoryItem[],
+    targetCount: number,
+    currentTurn: number,
+    debugLogs: { push: (log: { timestamp: string; message: string; type: string }) => void }
+): MemoryItem[] => {
+    if (memory.length <= targetCount) return memory;
+
+    const isPinned = (m: MemoryItem): boolean => {
+        if ((m.salience ?? DEFAULT_MEMORY_SALIENCE) >= PINNED_MEMORY_SALIENCE_THRESHOLD) return true;
+        const tags = m.tags ?? [];
+        return tags.some(t => (PINNED_MEMORY_TAGS as readonly string[]).includes(t.toLowerCase()));
+    };
+
+    const pinned = memory.filter(isPinned);
+    const evictable = memory.filter(m => !isPinned(m));
+
+    // If even pinned alone exceeds target, we have to drop pinned too — sort
+    // by eviction score and keep the highest-value subset. Rare path.
+    if (pinned.length >= targetCount) {
+        const scored = memory
+            .map((m, i) => ({
+                m, i,
+                score: (currentTurn - (m.turnCreated ?? 0)) / Math.max(1, m.salience ?? DEFAULT_MEMORY_SALIENCE),
+            }))
+            .sort((a, b) => a.score - b.score)
+            .slice(0, targetCount)
+            .sort((a, b) => a.i - b.i)
+            .map(s => s.m);
+
+        debugLogs.push({
+            timestamp: new Date().toISOString(),
+            message: `[MEMORY EVICT — v1.22] Pinned pool (${pinned.length}) ≥ target (${targetCount}); dropped ${memory.length - scored.length} including some pinned by salience-weighted score.`,
+            type: 'warning',
+        });
+        return scored;
+    }
+
+    // Standard path: keep all pinned, plus the highest-value evictable until full.
+    const room = targetCount - pinned.length;
+    const evictableScored = evictable
+        .map((m, i) => ({
+            m, i,
+            score: (currentTurn - (m.turnCreated ?? 0)) / Math.max(1, m.salience ?? DEFAULT_MEMORY_SALIENCE),
+        }))
+        .sort((a, b) => a.score - b.score)  // lower score = more retainable
+        .slice(0, room);
+
+    // Re-merge in original storage order so newer pinned/recent flow naturally.
+    const keepIds = new Set([
+        ...pinned.map(p => p.id),
+        ...evictableScored.map(s => s.m.id),
+    ]);
+    const survivors = memory.filter(m => keepIds.has(m.id));
+
+    debugLogs.push({
+        timestamp: new Date().toISOString(),
+        message: `[MEMORY EVICT — v1.22] Cap exceeded: ${memory.length} → ${survivors.length} (kept ${pinned.length} pinned + ${evictableScored.length} highest-salience).`,
+        type: 'info',
+    });
+
+    return survivors;
 };
 
 // ---------------------------------------------------------------------------

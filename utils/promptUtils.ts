@@ -1,10 +1,14 @@
-import { GameHistory, GameWorld, Character, SceneMode, MemoryItem, LoreItem, KnownEntity, BioMonitor, ActiveThreat, DormantHook, FactionExposure, ThreatDenialTracker, ChatMessage, Role } from '../types';
-import { retrieveRelevantContext, RAGResult } from './ragEngine';
+import { GameHistory, GameWorld, Character, SceneMode, MemoryItem, LoreItem, KnownEntity, BioMonitor, ActiveThreat, DormantHook, FactionExposure, ThreatDenialTracker, ChatMessage, SummarySegment, Role } from '../types';
+import { retrieveRelevantContext, retrieveRelevantMemories, retrieveRelevantSegments, RAGResult } from './ragEngine';
 // v1.19: Section reminders moved to trailing position on user message (useGeminiClient.ts)
 // import { getSectionReminders } from '../sectionReminders';
 import { partitionConditions } from './contentValidation';
 import { applyExistingMap } from './nameResolver';
-import { DOWNTIME_KEYWORDS, DENIAL_SUPPRESSION_THRESHOLD, getContextProfile, SLEEP_KEYWORDS, DREAM_TRAUMA_THRESHOLD } from '../config/engineConfig';
+import {
+    DOWNTIME_KEYWORDS, DENIAL_SUPPRESSION_THRESHOLD, getContextProfile,
+    SLEEP_KEYWORDS, DREAM_TRAUMA_THRESHOLD,
+    PINNED_MEMORY_TAGS, PINNED_MEMORY_SALIENCE_THRESHOLD, DEFAULT_MEMORY_SALIENCE,
+} from '../config/engineConfig';
 import { buildTraumaPromptBlock } from './traumaSystem';
 import { buildSkillPromptBlock } from './skillSystem';
 import { buildFactionPromptBlock } from './factionSystem';
@@ -16,15 +20,126 @@ export interface PromptResult {
 
 // --- Builder Functions ---
 
-// v1.21: Memory items are now capped per model profile. Most recent memories
-// are kept (recency heuristic) since older memories are likelier to be stale
-// or superseded. Full RAG scoring of memories is a future enhancement.
-const buildMemoryContext = (memory: MemoryItem[], limit?: number): string => {
+/**
+ * v1.22: Tiered memory injection.
+ *
+ * Splits the available `limit` budget into three tiers:
+ *   1. PINNED — memories tagged with one of PINNED_MEMORY_TAGS or with
+ *      salience ≥ PINNED_MEMORY_SALIENCE_THRESHOLD. These are always
+ *      injected regardless of recency or relevance. Capped at ~25% of
+ *      budget (min 3 / max 5) so long-running campaigns don't crowd out
+ *      the other tiers.
+ *   2. RAG-SCORED — relevant to the current user input, scored via
+ *      retrieveRelevantMemories. Capped at ~50% of remaining budget.
+ *   3. RECENT — most-recent memories not already selected. Fills the rest.
+ *
+ * Tagging in the output ([P]/[R]/recent unmarked) is deliberately minimal —
+ * the model gets the fact, not the metadata.
+ */
+const buildMemoryContext = (
+    memory: MemoryItem[],
+    userInput: string,
+    recentHistory: ChatMessage[],
+    currentTurn: number,
+    limit?: number,
+): string => {
     if (memory.length === 0) return "";
-    const capped = limit && memory.length > limit
-        ? memory.slice(-limit)
-        : memory;
-    return capped.map(m => `• ${m.fact}`).join('\n');
+
+    const totalLimit = limit && limit > 0 ? limit : memory.length;
+    if (memory.length <= totalLimit) {
+        // Pool fits in the budget — just emit all of them, no need to tier.
+        return memory.map(m => `• ${m.fact}`).join('\n');
+    }
+
+    const pinTagSet = new Set((PINNED_MEMORY_TAGS as readonly string[]).map(t => t.toLowerCase()));
+    const isPinned = (m: MemoryItem): boolean => {
+        const sal = m.salience ?? DEFAULT_MEMORY_SALIENCE;
+        if (sal >= PINNED_MEMORY_SALIENCE_THRESHOLD) return true;
+        const tags = m.tags ?? [];
+        return tags.some(t => pinTagSet.has(t.toLowerCase()));
+    };
+
+    // Tier 1 — Pinned (most recent first, capped). The most-recent N is the
+    // right slice when the campaign has a long pinned trail (vows accrue).
+    const pinSize = Math.min(5, Math.max(3, Math.floor(totalLimit * 0.25)));
+    const pinned = memory.filter(isPinned).slice(-pinSize);
+    const pinnedIds = new Set(pinned.map(m => m.id));
+
+    const remaining = memory.filter(m => !pinnedIds.has(m.id));
+    const remainingBudget = Math.max(0, totalLimit - pinned.length);
+
+    // Tier 2 — RAG-scored against current input
+    const ragSize = Math.max(0, Math.floor(remainingBudget * 0.6));
+    const ragSelected = retrieveRelevantMemories(
+        userInput,
+        recentHistory,
+        remaining,
+        ragSize,
+        5,
+        currentTurn,
+    );
+    const ragIds = new Set(ragSelected.map(m => m.id));
+
+    // Tier 3 — Recent (not already selected by tiers 1 or 2)
+    const recentSize = Math.max(0, remainingBudget - ragSelected.length);
+    const recent = remaining.filter(m => !ragIds.has(m.id)).slice(-recentSize);
+
+    // Re-merge in storage order so the bullet list reads chronologically;
+    // this preserves narrative flow for the model.
+    const selectedIds = new Set([
+        ...pinned.map(m => m.id),
+        ...ragSelected.map(m => m.id),
+        ...recent.map(m => m.id),
+    ]);
+    const ordered = memory.filter(m => selectedIds.has(m.id));
+
+    return ordered.map(m => `• ${m.fact}`).join('\n');
+};
+
+/**
+ * v1.22: Build the [PREVIOUSLY ON…] block from segmented summaries.
+ *
+ * Always includes the most recent segment (closest narrative continuity).
+ * For older segments, RAG-rank against the current input and include the
+ * top 1 by default (top 2 for the desktop profile via `extraSlots`).
+ *
+ * Falls back to a legacy single-string `historicalSummary` when no segments
+ * are present — ensures save files written before v1.22 still render.
+ */
+const buildSegmentedSummaryBlock = (
+    segments: SummarySegment[] | undefined,
+    legacySummary: string | undefined,
+    userInput: string,
+    recentHistory: ChatMessage[],
+    extraSlots: number = 0,
+): string => {
+    if ((!segments || segments.length === 0) && legacySummary) {
+        return `[PREVIOUSLY ON...]\n${legacySummary}\n`;
+    }
+    if (!segments || segments.length === 0) return '';
+
+    const sorted = [...segments].sort((a, b) => a.endTurn - b.endTurn);
+    const mostRecent = sorted[sorted.length - 1];
+    const older = sorted.slice(0, -1);
+
+    const ragSlots = 1 + Math.max(0, extraSlots);
+    const relevantOlder = retrieveRelevantSegments(userInput, recentHistory, older, ragSlots);
+    // De-dupe in case retrieval returns the same segment as `mostRecent`
+    // (shouldn't happen since we excluded it, but be defensive).
+    const seen = new Set<string>([mostRecent.timestamp]);
+    const ordered: SummarySegment[] = [];
+    for (const s of relevantOlder) {
+        if (seen.has(s.timestamp)) continue;
+        ordered.push(s);
+        seen.add(s.timestamp);
+    }
+    ordered.push(mostRecent);
+
+    const formatted = ordered
+        .map(s => `[Turns ${s.startTurn}–${s.endTurn}]\n${s.summary}`)
+        .join('\n\n');
+
+    return `[PREVIOUSLY ON...]\n${formatted}\n`;
 };
 
 /**
@@ -445,11 +560,18 @@ export const constructGeminiPrompt = (
     activeThreatNames,
     profile.loreLimitOverride,   // v1.21: model-adaptive
     profile.entityLimitOverride, // v1.21: model-adaptive
-    profile.ragLookback          // v1.21: wider lookback for better entity recall
+    profile.ragLookback,         // v1.21: wider lookback for better entity recall
+    gameHistory.turnCount,       // v1.22: drives lore freshness boost
   );
 
-  // 2. Build Context Strings — memory now capped by model profile
-  const memoryContext = buildMemoryContext(gameWorld.memory, profile.memoryLimit);
+  // 2. Build Context Strings — v1.22: tiered memory injection (pinned + RAG + recent)
+  const memoryContext = buildMemoryContext(
+    gameWorld.memory,
+    userInput,
+    gameHistory.history,
+    gameHistory.turnCount,
+    profile.memoryLimit,
+  );
   const loreContext = buildLoreContext(relevantLore);
   const knownEntitiesContext = buildEntityContext(relevantEntities);
 
@@ -529,12 +651,21 @@ This world is fundamentally: ${gameWorld.worldTags.join(', ')}.
   // and trauma ≥ DREAM_TRAUMA_THRESHOLD. Empty string otherwise.
   const dreamSeed = buildDreamSeed(character, gameWorld, userInput);
 
-  // v1.21: Historical summary now lives in the dynamic prompt (top position)
-  // instead of being appended to the end of 63KB system instructions where
-  // lite models can't attend to it.
-  const summaryBlock = historicalSummary
-      ? `[PREVIOUSLY ON...]\n${sanitise(historicalSummary)}\n`
-      : '';
+  // v1.22: Segmented historical summary. The block always contains the most
+  // recent segment (continuity), plus 1 (lite) or 2 (desktop) older segments
+  // RAG-ranked by relevance to the current scene. Falls back to the legacy
+  // `historicalSummary` string when no segments are present (older saves).
+  // Same per-turn token budget as v1.21, but the model now sees segments
+  // covering far more total history when older callbacks are relevant.
+  const summarySegments = gameHistory.summarySegments;
+  const isLite = (profile.memoryLimit ?? 40) <= 20;  // proxy for "lite" model
+  const summaryBlock = sanitise(buildSegmentedSummaryBlock(
+      summarySegments,
+      historicalSummary ?? gameHistory.lastActiveSummary,
+      userInput,
+      gameHistory.history,
+      isLite ? 0 : 1,  // desktop = 2 older slots, lite = 1
+  ));
 
   // 8. Assembly
   const promptString = `
