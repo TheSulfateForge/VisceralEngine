@@ -1,0 +1,3 @@
+
+  return scored.filter(x => x.score > 0.5).slice(0, limit).map(x => x.s);
+}
