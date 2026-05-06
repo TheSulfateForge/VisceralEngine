@@ -787,6 +787,22 @@ export class VisceralDB extends Dexie {
       embeddings:
         '&id, campaign_id, [campaign_id+owner_kind], [owner_kind+owner_id], model_id, text_hash',
     });
+
+    // ─── v2 ─────────────────────────────────────────────────────────────
+    // Adds the campaign_id index on `entity_ledger_items` and
+    // `faction_known_actions`. `db/projection.ts` deletes rows from these
+    // tables via `where('campaign_id').equals(cid)`; under v1 those queries
+    // throw `KeyPath campaign_id ... is not indexed`, which broke saveGame
+    // (and therefore autosave) silently.
+    //
+    // Only the two changed tables are listed here; every other table
+    // inherits its v1 schema unchanged. Dexie handles the upgrade
+    // automatically the next time the DB is opened — no data migration
+    // needed because indexes are derivable from existing rows.
+    this.version(2).stores({
+      entity_ledger_items: '&id, entity_id, [entity_id+recorded_turn], campaign_id',
+      faction_known_actions: '&id, faction_id, [faction_id+recorded_turn], campaign_id',
+    });
   }
 }
 
