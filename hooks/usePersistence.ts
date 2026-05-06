@@ -3,12 +3,26 @@ import { useCallback, useEffect, useRef } from 'react';
 import { GameSave, CharacterTemplate } from '../types';
 import { generateSaveId, generateTemplateId, AUTOSAVE_ID } from '../idUtils';
 import { db } from '../db';
+import { backfillEmbeddings } from '../services/embeddingBackfill';
 import { downloadFile, debounce } from '../utils';
 import { useToast } from '../components/providers/ToastProvider';
 import { useErrorHandler } from './useErrorHandler';
 import { TIMING } from '../constants';
 import { useGameStore } from '../store';
 import { sanitiseStateOnLoad } from '../utils/nameResolver';
+
+/**
+ * Fire-and-forget embedding backfill. Runs incrementally in the background;
+ * skips items whose source text already has a current-model embedding. Safe
+ * to call repeatedly. Logs any errors to console rather than surfacing toasts.
+ */
+const kickBackfill = (): void => {
+  backfillEmbeddings(AUTOSAVE_ID, {
+    onProgress: () => {/* silent — could surface to debug overlay later */},
+  }).catch((err) => {
+    console.warn('[embedding backfill] failed:', err);
+  });
+};
 
 /**
  * HOOK: useAutosave
@@ -59,7 +73,10 @@ export const useAutosave = () => {
                 gameState: { history: currentState.gameHistory, world: currentState.gameWorld },
                 character: currentState.character
             });
-            // Quiet success for autosave
+            // Phase 2: opportunistically refresh embeddings for newly added
+            // memories/lore/entities/segments. Backfill is idempotent and
+            // skips items whose source text hasn't changed since last embed.
+            kickBackfill();
         } catch (e) {
             console.error("Autosave Error:", e);
         }
@@ -233,6 +250,10 @@ export const usePersistence = () => {
         setGameWorld({ ...world });
         setCharacter({ ...cleanChar });
         setUI({ view: 'game' });
+        // Phase 2: the loaded campaign content needs embeddings under
+        // AUTOSAVE_ID (the canonical scope used by hybrid retrieval).
+        // Kick a backfill — runs in the background, doesn't block the load.
+        kickBackfill();
         showToast("Reality restored.", "success");
       } else {
         showToast("Save file not found.", "error");
@@ -260,8 +281,7 @@ export const usePersistence = () => {
 
   const handleImportTemplates = useCallback(async (file: File) => {
     try {
-      const text = await file.text();
-      const parsed = JSON.parse(text);
+      const text = await file.text();    const parsed = JSON.parse(text);
       const templates: CharacterTemplate[] = Array.isArray(parsed) ? parsed : [parsed];
 
       const valid = templates.filter(t =>

@@ -176,7 +176,10 @@ export const useGeminiClient = () => {
         // v1.21: Pass modelName for model-adaptive context limits, and
         // historicalSummary so it can be positioned at the TOP of dynamic context
         // (moved from geminiClient.ts where it was buried after 63KB of instructions).
-        const { prompt: contextPrompt, ragDebug } = constructGeminiPrompt(
+        // Phase 2: constructGeminiPrompt is async (encodes the query
+        // embedding off-thread for hybrid retrieval). Awaits ~5–20ms warm,
+        // a few seconds on the very first call while the model loads.
+        const { prompt: contextPrompt, ragDebug } = await constructGeminiPrompt(
             preCallState.gameHistory,
             preCallState.gameWorld,
             preCallState.character,

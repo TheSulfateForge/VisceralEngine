@@ -1,5 +1,12 @@
 import { GameHistory, GameWorld, Character, SceneMode, MemoryItem, LoreItem, KnownEntity, BioMonitor, ActiveThreat, DormantHook, FactionExposure, ThreatDenialTracker, ChatMessage, SummarySegment, Role } from '../types';
 import { retrieveRelevantContext, retrieveRelevantMemories, retrieveRelevantSegments, RAGResult } from './ragEngine';
+import {
+  buildHybridContext,
+  retrieveRelevantContextHybrid,
+  retrieveRelevantMemoriesHybrid,
+  HybridContext,
+} from './hybridRagEngine';
+import { AUTOSAVE_ID } from '../idUtils';
 // v1.19: Section reminders moved to trailing position on user message (useGeminiClient.ts)
 // import { getSectionReminders } from '../sectionReminders';
 import { partitionConditions } from './contentValidation';
@@ -12,6 +19,23 @@ import {
 import { buildTraumaPromptBlock } from './traumaSystem';
 import { buildSkillPromptBlock } from './skillSystem';
 import { buildFactionPromptBlock } from './factionSystem';
+
+/**
+ * Phase 2 kill-switch. When true, lore/entity/memory retrieval uses the
+ * hybrid scorer (0.55 semantic + 0.25 lexical + 0.10 salience + 0.05
+ * recency + mandatory/pinned overrides). When false, everything routes
+ * through the legacy lexical-only ragEngine.
+ *
+ * The query embedding is computed off-thread; if the embedder is cold,
+ * unavailable, or fails, hybrid retrieval gracefully degrades to
+ * lexical-only for that turn instead of failing the prompt.
+ *
+ * Segment retrieval stays lexical-only — segments lack stable IDs in the
+ * in-memory shape, so wiring them up needs a separate id-resolution pass.
+ *
+ * Set to `false` for an instant rollback to pre-Phase-2 behavior.
+ */
+const USE_HYBRID_RAG = true;
 
 export interface PromptResult {
     prompt: string;
@@ -42,6 +66,7 @@ const buildMemoryContext = (
     recentHistory: ChatMessage[],
     currentTurn: number,
     limit?: number,
+    hybridCtx?: HybridContext | null,
 ): string => {
     if (memory.length === 0) return "";
 
@@ -70,14 +95,24 @@ const buildMemoryContext = (
 
     // Tier 2 — RAG-scored against current input
     const ragSize = Math.max(0, Math.floor(remainingBudget * 0.6));
-    const ragSelected = retrieveRelevantMemories(
-        userInput,
-        recentHistory,
-        remaining,
-        ragSize,
-        5,
-        currentTurn,
-    );
+    const ragSelected = hybridCtx
+        ? retrieveRelevantMemoriesHybrid(
+            hybridCtx,
+            userInput,
+            recentHistory,
+            remaining,
+            ragSize,
+            5,
+            currentTurn,
+        )
+        : retrieveRelevantMemories(
+            userInput,
+            recentHistory,
+            remaining,
+            ragSize,
+            5,
+            currentTurn,
+        );
     const ragIds = new Set(ragSelected.map(m => m.id));
 
     // Tier 3 — Recent (not already selected by tiers 1 or 2)
@@ -538,7 +573,7 @@ REQUIRED OUTPUT:
 `.trim();
 };
 
-export const constructGeminiPrompt = (
+export const constructGeminiPrompt = async (
   gameHistory: GameHistory,
   gameWorld: GameWorld,
   character: Character,
@@ -546,23 +581,55 @@ export const constructGeminiPrompt = (
   playerRemovedConditions: string[] = [],
   modelName: string = 'gemini-3-flash-preview',        // v1.21
   historicalSummary?: string                             // v1.21: Moved from geminiClient
-): PromptResult => {
+): Promise<PromptResult> => {
   // v1.21: Resolve model-specific context limits
   const profile = getContextProfile(modelName);
 
+  // Phase 2: Build the hybrid retrieval context once for this turn.
+  // Encodes the query off-thread, loads the campaign's embeddings into
+  // memory, and hands the bundle to each retrieval call below. Falls back
+  // to lexical-only on any failure (cold embedder, missing model, etc.).
+  let hybridCtx: HybridContext | null = null;
+  if (USE_HYBRID_RAG) {
+    try {
+      hybridCtx = await buildHybridContext(
+        AUTOSAVE_ID,
+        userInput,
+        gameHistory.history,
+        profile.ragLookback,
+      );
+    } catch (e) {
+      console.warn('[promptUtils] hybrid context build failed; falling back to lexical:', e);
+      hybridCtx = null;
+    }
+  }
+
   // 1. RAG Retrieval — use model-adaptive limits and lookback
   const activeThreatNames = (gameWorld.activeThreats || []).map(t => t.name);
-  const { relevantLore, relevantEntities, debugInfo } = retrieveRelevantContext(
-    userInput,
-    gameHistory.history,
-    gameWorld.lore,
-    gameWorld.knownEntities || [],
-    activeThreatNames,
-    profile.loreLimitOverride,   // v1.21: model-adaptive
-    profile.entityLimitOverride, // v1.21: model-adaptive
-    profile.ragLookback,         // v1.21: wider lookback for better entity recall
-    gameHistory.turnCount,       // v1.22: drives lore freshness boost
-  );
+  const { relevantLore, relevantEntities, debugInfo } = hybridCtx
+    ? retrieveRelevantContextHybrid(
+        hybridCtx,
+        userInput,
+        gameHistory.history,
+        gameWorld.lore,
+        gameWorld.knownEntities || [],
+        activeThreatNames,
+        profile.loreLimitOverride,
+        profile.entityLimitOverride,
+        profile.ragLookback,
+        gameHistory.turnCount,
+      )
+    : retrieveRelevantContext(
+        userInput,
+        gameHistory.history,
+        gameWorld.lore,
+        gameWorld.knownEntities || [],
+        activeThreatNames,
+        profile.loreLimitOverride,   // v1.21: model-adaptive
+        profile.entityLimitOverride, // v1.21: model-adaptive
+        profile.ragLookback,         // v1.21: wider lookback for better entity recall
+        gameHistory.turnCount,       // v1.22: drives lore freshness boost
+      );
 
   // 2. Build Context Strings — v1.22: tiered memory injection (pinned + RAG + recent)
   const memoryContext = buildMemoryContext(
@@ -571,6 +638,7 @@ export const constructGeminiPrompt = (
     gameHistory.history,
     gameHistory.turnCount,
     profile.memoryLimit,
+    hybridCtx,
   );
   const loreContext = buildLoreContext(relevantLore);
   const knownEntitiesContext = buildEntityContext(relevantEntities);
