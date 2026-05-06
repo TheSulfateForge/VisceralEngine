@@ -84,6 +84,17 @@ function buildEmbMap(rows: EmbeddingRow[]): Map<string, Float32Array> {
   return m;
 }
 
+// Storage layer (db/projection.ts) prefixes engine IDs with `${campaignId}::`
+// so they can't collide across campaigns. Embeddings owner_id therefore uses
+// the prefixed form, but in-memory items (LoreItem.id, KnownEntity.id,
+// MemoryItem.id) use the raw engine ID. These helpers bridge the two.
+const ID_SEP = '::';
+function stampEmbKey(cid: SaveId, id: string | null | undefined): string {
+  if (!id) return '';
+  // If already stamped (post-fix data), pass through; else prepend.
+  return id.startsWith(`${cid}${ID_SEP}`) ? id : `${cid}${ID_SEP}${id}`;
+}
+
 function normaliseLexical(score: number, maxLexical: number): number {
   if (maxLexical <= 0) return 0;
   return score / maxLexical;
@@ -221,7 +232,7 @@ export function retrieveRelevantContextHybrid(
   if (ctx.queryVector) {
     for (const c of candidates) {
       const ownerKind: EmbeddingOwnerKind = c.type === 'lore' ? 'lore' : 'entity';
-      const vec = embMap.get(`${ownerKind}:${c.id}`);
+      const vec = embMap.get(`${ownerKind}:${stampEmbKey(ctx.campaignId, c.id)}`);
       if (vec) {
         // Vectors are normalised so cos = dot.
         c.sem = Math.max(0, dot(ctx.queryVector, vec));
@@ -305,7 +316,7 @@ export function retrieveRelevantMemoriesHybrid(
     if (lex > maxLex) maxLex = lex;
     let sem = 0;
     if (ctx.queryVector) {
-      const vec = embMap.get(`memory:${m.id}`);
+      const vec = embMap.get(`memory:${stampEmbKey(ctx.campaignId, m.id)}`);
       if (vec) sem = Math.max(0, dot(ctx.queryVector, vec));
     }
     const salience = (m.salience ?? 2) / 5;

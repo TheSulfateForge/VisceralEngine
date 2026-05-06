@@ -100,6 +100,9 @@ import {
   Scenario,
   Skill,
   SaveId,
+  MessageId,
+  MemoryId,
+  LoreId,
   WorldTime,
   RollStatistics,
   RollOutcome,
@@ -117,6 +120,40 @@ const fromB = (v: number | undefined | null): boolean => v === 1;
 
 function normalizeName(name: string): string {
   return (name || '').toLowerCase().trim();
+}
+
+// ─── ID prefixing ──────────────────────────────────────────────────────────
+// Engine IDs (MessageId, MemoryId, LoreId, npc_*, faction_*, location names,
+// hook_*, threat IDs, etc.) are generated without knowledge of the campaign
+// they belong to. Two saves of different campaigns can therefore contain
+// identical engine IDs — and bulkPut overwrites by primary key, silently
+// reassigning rows from one campaign to the other. To keep storage rows
+// isolated per-campaign we prefix every stable engine ID with the campaign
+// id at write time and strip it at read.
+//
+// Synthetic UUID rows (entity_ledger_items.id, summary_segments.id, etc.)
+// don't need this — the UUIDs are unique by construction.
+//
+// `stamp` is a no-op for empty / nullish input so it's safe to apply to
+// optional FK columns.
+const ID_SEP = '::';
+function stamp(cid: SaveId, id: string | null | undefined): string {
+  if (!id) return '';
+  return `${cid}${ID_SEP}${id}`;
+}
+function stampOpt<T extends string>(cid: SaveId, id: T | null | undefined): T | null {
+  if (!id) return null;
+  return `${cid}${ID_SEP}${id}` as T;
+}
+function stripStamp(cid: SaveId, stamped: string | null | undefined): string {
+  if (!stamped) return '';
+  const prefix = `${cid}${ID_SEP}`;
+  return stamped.startsWith(prefix) ? stamped.slice(prefix.length) : stamped;
+}
+function stripStampOpt<T extends string>(cid: SaveId, stamped: string | null | undefined): T | undefined {
+  if (!stamped) return undefined;
+  const prefix = `${cid}${ID_SEP}`;
+  return (stamped.startsWith(prefix) ? stamped.slice(prefix.length) : stamped) as T;
 }
 
 function recomputeWorldTime(totalMinutes: number, display: string): WorldTime {
@@ -291,7 +328,7 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
     // ─── Turn history ───
     if (history.history?.length) {
       const messageRows: MessageRow[] = history.history.map((m: ChatMessage) => ({
-        id: m.id,
+        id: stamp(cid, m.id) as MessageId,
         campaign_id: cid,
         turn_number: 0, // turn_number is recomputed below
         role: m.role,
@@ -372,8 +409,9 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
         const pinned = tags.some((t) =>
           ['vow', 'oath', 'debt', 'reveal', 'death', 'identity', 'betrayal'].includes(t)
         );
+        const stampedMemId = stamp(cid, m.id) as MemoryId;
         memRows.push({
-          id: m.id,
+          id: stampedMemId,
           campaign_id: cid,
           fact: m.fact,
           salience: m.salience ?? 2,
@@ -382,7 +420,7 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
           is_pinned: pinned ? 1 : 0,
         });
         for (const tag of tags) {
-          tagRows.push({ memory_id: m.id, tag });
+          tagRows.push({ memory_id: stampedMemId, tag });
         }
       }
       await vdb.memories.bulkPut(memRows);
@@ -391,13 +429,13 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
 
     if (world.lore?.length) {
       const rows: LoreRow[] = (world.lore as LoreItem[]).map((l) => ({
-        id: l.id,
+        id: stamp(cid, l.id) as LoreId,
         campaign_id: cid,
         keyword: l.keyword,
         content: l.content,
         timestamp: l.timestamp,
         turn_created: l.turnCreated ?? null,
-        semantic_update_of: l.semanticUpdateOf ?? null,
+        semantic_update_of: stampOpt<LoreId>(cid, l.semanticUpdateOf),
       }));
       await vdb.lore.bulkPut(rows);
     }
@@ -407,8 +445,9 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
       const eRows: EntityRow[] = [];
       const ledgerRows: EntityLedgerRow[] = [];
       for (const e of world.knownEntities as KnownEntity[]) {
+        const stampedEid = stamp(cid, e.id);
         eRows.push({
-          id: e.id,
+          id: stampedEid,
           campaign_id: cid,
           name: e.name,
           role: e.role,
@@ -426,7 +465,7 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
         for (const text of e.ledger ?? []) {
           ledgerRows.push({
             id: generateUUID(),
-            entity_id: e.id,
+            entity_id: stampedEid,
             campaign_id: cid,
             text,
             recorded_turn: e.lastSeenTurn ?? 0,
@@ -440,7 +479,7 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
     // ─── Pregnancies ───
     if (world.pregnancies?.length) {
       const rows: PregnancyRow[] = (world.pregnancies as Pregnancy[]).map((p) => ({
-        id: p.id,
+        id: stamp(cid, p.id),
         campaign_id: cid,
         mother_entity_id: null,
         mother_is_player: 0,                   // not derivable from legacy shape
@@ -462,7 +501,7 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
     const lg: LocationGraph | undefined = world.locationGraph;
     if (lg?.nodes) {
       const nodeRows: LocationRow[] = Object.values(lg.nodes).map((n: LocationNode) => ({
-        id: n.id,
+        id: stamp(cid, n.id),
         campaign_id: cid,
         display_name: n.displayName,
         description: n.description ?? null,
@@ -474,8 +513,8 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
       const edgeRows: LocationEdgeRow[] = (lg.edges ?? []).map((e: LocationEdge) => ({
         id: generateUUID(),
         campaign_id: cid,
-        from_id: e.from,
-        to_id: e.to,
+        from_id: stamp(cid, e.from),
+        to_id: stamp(cid, e.to),
         travel_time_minutes: e.travelTimeMinutes,
         source: e.source,
         created_turn: e.createdTurn,
@@ -495,8 +534,9 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
       const actionRows: FactionKnownActionRow[] = [];
 
       for (const f of world.factions as Faction[]) {
+        const stampedFid = stamp(cid, f.id);
         fRows.push({
-          id: f.id,
+          id: stampedFid,
           campaign_id: cid,
           name: f.name,
           description: f.description,
@@ -508,21 +548,21 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
 
         for (const territoryId of f.territory ?? []) {
           territoryRows.push({
-            faction_id: f.id,
-            location_id: territoryId,
+            faction_id: stampedFid,
+            location_id: stamp(cid, territoryId),
             campaign_id: cid,
             claimed_turn: 0,
           });
         }
 
         for (const resource of f.resources ?? []) {
-          resourceRows.push({ faction_id: f.id, resource, campaign_id: cid });
+          resourceRows.push({ faction_id: stampedFid, resource, campaign_id: cid });
         }
 
         for (const memberEntityId of f.memberEntityIds ?? []) {
           memberRows.push({
-            faction_id: f.id,
-            entity_id: memberEntityId,
+            faction_id: stampedFid,
+            entity_id: stamp(cid, memberEntityId),
             campaign_id: cid,
             joined_turn: 0,
             role_in_faction: null,
@@ -531,8 +571,8 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
 
         for (const [otherId, disp] of Object.entries(f.disposition ?? {})) {
           dispRows.push({
-            from_faction_id: f.id,
-            to_faction_id: otherId,
+            from_faction_id: stampedFid,
+            to_faction_id: stamp(cid, otherId),
             campaign_id: cid,
             disposition: disp,
             last_updated_turn: 0,
@@ -541,7 +581,7 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
 
         if (f.playerStanding) {
           standingRows.push({
-            faction_id: f.id,
+            faction_id: stampedFid,
             campaign_id: cid,
             reputation: f.playerStanding.reputation,
             rank: f.playerStanding.rank ?? null,
@@ -550,7 +590,7 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
           for (const action of f.playerStanding.knownActions ?? []) {
             actionRows.push({
               id: generateUUID(),
-              faction_id: f.id,
+              faction_id: stampedFid,
               campaign_id: cid,
               action,
               recorded_turn: 0,
@@ -570,10 +610,10 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
 
     if (world.factionConflicts?.length) {
       const rows: FactionConflictRow[] = (world.factionConflicts as FactionConflict[]).map((c) => ({
-        id: c.id,
+        id: stamp(cid, c.id),
         campaign_id: cid,
-        aggressor_id: c.aggressorId,
-        defender_id: c.defenderId,
+        aggressor_id: stamp(cid, c.aggressorId),
+        defender_id: stamp(cid, c.defenderId),
         type: c.type,
         start_turn: c.startTurn,
         stakes: c.stakes,
@@ -630,8 +670,9 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
       const hookRows: DormantHookRow[] = [];
       const hookEntityRows: DormantHookEntityRow[] = [];
       for (const h of world.dormantHooks as DormantHook[]) {
+        const stampedHid = stamp(cid, h.id);
         hookRows.push({
-          id: h.id,
+          id: stampedHid,
           campaign_id: cid,
           summary: h.summary,
           category: h.category,
@@ -646,7 +687,7 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
         });
         for (const entityName of h.involvedEntities ?? []) {
           hookEntityRows.push({
-            hook_id: h.id,
+            hook_id: stampedHid,
             entity_name_normalized: normalizeName(entityName),
             campaign_id: cid,
             resolved_entity_id: null,
@@ -660,7 +701,7 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
     // Active threats
     if (world.activeThreats?.length) {
       const rows: ThreatRow[] = (world.activeThreats as ActiveThreat[]).map((t) => ({
-        id: t.id,
+        id: stamp(cid, t.id),
         campaign_id: cid,
         kind: 'active',
         name: t.name,
@@ -692,9 +733,10 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
       const rows: ThreatRow[] = [];
       const sourceRows: ThreatEntitySourceRow[] = [];
       for (const t of world.emergingThreats as WorldTickEvent[]) {
-        const id = t.id ?? generateUUID();
+        const rawId = t.id ?? generateUUID();
+        const stampedTid = stamp(cid, rawId);
         rows.push({
-          id,
+          id: stampedTid,
           campaign_id: cid,
           kind: 'emerging',
           name: null,
@@ -706,9 +748,9 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
           distance: null,
           description: t.description,
           turns_until_impact: t.turns_until_impact ?? null,
-          faction_source: t.factionSource ?? null,
-          origin_hook_id: t.originHookId ?? null,
-          dormant_hook_id_at_creation: t.dormantHookId ?? null,
+          faction_source: t.factionSource ? stamp(cid, t.factionSource) : null,
+          origin_hook_id: t.originHookId ? stamp(cid, t.originHookId) : null,
+          dormant_hook_id_at_creation: t.dormantHookId ? stamp(cid, t.dormantHookId) : null,
           player_action_cause: t.playerActionCause ?? null,
           status: t.status ?? null,
           turn_created: t.turnCreated ?? null,
@@ -720,7 +762,7 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
         });
         for (const ename of t.entitySourceNames ?? []) {
           sourceRows.push({
-            threat_id: id,
+            threat_id: stampedTid,
             entity_name_normalized: normalizeName(ename),
             campaign_id: cid,
           });
@@ -770,7 +812,7 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
     const legal: LegalStatus | undefined = world.legalStatus;
     if (legal?.knownClaims?.length) {
       const rows: LegalClaimRow[] = (legal.knownClaims as LegalClaim[]).map((c) => ({
-        id: c.id,
+        id: stamp(cid, c.id),
         campaign_id: cid,
         claimant: c.claimant,
         subject: c.subject,
@@ -806,7 +848,7 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
       threat_cooldown_until_turn: world.threatCooldownUntilTurn ?? null,
       session_denial_count: world.sessionDenialCount ?? 0,
       passive_allies_detected: b(world.passiveAlliesDetected),
-      player_location_id: lg?.playerLocationId ?? null,
+      player_location_id: lg?.playerLocationId ? stamp(cid, lg.playerLocationId) : null,
       player_location_text: world.location ?? null,
       hidden_registry: world.hiddenRegistry ?? '',
       visual_url: world.visualUrl ?? null,
@@ -949,7 +991,7 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
     // ─── History ───
     const messageRows = await vdb.messages.where('campaign_id').equals(campaignId).sortBy('timestamp');
     const history: ChatMessage[] = messageRows.map((m) => ({
-      id: m.id,
+      id: stripStamp(campaignId, m.id) as MessageId,
       role: m.role,
       text: m.text,
       timestamp: m.timestamp,
@@ -1029,7 +1071,7 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
       tagsByMem.get(t.memory_id)!.push(t.tag);
     }
     const memory: MemoryItem[] = memRows.map((m) => ({
-      id: m.id,
+      id: stripStamp(campaignId, m.id) as MemoryId,
       fact: m.fact,
       timestamp: m.timestamp,
       salience: m.salience,
@@ -1039,12 +1081,14 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
 
     const loreRows = await vdb.lore.where('campaign_id').equals(campaignId).toArray();
     const lore: LoreItem[] = loreRows.map((l) => ({
-      id: l.id,
+      id: stripStamp(campaignId, l.id) as LoreId,
       keyword: l.keyword,
       content: l.content,
       timestamp: l.timestamp,
       ...(l.turn_created !== null ? { turnCreated: l.turn_created } : {}),
-      ...(l.semantic_update_of !== null ? { semanticUpdateOf: l.semantic_update_of } : {}),
+      ...(l.semantic_update_of !== null
+        ? { semanticUpdateOf: stripStampOpt<LoreId>(campaignId, l.semantic_update_of) }
+        : {}),
     }));
 
     const entityRows = await vdb.entities.where('campaign_id').equals(campaignId).toArray();
@@ -1058,7 +1102,7 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
       ledgerByEntity.get(r.entity_id)!.push(r.text);
     }
     const knownEntities: KnownEntity[] = entityRows.map((e) => ({
-      id: e.id,
+      id: stripStamp(campaignId, e.id),
       name: e.name,
       role: e.role,
       location: e.current_location_text ?? '',
@@ -1075,7 +1119,7 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
 
     const pregRows = await vdb.pregnancies.where('campaign_id').equals(campaignId).toArray();
     const pregnancies: Pregnancy[] = pregRows.map((p) => ({
-      id: p.id,
+      id: stripStamp(campaignId, p.id),
       motherName: p.mother_name_legacy,
       fatherName: p.father_name_legacy,
       conceptionTurn: p.conception_turn,
@@ -1091,8 +1135,9 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
     if (locationRows.length || edgeRows.length || ws?.player_location_id) {
       const nodes: Record<string, LocationNode> = {};
       for (const r of locationRows) {
-        nodes[r.id] = {
-          id: r.id,
+        const unstampedId = stripStamp(campaignId, r.id);
+        nodes[unstampedId] = {
+          id: unstampedId,
           displayName: r.display_name,
           firstMentionedTurn: r.first_mentioned_turn,
           tags: r.tags,
@@ -1100,14 +1145,18 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
         };
       }
       const edges: LocationEdge[] = edgeRows.map((e) => ({
-        from: e.from_id,
-        to: e.to_id,
+        from: stripStamp(campaignId, e.from_id),
+        to: stripStamp(campaignId, e.to_id),
         travelTimeMinutes: e.travel_time_minutes,
         source: e.source,
         createdTurn: e.created_turn,
         ...(e.mode_overrides ? { modeOverrides: e.mode_overrides } : {}),
       }));
-      locationGraph = { nodes, edges, playerLocationId: ws?.player_location_id ?? '' };
+      locationGraph = {
+        nodes,
+        edges,
+        playerLocationId: stripStamp(campaignId, ws?.player_location_id),
+      };
     }
 
     // Factions
@@ -1136,18 +1185,22 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
       const standing = standingRows.find((s) => s.faction_id === f.id);
       const dispositions: Record<string, typeof dispRows[number]['disposition']> = {};
       for (const d of dispRows.filter((x) => x.from_faction_id === f.id)) {
-        dispositions[d.to_faction_id] = d.disposition;
+        dispositions[stripStamp(campaignId, d.to_faction_id)] = d.disposition;
       }
       return {
-        id: f.id,
+        id: stripStamp(campaignId, f.id),
         name: f.name,
         description: f.description,
-        territory: territoryRows.filter((t) => t.faction_id === f.id).map((t) => t.location_id),
+        territory: territoryRows
+          .filter((t) => t.faction_id === f.id)
+          .map((t) => stripStamp(campaignId, t.location_id)),
         influence: f.influence,
         disposition: dispositions,
         resources: resourceRows.filter((r) => r.faction_id === f.id).map((r) => r.resource),
         leader: f.leader_name_legacy ?? undefined,
-        memberEntityIds: memberRows.filter((m) => m.faction_id === f.id).map((m) => m.entity_id),
+        memberEntityIds: memberRows
+          .filter((m) => m.faction_id === f.id)
+          .map((m) => stripStamp(campaignId, m.entity_id)),
         playerStanding: {
           reputation: standing?.reputation ?? 0,
           rank: standing?.rank ?? undefined,
@@ -1162,9 +1215,9 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
 
     const conflictRows = await vdb.faction_conflicts.where('campaign_id').equals(campaignId).toArray();
     const factionConflicts: FactionConflict[] = conflictRows.map((c) => ({
-      id: c.id,
-      aggressorId: c.aggressor_id,
-      defenderId: c.defender_id,
+      id: stripStamp(campaignId, c.id),
+      aggressorId: stripStamp(campaignId, c.aggressor_id),
+      defenderId: stripStamp(campaignId, c.defender_id),
       type: c.type,
       startTurn: c.start_turn,
       stakes: c.stakes,
@@ -1200,7 +1253,7 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
     const activeThreats: ActiveThreat[] = threatRows
       .filter((t) => t.kind === 'active')
       .map((t) => ({
-        id: t.id,
+        id: stripStamp(campaignId, t.id),
         name: t.name!,
         archetype: t.archetype!,
         status: t.enemy_state!,
@@ -1225,8 +1278,8 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
       .map((t) => ({
         description: t.description ?? '',
         ...(t.turns_until_impact !== null ? { turns_until_impact: t.turns_until_impact } : {}),
-        id: t.id,
-        ...(t.faction_source !== null ? { factionSource: t.faction_source } : {}),
+        id: stripStamp(campaignId, t.id),
+        ...(t.faction_source !== null ? { factionSource: stripStamp(campaignId, t.faction_source) } : {}),
         ...(t.turn_created !== null ? { turnCreated: t.turn_created } : {}),
         ...(t.minimum_eta_floor !== null ? { minimumEtaFloor: t.minimum_eta_floor } : {}),
         ...(t.consecutive_turns_at_eta_one !== null
@@ -1237,7 +1290,7 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
           : {}),
         ...(t.status !== null ? { status: t.status } : {}),
         ...(t.dormant_hook_id_at_creation !== null
-          ? { dormantHookId: t.dormant_hook_id_at_creation }
+          ? { dormantHookId: stripStamp(campaignId, t.dormant_hook_id_at_creation) }
           : {}),
         ...(t.player_action_cause !== null ? { playerActionCause: t.player_action_cause } : {}),
         ...(sourceByThreat.has(t.id) ? { entitySourceNames: sourceByThreat.get(t.id) } : {}),
@@ -1245,7 +1298,7 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
           ? { pivotPenaltyApplied: t.pivot_penalty_applied }
           : {}),
         ...(t.original_eta !== null ? { originalEta: t.original_eta } : {}),
-        ...(t.origin_hook_id !== null ? { originHookId: t.origin_hook_id } : {}),
+        ...(t.origin_hook_id !== null ? { originHookId: stripStamp(campaignId, t.origin_hook_id) } : {}),
       }));
 
     const hookRows = await vdb.dormant_hooks.where('campaign_id').equals(campaignId).toArray();
@@ -1259,7 +1312,7 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
       entitiesByHook.get(r.hook_id)!.push(r.entity_name_normalized);
     }
     const dormantHooks: DormantHook[] = hookRows.map((h) => ({
-      id: h.id,
+      id: stripStamp(campaignId, h.id),
       summary: h.summary,
       category: h.category,
       sourceField: h.source_field,
@@ -1304,7 +1357,7 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
     const docRows = await vdb.player_documents.where('campaign_id').equals(campaignId).toArray();
     const legalStatus: LegalStatus = {
       knownClaims: claimRows.map((c) => ({
-        id: c.id,
+        id: stripStamp(campaignId, c.id),
         claimant: c.claimant,
         subject: c.subject,
         basis: c.basis,
