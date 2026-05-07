@@ -26,8 +26,8 @@ export class GeminiService extends GeminiClient {
         return this.summaryService.summarizeHistory(history);
     }
 
-    async generateScenarios(character: Character): Promise<Scenario[]> {
-        return this.scenarioService.generateScenarios(character);
+    async generateScenarios(character: Character, seedBrief?: string): Promise<Scenario[]> {
+        return this.scenarioService.generateScenarios(character, seedBrief);
     }
 
     async generateImage(prompt: string): Promise<string | null> {

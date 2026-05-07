@@ -7,11 +7,22 @@ import { GeminiClient } from "./geminiClient";
 export class ScenarioService {
     constructor(private client: GeminiClient) {}
 
-    async generateScenarios(character: Character): Promise<Scenario[]> {
+    /**
+     * v0.12.3: Optional `seedBrief` is a compact projection of the selected
+     * WorldSeed (built via utils/seedBrief.ts). When provided, scenarios are
+     * anchored to canon NPCs/factions/locations/rules from the seed instead
+     * of inventing parallel substitutes. When omitted (no seed selected),
+     * behavior is identical to pre-0.12.3.
+     */
+    async generateScenarios(character: Character, seedBrief?: string): Promise<Scenario[]> {
         try {
+            const worldCanonBlock = seedBrief && seedBrief.trim().length > 0
+                ? `\n      [WORLD CANON — AUTHORITATIVE]\n${seedBrief}\n      Anchor every scenario's NPCs, factions, locations, and lore references to the canon above. Do not invent parallel substitutes for entities that already exist in the seed. Tone and technology level must align with the listed tags and rules.\n`
+                : '';
+
             const prompt = `
       Generate 4 distinct starting scenarios for a grounded, gritty-but-fair roleplaying game based on this character:
-      ${JSON.stringify(character)}
+      ${JSON.stringify(character)}${worldCanonBlock}
       BALANCE RULE (applies to hooks 1–3 only): The player character must begin from a NEUTRAL or ADVANTAGED position. They are not already compromised, captured, ambushed, blackmailed, humiliated, or in physical distress at scene open. Any complication or threat must emerge DURING play as a result of player choices — not be pre-loaded into the opening situation. The character has full agency from the first moment.
       BANNED NAMES - DO NOT USE: Elara, Kaela, Lyra, Kael, Vex, Thorne, Kaelen, Valerius, Seraphina, Zara, Zephyr, Aria, Aurelia, Draven, Caelan, Aldric, Caelum, Sylva, Rhea, Celeste, Mira, Isolde, Aelindra, Calen, Soraya, Tristan, Eryndor, Alara, Oakhaven
       1. MUNDANE HOOK: Low stakes, everyday problem with a subtle complication. The character is going about their normal life — they are competent, in control, and the complication is a puzzle to solve, not a trap they're already caught in.

@@ -19,6 +19,8 @@ import {
 import { buildTraumaPromptBlock } from './traumaSystem';
 import { buildSkillPromptBlock } from './skillSystem';
 import { buildFactionPromptBlock } from './factionSystem';
+import { buildSeedBrief } from './seedBrief';
+import { db } from '../db';
 
 /**
  * Phase 2 kill-switch. When true, lore/entity/memory retrieval uses the
@@ -708,6 +710,27 @@ This world is fundamentally: ${gameWorld.worldTags.join(', ')}.
 - Do NOT introduce elements that contradict them (e.g. modern tech in a medieval setting, patriarchal defaults in a matriarchal world, levity in a grimdark one).`
     : '';
 
+  // v0.12.3: First-turn World Primer. On turn 0 only, inject a compact
+  // projection of the selected WorldSeed so the model has the full canon
+  // (NPCs, factions, locations, lore, rules) in view before it writes the
+  // opening scene. After turn 1 the hybrid RAG engine surfaces relevant
+  // pieces organically, so this block is intentionally one-shot.
+  //
+  // No-op when no seed is selected (worldSeedId unset) — preserves
+  // pre-0.12.3 behavior for character-only games.
+  let worldPrimerBlock = '';
+  if (gameHistory.turnCount === 0 && gameWorld.worldSeedId) {
+    try {
+      const seed = await db.loadWorldSeed(gameWorld.worldSeedId);
+      const brief = buildSeedBrief(seed);
+      if (brief) {
+        worldPrimerBlock = `[WORLD PRIMER — TURN 0 ONLY]\n${brief}`;
+      }
+    } catch (e) {
+      console.warn('[promptUtils] turn-0 seed primer load failed; continuing without primer:', e);
+    }
+  }
+
   // v1.7: Final sanitisation pass — ensure no banned names leak into prompt
   const nameMap = gameWorld.bannedNameMap ?? {};
   const sanitise = (s: string) => applyExistingMap(s, nameMap);
@@ -740,6 +763,7 @@ This world is fundamentally: ${gameWorld.worldTags.join(', ')}.
 ${summaryBlock}
 ${sanitise(situationRecap)}
 ${sanitise(dreamSeed ? `\n${dreamSeed}\n` : '')}
+${sanitise(worldPrimerBlock ? `\n${worldPrimerBlock}\n` : '')}
 
 [CONTEXT]
 ${sanitise(memoryContext)}
