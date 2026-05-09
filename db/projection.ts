@@ -454,6 +454,7 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
           current_location_id: null,           // resolved at higher layer
           current_location_text: e.location ?? null,
           impression: e.impression,
+          personality: e.personality?.trim() ? e.personality.trim() : null,
           relationship_level: e.relationship_level,
           leverage: e.leverage,
           status: (e.status ?? 'present') as typeof ENTITY_STATUSES[number],
@@ -1110,6 +1111,10 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
       relationship_level: e.relationship_level,
       leverage: e.leverage,
       ledger: ledgerByEntity.get(e.id) ?? [],
+      // Conditionally spread so unset personality stays `undefined` on
+      // projection (matches absorb side: undefined input → null in DB →
+      // absent on output), preserving round-trip equivalence.
+      ...(e.personality ? { personality: e.personality } : {}),
       ...(e.status ? { status: e.status } : {}),
       ...(e.last_seen_turn !== null ? { lastSeenTurn: e.last_seen_turn } : {}),
       ...(e.first_seen_turn !== null ? { firstSeenTurn: e.first_seen_turn } : {}),

@@ -89,7 +89,15 @@ export const buildSeedBrief = (seed: WorldSeed | null | undefined): string => {
         lines.push(`Notable NPCs (top ${shown} of ${seed.npcs.length}):`);
         for (const npc of seed.npcs.slice(0, MAX_NPCS)) {
             const fac = npc.faction ? `, ${npc.faction}` : '';
-            lines.push(`- ${npc.name} (${npc.role}${fac}, at ${npc.location}): ${truncate(npc.description, 120)}`);
+            // Personality is rendered as a second line per NPC. It's
+            // canonical characterization and must reach the model intact —
+            // truncating it to 120 chars (like description) silently
+            // collapsed seed-defined warm/diverse traits into the system
+            // prompt's threat-parity default. Wider cap, own line.
+            lines.push(`- ${npc.name} (${npc.role}${fac}, at ${npc.location}): ${truncate(npc.description, 140)}`);
+            if (npc.personality?.trim()) {
+                lines.push(`  Personality (canonical): ${truncate(npc.personality, 220)}`);
+            }
         }
     }
 

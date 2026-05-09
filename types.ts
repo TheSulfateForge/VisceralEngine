@@ -143,6 +143,16 @@ export interface KnownEntity {
     leverage: string;
     ledger: string[];
 
+    // --- Characterization (v1.16) ---
+    /**
+     * Canonical personality descriptors for this entity — traits, quirks,
+     * beliefs, habits. Sourced from the World Seed for named seed NPCs and
+     * surfaced as its own field in the per-turn entity context so the model
+     * does not default-fill characterization from the system prompt's
+     * threat-parity language. Free-form text; commas/semicolons fine.
+     */
+    personality?: string;
+
     // --- v1.14: Entity Status Lifecycle ---
     status?: EntityStatus;
     lastSeenTurn?: number;

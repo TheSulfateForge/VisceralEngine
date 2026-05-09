@@ -48,12 +48,16 @@ export function hydrateWorldSeed(seed: WorldSeed): Partial<GameWorld> {
   }));
 
   // Convert NPCs to KnownEntities
+  // NOTE: `npc.personality` is preserved as its own field (not folded into
+  // `impression`) so the per-turn prompt can surface canonical traits as a
+  // separate, model-visible line. See KnownEntity.personality docstring.
   const knownEntities: KnownEntity[] = seed.npcs.map(npc => ({
     id: `npc_${npc.name.toLowerCase().replace(/\s+/g, '_')}`,
     name: npc.name,
     role: npc.role,
     location: npc.location,
     impression: npc.description,
+    personality: npc.personality?.trim() || undefined,
     relationship_level: 'NEUTRAL' as const,
     leverage: '',
     ledger: [],

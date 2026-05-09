@@ -239,11 +239,19 @@ const buildEntityContext = (entities: KnownEntity[]): string => {
     let context = '';
 
     if (active.length > 0) {
-        const activeStrings = active.map(e =>
-            `ID: ${e.id}\n Name: ${e.name} (${e.role})\n Location: ${e.location}\n` +
-            ` Current State: [${e.relationship_level}] - ${e.impression}\n` +
-            ` Leverage: ${e.leverage}\n Ledger: [${e.ledger.join(', ')}]`
-        ).join('\n----------------\n');
+        const activeStrings = active.map(e => {
+            // Personality gets its own line — canonical traits, model must
+            // honor these over its default characterization impulses.
+            const personalityLine = e.personality?.trim()
+                ? ` Personality (CANONICAL — honor these traits): ${e.personality.trim()}\n`
+                : '';
+            return (
+                `ID: ${e.id}\n Name: ${e.name} (${e.role})\n Location: ${e.location}\n` +
+                personalityLine +
+                ` Current State: [${e.relationship_level}] - ${e.impression}\n` +
+                ` Leverage: ${e.leverage}\n Ledger: [${e.ledger.join(', ')}]`
+            );
+        }).join('\n----------------\n');
         context += `\n[ACTIVE ENTITIES — In Scene / Nearby]\n${activeStrings}`;
     }
 

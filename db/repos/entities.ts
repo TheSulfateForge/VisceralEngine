@@ -21,6 +21,9 @@ const toEntity = (r: EntityRow, ledger: string[]): KnownEntity => ({
   relationship_level: r.relationship_level,
   leverage: r.leverage,
   ledger,
+  // Conditionally spread so an unset personality round-trips as `undefined`
+  // rather than re-emerging as `null` and breaking verify.ts equivalence.
+  ...(r.personality ? { personality: r.personality } : {}),
   ...(r.status ? { status: r.status } : {}),
   ...(r.first_seen_turn !== null ? { firstSeenTurn: r.first_seen_turn } : {}),
   ...(r.last_seen_turn !== null ? { lastSeenTurn: r.last_seen_turn } : {}),
@@ -83,6 +86,7 @@ export const entitiesRepo = {
       current_location_id: null,
       current_location_text: e.location ?? null,
       impression: e.impression,
+      personality: e.personality?.trim() ? e.personality.trim() : null,
       relationship_level: e.relationship_level,
       leverage: e.leverage,
       status: e.status ?? 'present',

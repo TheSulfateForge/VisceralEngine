@@ -218,6 +218,15 @@ export interface EntityRow {
   current_location_id: string | null;
   current_location_text: string | null;
   impression: string;
+  /**
+   * Canonical personality descriptors (traits, quirks, beliefs, habits).
+   * Sourced from the World Seed for named seed NPCs. Surfaced in the
+   * per-turn prompt as its own field so the model anchors characterization
+   * here rather than defaulting from system-prompt threat language.
+   * Non-indexed (we never query by it), so no schema version bump is
+   * needed when it lands — Dexie persists arbitrary row fields.
+   */
+  personality: string | null;
   relationship_level: RelationshipLevel;
   leverage: string;
   status: EntityStatus;
