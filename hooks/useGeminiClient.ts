@@ -209,6 +209,23 @@ export const useGeminiClient = () => {
             && preCallState.gameHistory.turnCount > 0
             && preCallState.gameHistory.turnCount % 8 === 0;
 
+        // v1.20: Hostile NPC detection. Threat-parity behavior text is now
+        // injected as a conditional reminder rather than always-on §10
+        // language, so peaceful/ordinary scenes don't get primed with
+        // threat-aware vocabulary that was collapsing characterization
+        // to predatory/cold/calculating/clinical. Counts an entity as
+        // hostile if it has HOSTILE or NEMESIS relationship_level AND is
+        // present/nearby (status undefined counts as in-scene for legacy
+        // entities). Distant/dead/retired hostiles don't count — they
+        // can't act on the player this turn.
+        const hostileEntityPresent = (preCallState.gameWorld.knownEntities ?? [])
+            .some(e =>
+                (e.relationship_level === 'HOSTILE' ||
+                 e.relationship_level === 'NEMESIS') &&
+                (!e.status || e.status === 'present' || e.status === 'nearby')
+            );
+        const tensionLevel = preCallState.gameWorld.tensionLevel ?? 0;
+
         const activeReminders = getSectionReminders(
             preCallState.gameHistory.turnCount,
             preCallState.gameWorld.sceneMode,
@@ -222,6 +239,8 @@ export const useGeminiClient = () => {
             dreamSeedActive,
             foreignSpeechPending,
             recentInjuryAdded,
+            hostileEntityPresent,
+            tensionLevel,
         );
         // Join multiple reminders into a single string for the prompt
         const activeReminder = activeReminders.length > 0 

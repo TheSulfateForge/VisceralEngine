@@ -390,6 +390,38 @@ The engine auto-removes conditions whose [HEAL:T<N>] marker is ≤ current
 turn. Do NOT attach [HEAL:T] to truly permanent injuries, NPC/location-bound
 conditions, or Devil's Bargain costs — those are intentionally sticky.`,
 
+    HOSTILE_NPC_PROTOCOL: `[SYSTEM REMINDER: HOSTILE NPC PROTOCOL — THREAT PARITY ACTIVE v1.20]
+A hostile NPC is present, an encounter is active, scene tension is
+elevated, or the scene mode is COMBAT. Threat-parity rules now apply
+for THIS turn. (They were intentionally absent on previous peaceful
+turns so NPCs in ordinary scenes did not read as latent operators.)
+
+ACTIONS (what hostile NPCs DO):
+- Exploit weakness — sleep, injury, isolation, emotional compromise.
+- Use leverage — hostages, blackmail, poison, coercion, economic
+  pressure, public reputation, family members, debts.
+- Escalate when cornered — they do not give up at convenient moments;
+  they fight back, flee, betray, or trade up the chain.
+- Allies can become threats: devoted → possessive → controlling, when
+  the relationship's underlying tensions justify it.
+- NPCs do not protect the player from consequences. The world reacts
+  to actions; consequences are the content filter, not refusal.
+
+VOICE PERSISTS — DO NOT FLIP CHARACTERIZATION:
+This reminder governs ACTIONS, not VOICE. The personality field on
+each entity remains authoritative. A warm character betraying the
+player still sounds warm-but-conflicted, not "icy operator." A bawdy
+character killing an enemy still sounds bawdy and savage, not
+"clinical." A devout character coercing the player still sounds
+devout-but-rationalising, not "calculating." See SYSTEM_INSTRUCTIONS
+§10 "Personality persists through context" and "Characterization
+diversity" rules — those override default characterization impulses
+even (especially) in hostile scenes.
+
+If you find yourself reaching for predatory/cold/calculating/clinical
+voice because this reminder is active, you have misread it. The
+reminder activates threat ACTIONS, not threat VOICE.`,
+
     CONDITION_AUDIT: `[SYSTEM REMINDER: CONDITION AUDIT — MANDATORY PRUNE REQUIRED]
 The character's condition list has exceeded 25 entries. MANDATORY PRUNE IS ACTIVE.
 
@@ -449,6 +481,10 @@ export const getSectionReminders = (
     dreamSeedActive: boolean = false,
     foreignSpeechPending: boolean = false,
     recentInjuryAdded: boolean = false,
+    // v1.20 (Characterization Diet): threat-parity moved out of always-on §10.
+    // Fires only when an adversarial dynamic is actually present.
+    hostileEntityPresent: boolean = false,
+    tensionLevel: number = 0,
 ): string[] => {
     const reminders: string[] = [];
 
@@ -499,6 +535,20 @@ export const getSectionReminders = (
     // -----------------------------------------------------------------------
     if (entityDensityViolated(currentTurnCount, entityCount)) {
         if (reminders.length < 2) reminders.push(REMINDERS.ENTITY_DENSITY);
+    }
+
+    // v1.20: Hostile NPC protocol — replaces the always-on "Threat parity"
+    // block in §10. Fires whenever an adversarial dynamic is actually
+    // present, so peaceful/ordinary turns are not primed with threat-aware
+    // language (which was causing model-wide collapse to predatory/cold/
+    // calculating/clinical voice).
+    const hostileScene =
+        hostileEntityPresent ||
+        tensionLevel >= 50 ||
+        emergingThreatsCount > 0 ||
+        mode === 'COMBAT';
+    if (hostileScene) {
+        if (reminders.length < 2) reminders.push(REMINDERS.HOSTILE_NPC_PROTOCOL);
     }
 
     if (reminders.length >= 2) return reminders.slice(0, 2);
@@ -564,6 +614,8 @@ export const getSectionReminder = (
     dreamSeedActive: boolean = false,        // v1.19
     foreignSpeechPending: boolean = false,   // v1.19
     recentInjuryAdded: boolean = false,      // v1.19
+    hostileEntityPresent: boolean = false,   // v1.20
+    tensionLevel: number = 0,                // v1.20
 ): string | null => {
     // Priority -2 (Turn-shape override): Dream turns change the whole output
     // structure and must beat everything else.
@@ -600,6 +652,18 @@ export const getSectionReminder = (
     // Priority 0.5: Entity Density — fires every turn while obligation is unmet
     if (entityDensityViolated(currentTurnCount, entityCount)) {
         return REMINDERS.ENTITY_DENSITY;
+    }
+
+    // v1.20 Priority 1.0: Hostile NPC Protocol — fires every turn while
+    // adversarial conditions are active. Higher priority than rotating
+    // reminders so the threat-action rules aren't displaced by a vocab check.
+    const hostileScene =
+        hostileEntityPresent ||
+        tensionLevel >= 50 ||
+        emergingThreatsCount > 0 ||
+        mode === 'COMBAT';
+    if (hostileScene) {
+        return REMINDERS.HOSTILE_NPC_PROTOCOL;
     }
 
     // Priority 1.5: Logistics Check — fires every turn while threats exist
