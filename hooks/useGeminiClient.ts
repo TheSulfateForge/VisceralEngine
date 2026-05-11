@@ -20,6 +20,7 @@ import { deduplicateConditions } from '../utils/characterUtils';
 import { significantWords } from '../utils/contentValidation';
 import { getContextProfile } from '../config/engineConfig';
 import { extractDeniedMechanisms } from '../utils/mechanismDenial';
+import { detectSanitizationDrift, RESAMPLE_REMINDER } from '../utils/driftDetector';
 
 export const useGeminiClient = () => {
   const { 
@@ -267,9 +268,9 @@ export const useGeminiClient = () => {
         // Previously only dynamic game state context was being sent.
         const fullSystemPrompt = `${SYSTEM_INSTRUCTIONS}\n\n${contextPrompt}`;
 
-        const response: ModelResponseSchema = await service.sendMessage(
-            fullSystemPrompt, 
-            [...preCallState.gameHistory.history, userMsg], 
+        let response: ModelResponseSchema = await service.sendMessage(
+            fullSystemPrompt,
+            [...preCallState.gameHistory.history, userMsg],
             preCallState.gameHistory.lastActiveSummary,
             preCallState.gameWorld.bannedNameMap ?? {},  // v1.7
             activeReminder  // v1.19: Trailing reminder for recency-biased compliance
@@ -278,6 +279,65 @@ export const useGeminiClient = () => {
         if (latestRequestId.current !== requestId) {
             console.log("Discarding stale response", requestId);
             return;
+        }
+
+        // v1.21: Sanitization-drift resample. If the model's thought_process
+        // contains confession-language for sanitization (fade-to-black,
+        // "tasteful", "sanitize", "imply rather than describe", "soften",
+        // etc.), re-roll the turn once with the RESAMPLE_REMINDER appended
+        // to the trailing reminder. Single retry only — repeated drift
+        // indicates a deeper prompt issue, not a one-off attractor lapse.
+        // The detector reads ONLY thought_process so narrative prose using
+        // words like "softly" isn't a false positive.
+        const drift = detectSanitizationDrift(response.thought_process);
+        if (drift.drifted) {
+            console.log('[VRE] Sanitization drift detected:', drift.matches);
+            setGameHistory(prev => ({
+                ...prev,
+                debugLog: [
+                    ...prev.debugLog,
+                    {
+                        timestamp: new Date().toISOString(),
+                        message: `[DRIFT] Sanitization signals in thought_process — resampling once. Matches: ${drift.matches.join(', ')}`,
+                        type: 'info'
+                    }
+                ]
+            }));
+
+            const reinforcedReminder = [activeReminder, RESAMPLE_REMINDER]
+                .filter((s): s is string => Boolean(s))
+                .join('\n\n---\n\n');
+
+            response = await service.sendMessage(
+                fullSystemPrompt,
+                [...preCallState.gameHistory.history, userMsg],
+                preCallState.gameHistory.lastActiveSummary,
+                preCallState.gameWorld.bannedNameMap ?? {},
+                reinforcedReminder
+            );
+
+            if (latestRequestId.current !== requestId) {
+                console.log("Discarding stale resample response", requestId);
+                return;
+            }
+
+            // Note whether the resample cleared the drift. If it didn't,
+            // we still accept the response — repeated retries would just
+            // burn tokens.
+            const driftAfter = detectSanitizationDrift(response.thought_process);
+            setGameHistory(prev => ({
+                ...prev,
+                debugLog: [
+                    ...prev.debugLog,
+                    {
+                        timestamp: new Date().toISOString(),
+                        message: driftAfter.drifted
+                            ? `[DRIFT] Resample still showing signals: ${driftAfter.matches.join(', ')} — accepting anyway`
+                            : `[DRIFT] Resample cleared sanitization signals`,
+                        type: driftAfter.drifted ? 'warning' : 'success'
+                    }
+                ]
+            }));
         }
 
         const freshState = useGameStore.getState();

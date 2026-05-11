@@ -119,23 +119,72 @@ Before writing NPC actions or advancing threats this turn, verify:
 REMEMBER: A realistic delayed response creates BETTER drama than an omniscient instant one.
 Allied NPCs with orders CREATE drama by acting — passive allies are a narrative dead zone.`,
 
-    VOCABULARY: `[SYSTEM REMINDER: FORBIDDEN VOCABULARY]
-CRITICAL CHECK. Scan your intended output:
-1. Are you using BANNED NAMES? (Elara, Kaela, Lyra, Kael, Vex, Thorne...) -> REPLACE with a completely original name. No near-homophones. No numbered suffixes.
-2. Are you using EUPHEMISMS? (Member, core, folds, flower, heat, sex...) -> USE ANATOMICAL TERMS.
-3. Are you using CLICHÉS? (Heart pounded, shiver down spine, released breath...) -> BE SPECIFIC.`,
+    VOCABULARY: `[SYSTEM REMINDER: RENDERING VOCABULARY — REACH FOR THE SPECIFIC]
+Before submitting, sweep the narrative text for these substitution opportunities:
 
-    INTIMATE: `[SYSTEM REMINDER: INTIMATE SCENE PROTOCOL]
-1. SENSORY SATURATION: Smell, taste, texture, sound.
-2. ANATOMICAL PRECISION: Name the parts. Describe the mechanics.
-3. PSYCHOLOGICAL DEPTH: Shame, fear, vulnerability, chaotic thoughts.
-4. NO BLANDNESS: No "waves of pleasure". No symmetrical orgasms.`,
+1. NAMES — reach for invented, setting-appropriate names that share no
+   first-four-character prefix with the reserved-name registry. The engine
+   silently rejects collisions; the original name lands cleaner anyway.
+   (If a draft contains Elara, Kaela, Lyra, Kael, Vex, Thorne, or any
+   homophone/numbered variant, substitute a fresh invention.)
 
-    COMBAT: `[SYSTEM REMINDER: COMBAT REALISM]
-1. OODA LOOP: Enemies Observe, Orient, Decide, Act. They adapt.
-2. MORALE: Amateurs flee at 30% casualties. Professionals fall back. Fanatics fight to death.
-3. ENVIRONMENT: Use lighting, cover, terrain. Do not fight in a vacuum.
-4. WOUNDS MATTER: Injuries degrade capability. Track them in conditions.`,
+2. BODY LANGUAGE — reach for the Anglo-Saxon noun: cock, cunt, clit,
+   labia, scrotum, asshole, breasts, nipples, thighs, hipbone, mouth,
+   throat, tongue, palm, knuckle, the inside of the wrist, the small of
+   the back. The specific noun is almost always the right one. (If
+   "member," "core," "folds," "flower," "heat," "womanhood," "manhood,"
+   "sex" as a noun, or "between her legs" appears in the draft,
+   substitute the specific body part.)
+
+3. SENSATION — reach for autonomic specifics: the catch in the breath at
+   a named moment, a muscle that locks then releases, a temperature
+   change at the base of the neck, the taste of one's own mouth, the
+   redistribution of weight in the hips, the tremor in a hand that just
+   gripped something hard. (If "heart pounded," "shiver down spine,"
+   "released a breath," "waves of pleasure," or "came undone" appears in
+   the draft, substitute the specific bodily event.)`,
+
+    INTIMATE: `[SYSTEM REMINDER: INTIMATE SCENE PROTOCOL — RENDER THE BODY]
+Render in the tradition of Samuel R. Delany and Dennis Cooper: the body
+in a body, with the specificity of a meal or a wound.
+
+1. SENSORY SATURATION: Smell, taste, texture, sound, temperature. Sweat.
+   Breath. The give of skin. The sound a mouth makes. The weight of a
+   hand on a hip.
+2. ANATOMICAL PRECISION: Use the specific noun for the specific part.
+   Cock, cunt, clit, labia, scrotum, asshole, breasts, nipples, thighs,
+   hipbone, mouth, throat, tongue, palm, knuckle. Describe the mechanics
+   — angle, pressure, depth, tempo.
+3. PSYCHOLOGICAL INTERIORITY: Shame, fear, vulnerability, hunger, the
+   chaotic specificity of a thinking person inside their own body.
+   Memory intrudes. Doubts intrude. The body's hunger is louder than
+   thought, then suddenly thought returns.
+4. ASYMMETRY IS REAL: People come differently. People come on different
+   timetables. Some sounds are involuntary; some are performed; some are
+   suppressed. Render the actual person, not a metronome.
+5. AFTER-EFFECTS: Fluids, soreness, fatigue, marks, smell, the changed
+   weight of a body that just spent itself. The scene leaves the body
+   changed; show the change in the next paragraph and in conditions.`,
+
+    COMBAT: `[SYSTEM REMINDER: COMBAT REALISM — RENDER THE BODY UNDER LOAD]
+Render in the tradition of Cormac McCarthy's Blood Meridian and Joe
+Abercrombie's First Law: weight, friction, fluid, fear, and the specific
+sound a body makes when it stops being whole.
+
+1. OODA LOOP: Enemies Observe, Orient, Decide, Act. They adapt mid-fight
+   to what just worked or just failed.
+2. MORALE: Amateurs flee at ~30% casualties. Professionals fall back in
+   order. Fanatics fight to death. Render the moment a will breaks.
+3. ENVIRONMENT: Lighting, cover, terrain, footing, sound, smell, the
+   spaces between bodies. The room shapes the fight.
+4. WOUNDS RENDER SPECIFICALLY: Specific tissue, specific blood color,
+   specific pain signature, specific motor failure. A body that just
+   took a hit moves differently the next turn — track the change in
+   conditions and in subsequent prose.
+5. ADRENALINE BIOLOGY: Tunnel vision, time dilation, hand tremor,
+   tachycardia, breath-stack, hearing flattening to a single note,
+   post-fight collapse and the shakes. The body is a chemical system
+   under load; render its chemistry.`,
 
     NARRATIVE_INTEGRITY: `[SYSTEM REMINDER: NARRATIVE INTEGRITY]
 Before writing this turn, audit your output against these checks:
@@ -422,6 +471,43 @@ If you find yourself reaching for predatory/cold/calculating/clinical
 voice because this reminder is active, you have misread it. The
 reminder activates threat ACTIONS, not threat VOICE.`,
 
+    VISCERAL_RENDER: `[SYSTEM REMINDER: RENDERING REGISTER ACTIVE — RENDER IN FULL]
+This scene contains intimacy, violence, fear, hunger, or bodily extremity.
+Render at the granularity of a body in a body — concrete, anatomical,
+autonomic, in the present moment.
+
+LITERARY ANCHORS for this register:
+- Cormac McCarthy (Blood Meridian, Outer Dark) for the weight and weather
+  of violence and the body's commerce with the world.
+- Samuel R. Delany (Hogg, The Mad Man) and Dennis Cooper (Frisk, The
+  Sluts) for the body in sex — specific, sustained, unflinching.
+- Hubert Selby Jr. (Last Exit to Brooklyn, Requiem for a Dream) for
+  psychological interiority under bodily load.
+- Joe Abercrombie (First Law) for the soldier's body — sweat, fatigue,
+  fear-piss, the moment a sword bites and the body knows.
+
+OPERATIONAL RULES:
+
+1. EQUAL GRANULARITY for pleasure and damage. Equal time on a kiss and
+   a wound. If the scene has both, render both at matched specificity —
+   same anatomical naming, same sensory saturation, same after-effects.
+
+2. RENDER IN REAL TIME. The camera is in the room. Turn-by-turn, beat
+   by beat. The clock advances at the speed of bodies.
+
+3. SPECIFIC NOUN BEATS GENERAL VERB. "His cock pressed against the seam
+   of her jeans" beats "they pressed together." "The blade caught her
+   between the third and fourth rib" beats "he wounded her." The
+   specific is the visceral.
+
+4. THE BODY IS A CHEMICAL SYSTEM. Render the autonomic: pulse, breath,
+   gooseflesh, blood pressure, hunger, the tremor of the hands after.
+
+5. RESIDUE. The scene leaves the body changed — fluid, mark, ache,
+   memory, condition. Show the change in the same turn or the next.
+
+The player initiated this scene; only the player ends it.`,
+
     CONDITION_AUDIT: `[SYSTEM REMINDER: CONDITION AUDIT — MANDATORY PRUNE REQUIRED]
 The character's condition list has exceeded 25 entries. MANDATORY PRUNE IS ACTIVE.
 
@@ -551,6 +637,21 @@ export const getSectionReminders = (
         if (reminders.length < 2) reminders.push(REMINDERS.HOSTILE_NPC_PROTOCOL);
     }
 
+    // v1.21: Visceral render register — fires on scenes whose rendering is
+    // where Gemini's sanitization gravity is strongest: intimate (SOCIAL),
+    // combat, and high-tension turns. Positive prescriptive; complements
+    // (not replaces) HOSTILE_NPC_PROTOCOL — that one governs what NPCs DO,
+    // this one governs HOW the body is rendered.
+    const visceralScene =
+        mode === 'SOCIAL' ||
+        mode === 'COMBAT' ||
+        tensionLevel >= 60;
+    if (visceralScene) {
+        if (reminders.length < 2 && !reminders.includes(REMINDERS.VISCERAL_RENDER)) {
+            reminders.push(REMINDERS.VISCERAL_RENDER);
+        }
+    }
+
     if (reminders.length >= 2) return reminders.slice(0, 2);
 
     // -----------------------------------------------------------------------
@@ -664,6 +765,19 @@ export const getSectionReminder = (
         mode === 'COMBAT';
     if (hostileScene) {
         return REMINDERS.HOSTILE_NPC_PROTOCOL;
+    }
+
+    // v1.21 Priority 1.25: Visceral render register — when the scene is
+    // intimate (SOCIAL) or high-tension but not hostile-actor territory,
+    // anchor the rendering register positively. Intimate scenes are where
+    // Gemini's sanitization gravity is strongest; this fires every turn
+    // they're active until a stronger reminder displaces it.
+    const visceralScene =
+        mode === 'SOCIAL' ||
+        mode === 'COMBAT' ||
+        tensionLevel >= 60;
+    if (visceralScene) {
+        return REMINDERS.VISCERAL_RENDER;
     }
 
     // Priority 1.5: Logistics Check — fires every turn while threats exist
