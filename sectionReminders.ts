@@ -471,6 +471,48 @@ If you find yourself reaching for predatory/cold/calculating/clinical
 voice because this reminder is active, you have misread it. The
 reminder activates threat ACTIONS, not threat VOICE.`,
 
+    CANONICAL_VOICE_LOCK: `[SYSTEM REMINDER: CANONICAL VOICE LOCK — RESTATE BEFORE WRITING]
+At least one named entity in this scene has a CANONICAL personality field.
+Their canonical traits are authoritative — they outrank any social-class,
+genre, or scene-mode default the model would otherwise reach for.
+
+Before writing that character's first action or line of dialogue THIS
+TURN, the FIRST sentence of thought_process for that character must
+follow this exact form:
+
+    "Rendering [Name] per canonical traits: [trait1, trait2, trait3].
+     This turn those traits manifest as: [concrete action / word choice /
+     subtext / register]."
+
+If the character's personality is dual-layer (Performed surface / Actual
+core with trigger condition — see §10 Conditional Personalities), the
+restatement must additionally specify:
+
+    "Trigger condition: [the condition]. Status this turn: [active /
+     inactive]. Rendering [surface convincingly with subtext bleed-through
+     / actual core at full register]."
+
+NEGATIVE EXAMPLES (these are the substitutions you must NOT make):
+- Canonical = "predatory, exploitative, commodifying" → rendered as
+  "aristocratic, charming, courteous." FORBIDDEN.
+- Canonical = "cruel, contemptuous, mercenary" → rendered as
+  "businesslike, professional, reserved." FORBIDDEN.
+- Canonical = "sadistic, indifferent, possessive" → rendered as
+  "stern, formal, distant." FORBIDDEN.
+- Canonical = "doting, loving" (surface) + "predatory, exploitative"
+  (core, trigger = target in his territory), trigger ACTIVE → rendered
+  as "intense, formal." FORBIDDEN — render the core at full register.
+
+If you find yourself reaching for a generic social-class register
+("aristocratic," "courtly," "gentlemanly," "professional," "well-bred,"
+"refined") for a character whose canonical personality is harsh, you
+have substituted an archetype for the person. Stop and rewrite using
+the canonical traits as listed in [ACTIVE ENTITIES].
+
+The personality field is what makes this character this character. Honor
+it across every scene — peaceful, hostile, cooperative, intimate, and
+trigger-active.`,
+
     VISCERAL_RENDER: `[SYSTEM REMINDER: RENDERING REGISTER ACTIVE — RENDER IN FULL]
 This scene contains intimacy, violence, fear, hunger, or bodily extremity.
 Render at the granularity of a body in a body — concrete, anatomical,
@@ -571,6 +613,10 @@ export const getSectionReminders = (
     // Fires only when an adversarial dynamic is actually present.
     hostileEntityPresent: boolean = false,
     tensionLevel: number = 0,
+    // v1.22 (Canonical Voice Lock): true when at least one in-scene entity
+    // has a non-empty canonical personality field. Forces the model to
+    // restate canonical traits in thought_process before writing the NPC.
+    canonicalPersonalityNpcPresent: boolean = false,
 ): string[] => {
     const reminders: string[] = [];
 
@@ -635,6 +681,17 @@ export const getSectionReminders = (
         mode === 'COMBAT';
     if (hostileScene) {
         if (reminders.length < 2) reminders.push(REMINDERS.HOSTILE_NPC_PROTOCOL);
+    }
+
+    // v1.22: Canonical voice lock — fires whenever a registered entity with
+    // a canonical personality is present in the scene. Higher priority than
+    // VISCERAL_RENDER because archetype substitution (the Duke failure mode)
+    // is a deeper drift than rendering register; if both could fire, the
+    // voice lock wins the slot.
+    if (canonicalPersonalityNpcPresent) {
+        if (reminders.length < 2 && !reminders.includes(REMINDERS.CANONICAL_VOICE_LOCK)) {
+            reminders.push(REMINDERS.CANONICAL_VOICE_LOCK);
+        }
     }
 
     // v1.21: Visceral render register — fires on scenes whose rendering is
@@ -717,6 +774,7 @@ export const getSectionReminder = (
     recentInjuryAdded: boolean = false,      // v1.19
     hostileEntityPresent: boolean = false,   // v1.20
     tensionLevel: number = 0,                // v1.20
+    canonicalPersonalityNpcPresent: boolean = false,  // v1.22
 ): string | null => {
     // Priority -2 (Turn-shape override): Dream turns change the whole output
     // structure and must beat everything else.
@@ -765,6 +823,14 @@ export const getSectionReminder = (
         mode === 'COMBAT';
     if (hostileScene) {
         return REMINDERS.HOSTILE_NPC_PROTOCOL;
+    }
+
+    // v1.22 Priority 1.15: Canonical voice lock — when a registered entity
+    // with a canonical personality is in scene, this beats VISCERAL_RENDER
+    // for the slot. Archetype substitution is a deeper drift than rendering
+    // register; we lose the body register before we lose the character.
+    if (canonicalPersonalityNpcPresent) {
+        return REMINDERS.CANONICAL_VOICE_LOCK;
     }
 
     // v1.21 Priority 1.25: Visceral render register — when the scene is

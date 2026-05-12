@@ -227,6 +227,18 @@ export const useGeminiClient = () => {
             );
         const tensionLevel = preCallState.gameWorld.tensionLevel ?? 0;
 
+        // v1.22: Canonical voice lock detection. Fires the
+        // CANONICAL_VOICE_LOCK reminder when at least one in-scene entity
+        // has a non-empty canonical personality field — the case where
+        // archetype substitution (e.g., harsh canonical → "aristocratic
+        // charming" default) is the dominant drift risk.
+        const canonicalPersonalityNpcPresent = (preCallState.gameWorld.knownEntities ?? [])
+            .some(e =>
+                typeof e.personality === 'string' &&
+                e.personality.trim().length > 0 &&
+                (!e.status || e.status === 'present' || e.status === 'nearby')
+            );
+
         const activeReminders = getSectionReminders(
             preCallState.gameHistory.turnCount,
             preCallState.gameWorld.sceneMode,
@@ -242,6 +254,7 @@ export const useGeminiClient = () => {
             recentInjuryAdded,
             hostileEntityPresent,
             tensionLevel,
+            canonicalPersonalityNpcPresent,  // v1.22
         );
         // Join multiple reminders into a single string for the prompt
         const activeReminder = activeReminders.length > 0 
