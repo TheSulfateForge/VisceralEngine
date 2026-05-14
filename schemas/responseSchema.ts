@@ -330,29 +330,3 @@ export const RESPONSE_SCHEMA: Schema = {
   },
   required: ["thought_process", "scene_mode", "tension_level", "narrative", "world_tick"]
 };
-t will affect the player soon. A gang consolidating territory, a storm approaching, a political shift, a bounty being posted. Empty array [] if no threats are developing.",
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              description: { type: Type.STRING, description: "What is developing." },
-              turns_until_impact: { type: Type.INTEGER, description: "Estimated turns before this affects the player directly. 0 = this turn. 1-3 = imminent. 4+ = distant." },
-              dormant_hook_id: {
-                  type: Type.STRING,
-                  description: "ORIGIN GATE TEST A: If this threat derives from the character's pre-existing background, set this to the exact DormantHook ID from the [ORIGIN GATE CONTEXT] block. If passing Test B instead, leave empty. If neither applies, this threat is FORBIDDEN."
-              },
-              player_action_cause: {
-                  type: Type.STRING,
-                  description: "ORIGIN GATE TEST B: If this threat was caused by a specific player action this session, describe it as: NPC observed player action at location on turn N. The NPC must exist in the entity registry. If passing Test A instead, leave empty."
-              }
-            },
-            required: ["description"]
-          }
-        }
-      },
-      required: ["npc_actions", "environment_changes", "emerging_threats"]
-    }
-  },
-  required: ["thought_process", "scene_mode", "tension_level", "narrative", "world_tick"]
-};
-orld_tick"]
-};
