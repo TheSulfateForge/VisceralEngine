@@ -32,10 +32,17 @@ const SkillLevelColor = (level: string) => {
     }
 };
 
+type EditableListField =
+    | 'inventory'
+    | 'conditions'
+    | 'goals'
+    | 'relationships'
+    | 'languagesKnown';
+
 const EditableList: React.FC<{
     label: string;
     items: string[];
-    field: keyof Pick<Character, 'inventory' | 'conditions' | 'goals' | 'relationships'>;
+    field: EditableListField;
     character: Character;
     setCharacter: (update: Character | ((prev: Character) => Character)) => void;
     isEditing: boolean;
@@ -48,7 +55,7 @@ const EditableList: React.FC<{
         if (!newItem.trim()) return;
         setCharacter(prev => ({
             ...prev,
-            [field]: [...prev[field], newItem.trim()]
+            [field]: [...((prev[field] as string[] | undefined) ?? []), newItem.trim()]
         }));
         setNewItem('');
     };
@@ -61,7 +68,7 @@ const EditableList: React.FC<{
         }
         setCharacter(prev => ({
             ...prev,
-            [field]: prev[field].filter((_, i) => i !== index)
+            [field]: ((prev[field] as string[] | undefined) ?? []).filter((_, i) => i !== index)
         }));
     };
 
@@ -99,6 +106,31 @@ const EditableList: React.FC<{
         </section>
     );
 };
+
+const EditableText: React.FC<{
+    label: string;
+    value: string;
+    field: keyof Pick<Character, 'notableFeatures' | 'appearance' | 'backstory'>;
+    setCharacter: (update: Character | ((prev: Character) => Character)) => void;
+    isEditing: boolean;
+    placeholder?: string;
+    rows?: number;
+}> = ({ label, value, field, setCharacter, isEditing, placeholder = 'No entries', rows = 4 }) => (
+    <section>
+        <label className="text-[11px] font-bold text-gray-400 uppercase tracking-[0.5em] block mb-8 border-l-4 border-red-900 pl-4">{label}</label>
+        {isEditing ? (
+            <textarea
+                value={value || ''}
+                onChange={e => setCharacter(prev => ({ ...prev, [field]: e.target.value }))}
+                rows={rows}
+                placeholder={placeholder}
+                className="w-full bg-black border border-gray-800 text-gray-300 text-sm px-3 py-2 focus:border-gray-600 outline-none leading-relaxed font-light whitespace-pre-wrap resize-y"
+            />
+        ) : (
+            <p className="text-base font-light leading-relaxed text-gray-300 whitespace-pre-wrap">{value || placeholder}</p>
+        )}
+    </section>
+);
 
 export const CharacterView: React.FC = () => {
     const { character, setCharacter, gameWorld, setUI } = useGameStore();
@@ -178,10 +210,14 @@ export const CharacterView: React.FC = () => {
                     </div>
                 </section>
 
-                <section>
-                    <label className="text-[11px] font-bold text-gray-400 uppercase tracking-[0.5em] block mb-8 border-l-4 border-red-900 pl-4">Markings / Implants</label>
-                    <p className="text-base font-light leading-relaxed text-gray-300 whitespace-pre-wrap">{character.notableFeatures || "None recorded"}</p>
-                </section>
+                <EditableText
+                    label="Markings / Implants"
+                    value={character.notableFeatures}
+                    field="notableFeatures"
+                    setCharacter={setCharacter}
+                    isEditing={isEditing}
+                    placeholder="None recorded"
+                />
 
                 <EditableList 
                     label="Equipment Manifest" 
@@ -208,15 +244,25 @@ export const CharacterView: React.FC = () => {
                     <p className="text-xl md:text-2xl italic text-red-900 font-light">{character.setting}</p>
                 </section>
 
-                <section>
-                    <label className="text-[11px] font-bold text-gray-400 uppercase tracking-[0.5em] block mb-8 border-l-4 border-red-900 pl-4">Shell Description</label>
-                    <p className="text-base font-light leading-relaxed text-gray-300 whitespace-pre-wrap">{character.appearance}</p>
-                </section>
+                <EditableText
+                    label="Shell Description"
+                    value={character.appearance}
+                    field="appearance"
+                    setCharacter={setCharacter}
+                    isEditing={isEditing}
+                    placeholder="No description recorded"
+                    rows={5}
+                />
 
-                <section>
-                    <label className="text-[11px] font-bold text-gray-400 uppercase tracking-[0.5em] block mb-8 border-l-4 border-red-900 pl-4">Neural Resonance</label>
-                    <p className="text-base font-light leading-relaxed text-gray-300 whitespace-pre-wrap">{character.backstory || "No history recorded"}</p>
-                </section>
+                <EditableText
+                    label="Neural Resonance"
+                    value={character.backstory}
+                    field="backstory"
+                    setCharacter={setCharacter}
+                    isEditing={isEditing}
+                    placeholder="No history recorded"
+                    rows={6}
+                />
 
                 <EditableList 
                     label="Relational Ties" 
@@ -231,6 +277,15 @@ export const CharacterView: React.FC = () => {
                     label="Directives"
                     items={character.goals}
                     field="goals"
+                    character={character}
+                    setCharacter={setCharacter}
+                    isEditing={isEditing}
+                />
+
+                <EditableList
+                    label="Languages"
+                    items={character.languagesKnown ?? []}
+                    field="languagesKnown"
                     character={character}
                     setCharacter={setCharacter}
                     isEditing={isEditing}

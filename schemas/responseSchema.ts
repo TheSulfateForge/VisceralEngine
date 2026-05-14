@@ -4,9 +4,9 @@ import { SCENE_MODES, LIGHTING_LEVELS } from "../types";
 export const RESPONSE_SCHEMA: Schema = {
   type: Type.OBJECT,
   properties: {
-    thought_process: { 
-      type: Type.STRING, 
-      description: "Analyze the scene before writing. Determine intent, mood, and time passed." 
+    thought_process: {
+      type: Type.STRING,
+      description: "Analyze the scene before writing. Determine intent, mood, and time passed."
     },
     scene_mode: {
       type: Type.STRING,
@@ -17,9 +17,9 @@ export const RESPONSE_SCHEMA: Schema = {
       type: Type.INTEGER,
       description: "0 (Peaceful) to 100 (Doomed). Adjust based on atmosphere.",
     },
-    narrative: { 
-      type: Type.STRING, 
-      description: "The main story content." 
+    narrative: {
+      type: Type.STRING,
+      description: "The main story content."
     },
     time_passed_minutes: {
         type: Type.INTEGER,
@@ -55,8 +55,36 @@ export const RESPONSE_SCHEMA: Schema = {
                 lactation: { type: Type.NUMBER }
             }
         },
-        relationships: { type: Type.ARRAY, items: { type: Type.STRING } },
-        goals: { type: Type.ARRAY, items: { type: Type.STRING } },
+        relationships: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING },
+          description: "FULL REPLACEMENT of the player's relationship list. Use ONLY when overhauling the whole list at once (rare). For incremental changes prefer added_relationships / removed_relationships. Omitting this field or sending an empty array does NOT wipe existing ties."
+        },
+        goals: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING },
+          description: "FULL REPLACEMENT of the player's directive list. Use ONLY when overhauling all directives at once (rare). For incremental changes prefer added_goals / removed_goals. Omitting this field or sending an empty array does NOT wipe existing directives."
+        },
+        added_relationships: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING },
+          description: "Relationships to APPEND to the existing list. New ties the player formed this turn."
+        },
+        removed_relationships: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING },
+          description: "Existing relationship strings to REMOVE (exact match). Ties that ended this turn."
+        },
+        added_goals: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING },
+          description: "New directives to APPEND to the existing list. Use when a new motivation arises this turn."
+        },
+        removed_goals: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING },
+          description: "Existing directive strings to REMOVE (exact match). Use when a directive is completed, abandoned, or invalidated this turn."
+        },
         skill_updates: {
           type: Type.ARRAY,
           nullable: true,
@@ -301,4 +329,30 @@ export const RESPONSE_SCHEMA: Schema = {
     }
   },
   required: ["thought_process", "scene_mode", "tension_level", "narrative", "world_tick"]
+};
+t will affect the player soon. A gang consolidating territory, a storm approaching, a political shift, a bounty being posted. Empty array [] if no threats are developing.",
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              description: { type: Type.STRING, description: "What is developing." },
+              turns_until_impact: { type: Type.INTEGER, description: "Estimated turns before this affects the player directly. 0 = this turn. 1-3 = imminent. 4+ = distant." },
+              dormant_hook_id: {
+                  type: Type.STRING,
+                  description: "ORIGIN GATE TEST A: If this threat derives from the character's pre-existing background, set this to the exact DormantHook ID from the [ORIGIN GATE CONTEXT] block. If passing Test B instead, leave empty. If neither applies, this threat is FORBIDDEN."
+              },
+              player_action_cause: {
+                  type: Type.STRING,
+                  description: "ORIGIN GATE TEST B: If this threat was caused by a specific player action this session, describe it as: NPC observed player action at location on turn N. The NPC must exist in the entity registry. If passing Test A instead, leave empty."
+              }
+            },
+            required: ["description"]
+          }
+        }
+      },
+      required: ["npc_actions", "environment_changes", "emerging_threats"]
+    }
+  },
+  required: ["thought_process", "scene_mode", "tension_level", "narrative", "world_tick"]
+};
+orld_tick"]
 };

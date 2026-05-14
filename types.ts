@@ -585,8 +585,22 @@ export interface CharacterUpdates {
     removed_inventory?: string[];
     trauma_delta?: number;
     bio_modifiers?: Partial<BioModifiers>;
+    /**
+     * Full replacement of the relationships array. Use sparingly — prefer the
+     * additive `added_relationships` / `removed_relationships` fields below
+     * to avoid accidentally wiping pre-existing ties.
+     */
     relationships?: string[];
+    /**
+     * Full replacement of the goals array. Use sparingly — prefer the
+     * additive `added_goals` / `removed_goals` fields below to avoid
+     * accidentally wiping pre-existing directives.
+     */
     goals?: string[];
+    added_relationships?: string[];
+    removed_relationships?: string[];
+    added_goals?: string[];
+    removed_goals?: string[];
     skill_updates?: Array<{
         skill_name: string;
         new_level: ProficiencyLevel;

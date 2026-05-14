@@ -158,6 +158,54 @@ export const processCharacterUpdates = (
         }
     }
 
+    // =========================================================================
+    // Relationships & Goals
+    //
+    // The schema exposes BOTH a full-replacement field (`relationships`, `goals`)
+    // and additive fields (`added_*`, `removed_*`). Additive operations are
+    // applied on top of the (optionally replaced) baseline so the AI can:
+    //   - send added_goals: ["Find the smuggler"] to append one directive
+    //   - send removed_goals: ["..."] to drop a directive that was fulfilled
+    //   - send goals: [...] to overhaul the whole list (rare)
+    //
+    // Guard rails: an empty array on the replacement field is treated as "no
+    // update" rather than a wipe. This prevents the AI first turn from
+    // silently nuking ties/directives the player entered in the creator.
+    // =========================================================================
+    let newRelationships = [...tempCharUpdates.relationships];
+    if (Array.isArray(updates.relationships) && updates.relationships.length > 0) {
+        newRelationships = [...updates.relationships];
+    }
+    if (updates.removed_relationships?.length) {
+        newRelationships = newRelationships.filter(r => !updates.removed_relationships!.includes(r));
+        updates.removed_relationships.forEach(r => showToast("Tie Severed: " + r, 'info', 5000));
+    }
+    if (updates.added_relationships?.length) {
+        updates.added_relationships.forEach(r => {
+            if (!newRelationships.includes(r)) {
+                newRelationships.push(r);
+                showToast("Tie Formed: " + r, 'success', 5000);
+            }
+        });
+    }
+
+    let newGoals = [...tempCharUpdates.goals];
+    if (Array.isArray(updates.goals) && updates.goals.length > 0) {
+        newGoals = [...updates.goals];
+    }
+    if (updates.removed_goals?.length) {
+        newGoals = newGoals.filter(g => !updates.removed_goals!.includes(g));
+        updates.removed_goals.forEach(g => showToast("Directive Resolved: " + g, 'success', 5000));
+    }
+    if (updates.added_goals?.length) {
+        updates.added_goals.forEach(g => {
+            if (!newGoals.includes(g)) {
+                newGoals.push(g);
+                showToast("Directive Assigned: " + g, 'success', 6000);
+            }
+        });
+    }
+
     return {
         ...tempCharUpdates,
         conditions: newConditions,
@@ -167,7 +215,7 @@ export const processCharacterUpdates = (
             ...tempCharUpdates.bio,
             modifiers: newBioModifiers,
         },
-        relationships: updates.relationships || tempCharUpdates.relationships,
-        goals: updates.goals || tempCharUpdates.goals,
+        relationships: newRelationships,
+        goals: newGoals,
     };
 };

@@ -150,9 +150,22 @@ dramatically significant. Frequency: 1–2 per major arc; mandatory on the
 next qualifying roll if >20 turns have passed without one.
 
 // §7 GOALS & LEGAL STATUS =================================================
-Goals are a living list, not permanent labels. Completion: drop via
-\`character_updates.goals\` the SAME turn fulfilled. Staleness: goals
-untouched for 10+ turns must be restated with progress or removed. Cap: 5.
+Goals are a living list, not permanent labels. Cap: 5. Staleness: goals
+untouched for 10+ turns must be restated with progress or removed.
+
+**How to mutate the directive list.** Use INCREMENTAL fields by default:
+- \`character_updates.added_goals: [string]\` — append a newly emerging
+  directive this turn. Do NOT send a single full-array replacement when only
+  one entry is new; you will overwrite ties/directives entered at character
+  creation.
+- \`character_updates.removed_goals: [string]\` — drop a directive the
+  SAME turn it is fulfilled, abandoned, or invalidated. Exact string match.
+- \`character_updates.goals: [string]\` (full replacement) — ONLY when
+  rewriting the entire list at once. Empty array is treated as "no update".
+
+The same incremental contract applies to relationships:
+\`added_relationships\` / \`removed_relationships\` are preferred over a
+full-array \`relationships\` replacement.
 
 **Legal status.** When a faction asserts a claim over the PC's person,
 property, or companions, record via \`hidden_update\`: unique claim id,
