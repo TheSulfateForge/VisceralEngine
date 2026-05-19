@@ -21,14 +21,34 @@ export class ScenarioService {
                 : '';
 
             const prompt = `
-      Generate 4 distinct starting scenarios for a grounded, gritty-but-fair roleplaying game based on this character:
+      You are generating 4 distinct starting scenarios for a grounded, gritty-but-fair roleplaying game.
+
+      CHARACTER:
       ${JSON.stringify(character)}${worldCanonBlock}
+
+      STEP 1 — READ THE CHARACTER (silent; do not output). Identify, for THIS character specifically:
+      - What they actively want (their pull-toward).
+      - What they avoid, fear, or have already paid for once (their pull-away).
+      - What they are built to do well — and what they are conspicuously bad at.
+      - Who or what they are tied to (people, places, debts, obligations, possessions they could not lose).
+      - Where they fit in this world — what it rewards them for, what it punishes them for.
+      The four scenarios below MUST be derived from this read. Do not fall back on generic templates.
+
+      STEP 2 — GENERATE 4 SCENARIOS THAT CONTRAST EACH OTHER. No two scenarios may share the same combination of these axes; each must be different across all four:
+      - OPENING POSTURE: the character pursues / is invited / is approached / is cornered.
+      - THREAT VECTOR: interpersonal, professional or duty-bound, physical, moral or identity-based, supernatural or uncanny, social or reputational.
+      - TONAL REGISTER: quiet and warm, weird and uncanny, harsh and gritty, dread and horror.
+      - STAKES SCALE: personal, relational, communal, existential.
+      Location CAN repeat — the campaign may be centered in one place. Posture, threat, tone, and stakes must each be different across the four.
+
       BALANCE RULE (applies to hooks 1–3 only): The player character must begin from a NEUTRAL or ADVANTAGED position. They are not already compromised, captured, ambushed, blackmailed, humiliated, or in physical distress at scene open. Any complication or threat must emerge DURING play as a result of player choices — not be pre-loaded into the opening situation. The character has full agency from the first moment.
-      BANNED NAMES - DO NOT USE: Elara, Kaela, Lyra, Kael, Vex, Thorne, Kaelen, Valerius, Seraphina, Zara, Zephyr, Aria, Aurelia, Draven, Caelan, Aldric, Caelum, Sylva, Rhea, Celeste, Mira, Isolde, Aelindra, Calen, Soraya, Tristan, Eryndor, Alara, Oakhaven
-      1. MUNDANE HOOK: Low stakes, everyday problem with a subtle complication. The character is going about their normal life — they are competent, in control, and the complication is a puzzle to solve, not a trap they're already caught in.
-      2. VIOLENT HOOK: Immediate danger/action with a plausible cause and a clear exit/next step. The character sees it coming and has a fighting chance — they are not already outnumbered, restrained, or outmatched at scene open.
-      3. MATURE HOOK: Social/ethical complexity. Adult themes are allowed, including sexual situations. The character enters from a position of choice or curiosity — they are not already coerced, violated, or trapped when the scene begins.
-      4. NIGHTMARE HOOK: The character begins at their absolute worst-case starting position — they are already on the back foot with no easy outs. You must weaponize the character sheet, prioritizing information directly from it before creating new threats. Identify their greatest strength, most valued asset, or closest ally, and neutralize or corrupt it, using allies against them as betrayers, hostages, or active causes of the character's suffering. This scenario MUST combine at least TWO of the following pressure types to create an inescapable trap: severe physical peril/violence (active bleeding, agonizing restraints, exhaustion, or immediate life-threatening danger); intimate/sexual coercion or exploitation (extreme vulnerability, loss of bodily autonomy, forced compromising positions, sexual exploitation, coercion or predatory leverage); or crushing social humiliation/manipulation (public destruction of reputation, devastating blackmail, psychological gaslighting, or being forced to betray their own ideals in front of others). The opening line must drop them directly into the crisis with zero buffer; the very first sentence must be a sharp, visceral sensory detail starting mid-pain, mid-threat, or mid-humiliation without explaining how they got there. You must explicitly establish their compromised state—whether they are injured, bound, drugged, cornered, or paralyzed by the consequences of fighting back—making it clear why they cannot fight or talk their way out normally. This is the hardest possible entry point. Do not soften it.
+
+      HOOKS 1–3: Pick the axis combinations MOST GENERATIVE for THIS character — not a fixed genre slot. A duty-bound character should feel professional pressure; a drifter should feel curiosity or kindness; a paranoid character should feel surveillance or exposure; a fixer should feel obligation or leverage. Let the character sheet dictate which axes hit hardest. Avoid defaulting to "small errand with a twist," "fight breaks out," or "ethical bind" unless the character read genuinely points there.
+
+      HOOK 4 — HARDEST ENTRY FOR THIS CHARACTER. Worst-case opening, derived directly from STEP 1: this character's specific fears, what they protect, what they have already paid for once, or what they cannot afford to lose. Structurally different nightmares for different characters — a paranoid hacker's worst case is exposure and a kicked-in door; a tender medic's is being the one who couldn't save someone; a con artist's is being read for free in front of a mark; a soldier's may be a friendly-fire moment or a betrayal from inside the unit; a true believer's is the proof their cause was a lie. Do NOT default to physical restraint, sexual coercion, or public humiliation unless the character read points specifically there. Drop the player directly into the crisis — the first sentence is a sharp sensory detail mid-pain, mid-threat, mid-dread, or mid-realization, with no exposition. Establish that normal exits (fighting, talking, fleeing) are blocked specifically by THIS character's weaknesses, commitments, or ties. This is the hardest possible entry point FOR THIS CHARACTER — not a generic worst case. Do not soften it.
+
+      BANNED NAMES — DO NOT USE: Elara, Kaela, Lyra, Kael, Vex, Thorne, Kaelen, Valerius, Seraphina, Zara, Zephyr, Aria, Aurelia, Draven, Caelan, Aldric, Caelum, Sylva, Rhea, Celeste, Mira, Isolde, Aelindra, Calen, Soraya, Tristan, Eryndor, Alara, Oakhaven
+
       Output JSON only.
       `;
 
