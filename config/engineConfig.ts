@@ -244,14 +244,14 @@ export const MODEL_CONTEXT_PROFILES: Record<string, ModelContextProfile> = {
     compressedMessageLength: 500,
     ragLookback: 5,
   },
-  'gemini-3.1-flash-lite-preview': {
-    maxHistory: 14,
-    summarizationInterval: 8,
-    memoryLimit: 15,
+  'gemini-3.1-flash-lite': {
+    maxHistory: 30,
+    summarizationInterval: 20,
+    memoryLimit: 40,
     loreLimitOverride: 6,
     entityLimitOverride: 5,
-    recentFullMessages: 6,
-    compressedMessageLength: 300,
+    recentFullMessages: 10,
+    compressedMessageLength: 500,
     ragLookback: 6,
   },
   'gemini-2.5-flash': {
