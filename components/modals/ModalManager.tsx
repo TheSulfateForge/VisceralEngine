@@ -7,13 +7,19 @@ import { SettingsOverlay } from './SettingsOverlay';
 import { GalleryModal } from './GalleryModal';
 import { DebugModal } from './DebugModal';
 import { LoreApprovalModal } from './LoreApprovalModal';
+import { MontageProposalModal } from './MontageProposalModal';
 import { useGeminiClient } from '../../hooks/useGeminiClient';
+import { useMontage } from '../../hooks/useMontage';
 import { usePersistence } from '../../hooks/usePersistence';
 import { useSavedGames } from '../../hooks/useSavedGames';
 
 export const ModalManager: React.FC = () => {
     const store = useGameStore();
     const { handleKeyLink } = useGeminiClient();
+
+    // Rehydrate any montage proposal left mid-review by a previous session.
+    const { restoreMontage } = useMontage();
+    React.useEffect(() => { restoreMontage(); }, [restoreMontage]);
     const { saveToDb, loadFromDb, handleExport, handleImport, handleExportTemplates, handleImportTemplates } = usePersistence();
     const { saveList, deleteSave } = useSavedGames(store.ui.showLoadModal || store.ui.showSaveModal);
     
@@ -41,7 +47,8 @@ export const ModalManager: React.FC = () => {
     return (
         <>
             <LoreApprovalModal />
-            
+            <MontageProposalModal />
+
             {store.ui.showKeyPrompt && <KeyPromptModal onLink={handleKeyLink} />}
             
             {store.ui.isSettingsOpen && (

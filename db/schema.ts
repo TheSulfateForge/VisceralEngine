@@ -43,6 +43,7 @@ import type {
   NPCInteraction,
   WorldTick,
   BioMonitor,
+  MontageProposal,
 } from '../types';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -542,6 +543,17 @@ export interface TraumaStateRow {
   last_effect_turn: number | null;
 }
 
+// 4.10b — pending montage proposal (v0.13). One uncommitted proposal per
+// campaign, persisted so a mid-review app close survives. Stored as a single
+// JSON payload rather than normalized: the proposal is short-lived (cleared on
+// accept/discard) and never queried by its inner fields. `payload` is null
+// only transiently; rows are deleted outright when there is no pending montage.
+export interface PendingMontageRow {
+  campaign_id: SaveId;
+  payload: MontageProposal;
+  updated_at: string;            // ISO
+}
+
 // 4.11 — banned/used registries
 export interface UsedNameRow {
   campaign_id: SaveId;
@@ -688,6 +700,7 @@ export class VisceralDB extends Dexie {
   world_tags!: Table<WorldTagRow, [SaveId, string]>;
   scenarios!: Table<ScenarioRow, string>;
   trauma_state!: Table<TraumaStateRow, SaveId>;
+  pending_montage!: Table<PendingMontageRow, SaveId>;
 
   // Registries
   used_names!: Table<UsedNameRow, [SaveId, string]>;
@@ -811,6 +824,15 @@ export class VisceralDB extends Dexie {
     this.version(2).stores({
       entity_ledger_items: '&id, entity_id, [entity_id+recorded_turn], campaign_id',
       faction_known_actions: '&id, faction_id, [faction_id+recorded_turn], campaign_id',
+    });
+
+    // ─── v3 ─────────────────────────────────────────────────────────────
+    // Adds the `pending_montage` table (v0.13 montage system). One row per
+    // campaign holding the uncommitted MontageProposal as a JSON payload so a
+    // mid-review app close survives. Additive — no data migration; existing
+    // campaigns simply have no pending_montage row until they start one.
+    this.version(3).stores({
+      pending_montage: '&campaign_id',
     });
   }
 }

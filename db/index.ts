@@ -20,6 +20,7 @@ import {
   WorldSeedId,
   TemplateId,
   SaveId,
+  MontageProposal,
 } from '../types';
 import { generateSaveId } from '../idUtils';
 import { vdb } from './schema';
@@ -28,6 +29,7 @@ import { campaignsRepo } from './repos/campaigns';
 import { imagesRepo } from './repos/images';
 import { templatesRepo } from './repos/templates';
 import { worldSeedsRepo } from './repos/worldSeeds';
+import { pendingMontageRepo } from './repos/pendingMontage';
 
 class DatabaseFacade {
   /** No-op kept for parity with the legacy Database.init() call. Dexie opens lazily. */
@@ -110,6 +112,19 @@ class DatabaseFacade {
   async deleteWorldSeed(id: WorldSeedId): Promise<void> {
     return worldSeedsRepo.deleteById(id);
   }
+
+  // ─── Pending montage proposal ──────────────────────────────────────────
+  async savePendingMontage(proposal: MontageProposal): Promise<void> {
+    return pendingMontageRepo.save(proposal);
+  }
+
+  async loadPendingMontage(campaignId: SaveId): Promise<MontageProposal | undefined> {
+    return pendingMontageRepo.load(campaignId);
+  }
+
+  async clearPendingMontage(campaignId: SaveId): Promise<void> {
+    return pendingMontageRepo.clear(campaignId);
+  }
 }
 
 export const db = new DatabaseFacade();
@@ -125,3 +140,4 @@ export { worldSeedsRepo } from './repos/worldSeeds';
 export { entitiesRepo } from './repos/entities';
 export { memoriesRepo } from './repos/memories';
 export { loreRepo } from './repos/lore';
+export { pendingMontageRepo } from './repos/pendingMontage';

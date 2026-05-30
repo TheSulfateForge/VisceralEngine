@@ -110,6 +110,7 @@ import {
   ENTITY_STATUSES,
 } from '../types';
 import { generateUUID } from '../idUtils';
+import { deriveWorldTime } from '../utils/engine/timeUtils';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -157,10 +158,11 @@ function stripStampOpt<T extends string>(cid: SaveId, stamped: string | null | u
 }
 
 function recomputeWorldTime(totalMinutes: number, display: string): WorldTime {
-  const day = Math.floor(totalMinutes / (24 * 60));
-  const hour = Math.floor((totalMinutes % (24 * 60)) / 60);
-  const minute = totalMinutes % 60;
-  return { totalMinutes, day, hour, minute, display };
+  // Derive calendar + clock fields from the canonical totalMinutes. Preserve the
+  // persisted display string when present (legacy saves keep their original label);
+  // otherwise fall back to the derived calendar display.
+  const wt = deriveWorldTime(totalMinutes);
+  return display ? { ...wt, display } : wt;
 }
 
 const ALL_TABLES = [
@@ -213,6 +215,7 @@ const ALL_TABLES = [
   'banned_name_map',
   'banned_mechanisms',
   'image_uses',
+  'pending_montage',
 ] as const;
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1533,6 +1536,7 @@ async function deleteCampaignRows(cid: SaveId): Promise<void> {
       'used_names',
       'banned_name_map',
       'banned_mechanisms',
+      'pending_montage',
     ].map((t) => where(t, t === 'campaigns' ? 'id' : 'campaign_id'))
   );
 

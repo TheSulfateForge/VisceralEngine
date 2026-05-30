@@ -29,6 +29,8 @@ export const createCompositeSlice: StateCreator<any, [], [], CompositeSlice> = (
 
         // Pending slice reset
         pendingLore: [],
+        montageProposal: null,
+        montagePausedForScene: false,
         playerRemovedConditions: [],
 
         // UI slice reset

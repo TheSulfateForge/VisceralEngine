@@ -397,6 +397,38 @@ export const SKILL_ADVANCEMENT_THRESHOLD: Record<string, number> = {
 };
 
 // ---------------------------------------------------------------------------
+// Montage System (v0.13 — Steps 5–9)
+// ---------------------------------------------------------------------------
+
+/** Minutes per declared-action unit. weeks/months/years use the 360-day
+ *  calendar (30-day months, 7-day weeks). Used by the duration resolver to
+ *  convert the player's unit × quantity pick into totalMinutes. */
+export const DECLARED_ACTION_UNIT_MINUTES: Record<string, number> = {
+    hours: 60,
+    days: 1440,
+    weeks: 10080,        // 7 × 1440
+    months: 43200,       // 30 × 1440 (calendar month)
+    years: 518400,       // 360 × 1440 (calendar year)
+};
+
+/** A declared duration of at least this many minutes (1 day) routes a
+ *  `montage:*` action into MONTAGE mode; below it, sub-day declared actions
+ *  resolve to ACTIVITY/REST. */
+export const MONTAGE_MIN_MINUTES = 1440;
+
+/** Max times the player may regenerate a montage proposal before being forced
+ *  to accept/edit/veto what's on offer (token-cost guard). */
+export const MONTAGE_MAX_REGENERATES = 2;
+
+/** Max proficiency tiers a single skill may advance in ONE montage, regardless
+ *  of declared duration. Duration gates whether advancement is earned, it is
+ *  not a multiplier. */
+export const MONTAGE_MAX_SKILL_ADVANCE_PER_SKILL = 1;
+
+/** Default salience applied to a proposed montage memory when the AI omits it. */
+export const MONTAGE_DEFAULT_MEMORY_SALIENCE = 3;
+
+// ---------------------------------------------------------------------------
 // Stream 6: Faction Conflict Configuration
 // ---------------------------------------------------------------------------
 

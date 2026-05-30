@@ -6,3 +6,4 @@ export * from './threatPipeline';
 export * from './threatPipelineCore';
 export * from './entityLifecycle';
 export * from './locationGraph';
+export * from './declaredActions';

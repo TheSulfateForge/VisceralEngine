@@ -639,6 +639,151 @@ export interface CharacterUpdates {
     }>;
 }
 
+// ============================================================================
+// --- Montage System (Steps 5–9) ---
+// A montage is a player-declared time skip (days→years) that produces an
+// UNCOMMITTED proposal. The AI fills a `montage_block`; the engine holds it as
+// a `MontageProposal` whose items the player vetoes/edits/accepts before a
+// single Dexie transaction writes the approved results. See
+// TIME_AND_MONTAGE_DESIGN.md Systems 4 & 5.
+// ============================================================================
+
+export const MONTAGE_TYPES = ['training', 'travel', 'aging', 'rest', 'work'] as const;
+export type MontageType = typeof MONTAGE_TYPES[number];
+
+/** Per-entity change kinds the AI may propose for known NPCs during a montage. */
+export const NPC_DELTA_CHANGE_TYPES = [
+    'none', 'aged', 'moved', 'married', 'died', 'role_change', 'new_relationship',
+] as const;
+export type NpcDeltaChangeType = typeof NPC_DELTA_CHANGE_TYPES[number];
+
+// --- Declared-action UI affordance (System 4 / Step 5) ---
+
+/** Time units the player can pick in the declared-action picker. */
+export const DECLARED_ACTION_UNITS = ['hours', 'days', 'weeks', 'months', 'years'] as const;
+export type DeclaredActionUnit = typeof DECLARED_ACTION_UNITS[number];
+
+/**
+ * Declared-action verbs. The bare verbs (sleep/study/train/travel/work) resolve
+ * to ACTIVITY or REST at sub-day granularity; the `montage:*` variants force
+ * MONTAGE mode and invoke the proposal flow.
+ */
+export const DECLARED_ACTION_TYPES = [
+    'sleep', 'study', 'train', 'travel', 'work',
+    'montage:training', 'montage:travel', 'montage:aging', 'montage:rest', 'montage:work',
+] as const;
+export type DeclaredActionType = typeof DECLARED_ACTION_TYPES[number];
+
+/** A duration-bearing action declared by the player via the UI picker. */
+export interface DeclaredAction {
+    actionType: DeclaredActionType;
+    unit: DeclaredActionUnit;
+    quantity: number;
+    /** Optional focus (e.g. "swordsmanship" for train, "history" for study). */
+    focus?: string;
+    /** Engine-derived from unit × quantity at resolve time. */
+    durationMinutes: number;
+}
+
+// --- Montage block (response-schema payload from the AI) ---
+
+export interface ProposedMemory {
+    summary: string;
+    /** 1–5 salience; drives pinning + eviction once committed. */
+    salience: number;
+    pinned?: boolean;
+    /** When true the player may "play this out" as a live scene before committing. */
+    can_play_out?: boolean;
+}
+
+export interface ProposedTrauma {
+    description: string;
+    /** 1–5 severity. */
+    severity: number;
+    source: string;
+}
+
+export interface ProposedSkillUpdate {
+    skill_name: string;
+    /** AI-declared target level. Typed as string — validated before applying
+     *  (mirrors CharacterUpdates.skill_updates). Montage caps advancement to
+     *  a single tier per skill regardless of duration. */
+    new_level: string;
+    category?: SkillCategory;
+    reason: string;
+}
+
+export interface ProposedNpcDelta {
+    entity_id: string;
+    change_type: NpcDeltaChangeType;
+    description: string;
+}
+
+/** The AI's montage output, attached to the model response in MONTAGE mode. */
+export interface MontageBlock {
+    type: MontageType;
+    /** Engine-derived from the player's declared duration. */
+    duration_minutes: number;
+    focus?: string;
+    proposed_memories: ProposedMemory[];
+    proposed_traumas: ProposedTrauma[];
+    proposed_skill_updates: ProposedSkillUpdate[];
+    proposed_npc_deltas: ProposedNpcDelta[];
+    /** Years to add to Character.age (aging montages). 0 for non-aging. */
+    age_increment_years: number;
+    /** Optional explicit season label at the end of the montage. */
+    season_delta?: string;
+}
+
+// --- Held proposal model (uncommitted, player-reviewed) ---
+
+export type MontageItemStatus = 'pending' | 'accepted' | 'vetoed' | 'edited';
+
+/** One reviewable line item in a proposal. `original` retains the pristine AI
+ *  payload so an edit can be reverted; `data` is the (possibly edited) payload
+ *  that will be committed if status ≠ 'vetoed'. */
+export interface ReviewableItem<T> {
+    /** Stable id for UI keys + per-item veto/edit/accept routing. */
+    id: string;
+    status: MontageItemStatus;
+    data: T;
+    original: T;
+}
+
+export type MontageProposalStatus = 'reviewing' | 'committed' | 'discarded';
+
+/**
+ * The uncommitted montage proposal held in the pending slice AND persisted to
+ * the `pending_montage` Dexie row (one per campaign) so a mid-review app close
+ * does not lose it. On accept, approved items are written in a single tx and
+ * the row is cleared.
+ */
+export interface MontageProposal {
+    /** Proposal id — also the pending_montage row id. */
+    id: string;
+    /** Owning campaign (save) id, for DB persistence + projection. */
+    campaignId: string;
+    createdTurn: number;
+    /** What the player asked for (drives clock advance even on veto-all). */
+    declaredAction: DeclaredAction;
+    type: MontageType;
+    durationMinutes: number;
+    focus?: string;
+    ageIncrementYears: number;
+    seasonDelta?: string;
+    /** The montage prose the AI produced (shown above the review items). */
+    narrative: string;
+    memories: ReviewableItem<ProposedMemory>[];
+    traumas: ReviewableItem<ProposedTrauma>[];
+    skillUpdates: ReviewableItem<ProposedSkillUpdate>[];
+    npcDeltas: ReviewableItem<ProposedNpcDelta>[];
+    /** Regenerate attempts used so far (cap MONTAGE_MAX_REGENERATES). */
+    regenerateCount: number;
+    /** Set while a memory is being promoted to a live scene ("play this out"). */
+    promotedMemoryId?: string;
+    status: MontageProposalStatus;
+}
+
 export interface ModelResponseSchema {
     thought_process: string;
     scene_mode: SceneMode;
@@ -692,6 +837,10 @@ export interface ModelResponseSchema {
     }>;
 
     world_tick?: WorldTick;
+
+    // v0.13: MONTAGE mode only. The AI's proposed time-skip consequences,
+    // held uncommitted as a MontageProposal pending player review.
+    montage_block?: MontageBlock;
 }
 
 // --- Application Types ---
@@ -732,6 +881,12 @@ export interface Character {
     hiddenNotes?: string;
     conditionTimestamps?: Record<string, number>;
     skills?: Skill[];
+    /**
+     * v0.13 — Character age in years. Optional for back-compat (legacy saves
+     * omit it). Aging montages add `MontageBlock.age_increment_years` to this;
+     * rebirth campaigns seed it at 0. Missing ⇒ age is simply untracked.
+     */
+    age?: number;
     /**
      * v1.19 — Languages the character can speak/read. When the character
      * encounters speech/writing in a language NOT in this list, the model

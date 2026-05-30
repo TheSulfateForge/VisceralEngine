@@ -296,6 +296,73 @@ export const RESPONSE_SCHEMA: Schema = {
         }
       }
     },
+    montage_block: {
+      type: Type.OBJECT,
+      nullable: true,
+      description: "MONTAGE MODE ONLY. Populate ONLY when time_mode is MONTAGE (a player-declared skip of days, months, or years). Summarize the elapsed period and propose its consequences — the player reviews and approves each item before anything is committed. Propose generously but plausibly for the declared duration. Skill advancement here is the ONLY way skills change during a montage and is capped at ONE level per skill regardless of how long the montage is. Invite NEW skills, memories, and NPC changes the elapsed time would realistically produce. Leave empty/null in all non-montage turns.",
+      properties: {
+        type: { type: Type.STRING, enum: ["training", "travel", "aging", "rest", "work"], description: "The dominant character of the montage." },
+        duration_minutes: { type: Type.INTEGER, description: "Total minutes the montage spans. Echo the engine-provided declared duration." },
+        focus: { type: Type.STRING, nullable: true, description: "The focus subject/skill of the montage, if any (e.g. 'swordsmanship', 'the road to Veyra')." },
+        proposed_memories: {
+          type: Type.ARRAY,
+          description: "Significant events that occurred during the elapsed time and should persist as memories. Each is individually reviewable by the player. 0-6 entries scaled to duration.",
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              summary: { type: Type.STRING, description: "One self-contained sentence describing the event." },
+              salience: { type: Type.INTEGER, description: "1-5 importance (see memory salience scale). Pivotal life events = 5." },
+              pinned: { type: Type.BOOLEAN, nullable: true, description: "True for permanent, always-recalled memories." },
+              can_play_out: { type: Type.BOOLEAN, nullable: true, description: "True if this event is dramatic enough that the player might want to PLAY IT OUT as a live scene rather than just summarizing it." }
+            },
+            required: ["summary", "salience"]
+          }
+        },
+        proposed_traumas: {
+          type: Type.ARRAY,
+          description: "Lasting psychological wounds incurred during the montage. Usually 0; only for genuinely scarring events. Each reviewable.",
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              description: { type: Type.STRING },
+              severity: { type: Type.INTEGER, description: "1-5." },
+              source: { type: Type.STRING, description: "What caused it." }
+            },
+            required: ["description", "severity", "source"]
+          }
+        },
+        proposed_skill_updates: {
+          type: Type.ARRAY,
+          description: "Skill changes earned over the montage (Path A). MAX ONE LEVEL per skill regardless of duration. May introduce NEW skills the elapsed time would teach. Never downgrade.",
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              skill_name: { type: Type.STRING },
+              new_level: { type: Type.STRING, enum: ["untrained", "familiar", "trained", "expert", "master"] },
+              category: { type: Type.STRING, enum: ["combat", "physical", "social", "knowledge", "craft"], nullable: true, description: "Required for NEW skills; defaults to 'knowledge'." },
+              reason: { type: Type.STRING }
+            },
+            required: ["skill_name", "new_level", "reason"]
+          }
+        },
+        proposed_npc_deltas: {
+          type: Type.ARRAY,
+          description: "How known NPCs changed over the elapsed time — people age, move, marry, die, change roles. Prevents the 'years pass and everyone is unchanged' effect. One per affected entity. Each reviewable.",
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              entity_id: { type: Type.STRING, description: "The exact id of a known entity from the entity registry." },
+              change_type: { type: Type.STRING, enum: ["none", "aged", "moved", "married", "died", "role_change", "new_relationship"] },
+              description: { type: Type.STRING, description: "One line describing the change." }
+            },
+            required: ["entity_id", "change_type", "description"]
+          }
+        },
+        age_increment_years: { type: Type.INTEGER, description: "Years to add to the character's age. Set for aging montages; 0 otherwise." },
+        season_delta: { type: Type.STRING, nullable: true, description: "Optional season label at the end of the montage." }
+      },
+      required: ["type", "duration_minutes", "proposed_memories", "proposed_traumas", "proposed_skill_updates", "proposed_npc_deltas", "age_increment_years"]
+    },
     world_tick: {
       type: Type.OBJECT,
       description: "WORLD PULSE — REQUIRED EVERY TURN. The world moves whether the player acts or not. Report what NPCs did, what changed in the environment, and what threats are developing. Even during mundane turns, NPCs pursue their goals. If nothing dramatic happened, report the mundane (a merchant restocked, guards changed shift, an ally ate breakfast). This field must NEVER be empty.",
