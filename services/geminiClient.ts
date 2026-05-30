@@ -1,7 +1,8 @@
 
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { GEMINI_SAFETY_SETTINGS, THINKING_DEFAULTS } from "../constants";
-import { ChatMessage, Role, ModelResponseSchema, SCENE_MODES, SceneMode, Lighting, LIGHTING_LEVELS } from "../types";
+import { ChatMessage, Role, ModelResponseSchema, SCENE_MODES, SceneMode, Lighting, LIGHTING_LEVELS,
+    MontageBlock, MontageType, ProposedMemory, ProposedTrauma, ProposedSkillUpdate, ProposedNpcDelta } from "../types";
 import { RESPONSE_SCHEMA } from "../schemas/responseSchema";
 import { sanitiseHistory } from '../utils/nameResolver';
 import { getContextProfile } from '../config/engineConfig';
@@ -277,7 +278,22 @@ export class GeminiClient {
             } : undefined,
             relationships: asArray(safeData.character_updates.relationships),
             goals: asArray(safeData.character_updates.goals)
-        } : undefined
+        } : undefined,
+
+        // v0.13: MONTAGE mode — pass the AI's montage_block through to useMontage.
+        // Without this the field is silently dropped and declareMontage reports
+        // "The AI did not return a montage."
+        montage_block: isObject(safeData.montage_block) ? {
+            type: asString(safeData.montage_block.type, 'training') as MontageType,
+            duration_minutes: asNumber(safeData.montage_block.duration_minutes, 0),
+            focus: typeof safeData.montage_block.focus === 'string' ? safeData.montage_block.focus : undefined,
+            proposed_memories: asArray<ProposedMemory>(safeData.montage_block.proposed_memories),
+            proposed_traumas: asArray<ProposedTrauma>(safeData.montage_block.proposed_traumas),
+            proposed_skill_updates: asArray<ProposedSkillUpdate>(safeData.montage_block.proposed_skill_updates),
+            proposed_npc_deltas: asArray<ProposedNpcDelta>(safeData.montage_block.proposed_npc_deltas),
+            age_increment_years: asNumber(safeData.montage_block.age_increment_years, 0),
+            season_delta: typeof safeData.montage_block.season_delta === 'string' ? safeData.montage_block.season_delta : undefined,
+        } as MontageBlock : undefined
     };
   }
 
