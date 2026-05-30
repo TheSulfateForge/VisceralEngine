@@ -13,6 +13,16 @@ export const RESPONSE_SCHEMA: Schema = {
       enum: ["NARRATIVE", "SOCIAL", "TENSION", "COMBAT"],
       description: "NARRATIVE: Normal. SOCIAL: Conversation. TENSION: Danger near. COMBAT: Active violence."
     },
+    scene_time_phase: {
+      type: Type.STRING,
+      enum: ["deep_night", "pre_dawn", "dawn", "morning", "midday", "afternoon", "dusk", "evening", "night"],
+      description: "The time-of-day phase your narrative actually depicts. MUST match the CURRENT TIME / phase given in the prompt unless your narrative explicitly advances the clock across a boundary. deep_night=00-04, pre_dawn=04-06, dawn=06-08, morning=08-11, midday=11-14, afternoon=14-17, dusk=17-19, evening=19-22, night=22-24."
+    },
+    time_mode: {
+      type: Type.STRING,
+      enum: ["TICK", "SCENE", "ACTIVITY", "REST", "MONTAGE"],
+      description: "Time-velocity mode for this beat (orthogonal to scene_mode). TICK: a single combat/action round, seconds-minutes. SCENE: a normal scene playing out in real time, minutes-hours. ACTIVITY: a declared multi-hour task (work, study, travel) within a day. REST: sleeping or extended idle. MONTAGE: a compressed passage of days, months, or years. Default to SCENE for ordinary play; use TICK in COMBAT."
+    },
     tension_level: {
       type: Type.INTEGER,
       description: "0 (Peaceful) to 100 (Doomed). Adjust based on atmosphere.",
@@ -88,13 +98,16 @@ export const RESPONSE_SCHEMA: Schema = {
         skill_updates: {
           type: Type.ARRAY,
           nullable: true,
+          description: "AI-DRIVEN skill advancement (Path A). Use SPARINGLY — only for narratively decisive moments (a teacher's lesson completed, a revelation, a death-stakes breakthrough). Routine practice should NOT use this; the engine advances skills automatically from usage via relevant_skill on rolls. Never downgrade a skill.",
           items: {
             type: Type.OBJECT,
             properties: {
               skill_name: { type: Type.STRING },
-              new_level: { type: Type.STRING },
-              reason: { type: Type.STRING }
-            }
+              new_level: { type: Type.STRING, enum: ["untrained", "familiar", "trained", "expert", "master"] },
+              reason: { type: Type.STRING },
+              category: { type: Type.STRING, enum: ["combat", "physical", "social", "knowledge", "craft"], nullable: true, description: "Only needed when introducing a NEW skill; defaults to 'knowledge'." }
+            },
+            required: ["skill_name", "new_level", "reason"]
           }
         }
       }
@@ -169,7 +182,8 @@ export const RESPONSE_SCHEMA: Schema = {
         bonus: { type: Type.NUMBER },
         advantage: { type: Type.BOOLEAN },
         disadvantage: { type: Type.BOOLEAN },
-        relevant_skill: { type: Type.STRING, description: 'Skill name if applicable', nullable: true }
+        relevant_skill: { type: Type.STRING, description: 'Skill name if applicable. The engine auto-tracks usage of this skill and advances it over time (Path B). If the named skill is new to the character, the engine creates it at "untrained".', nullable: true },
+        relevant_skill_category: { type: Type.STRING, enum: ["combat", "physical", "social", "knowledge", "craft"], nullable: true, description: "Category hint used only if relevant_skill is a NEW skill the character lacks. Defaults to 'knowledge'." }
       },
       required: ["challenge"]
     },
@@ -328,5 +342,5 @@ export const RESPONSE_SCHEMA: Schema = {
       required: ["npc_actions", "environment_changes", "emerging_threats"]
     }
   },
-  required: ["thought_process", "scene_mode", "tension_level", "narrative", "world_tick"]
+  required: ["thought_process", "scene_mode", "scene_time_phase", "tension_level", "narrative", "world_tick"]
 };

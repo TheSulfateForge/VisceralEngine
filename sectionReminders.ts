@@ -840,7 +840,6 @@ export const getSectionReminder = (
     // they're active until a stronger reminder displaces it.
     const visceralScene =
         mode === 'SOCIAL' ||
-        mode === 'COMBAT' ||
         tensionLevel >= 60;
     if (visceralScene) {
         return REMINDERS.VISCERAL_RENDER;
@@ -855,18 +854,18 @@ export const getSectionReminder = (
     // Priority 1: Vocabulary (Every 4 turns)
     if (turnCount % 4 === 0) return REMINDERS.VOCABULARY;
 
-    // Priority 2: Intimate Protocol (Social Mode Only, every 3 turns)
-    if (mode === 'SOCIAL' && turnCount % 3 === 0) return REMINDERS.INTIMATE;
-
-    // Priority 3: Combat Tactics (Combat Mode Only, every 3 turns)
-    if (mode === 'COMBAT' && turnCount % 3 === 0) return REMINDERS.COMBAT;
+    // Priority 2/3 (Intimate Protocol, Combat Tactics) removed: unreachable here.
+    // SOCIAL scenes already return VISCERAL_RENDER (1.25) and COMBAT scenes return
+    // HOSTILE_NPC_PROTOCOL (1.0) above — both fire every turn those modes are
+    // active, so these mode-gated rotating reminders could never run. The live
+    // getSectionReminders() selector handles intimate/combat rotation correctly.
 
     // Priority 4: Condition Audit (Every 5 turns)
     if (turnCount % 5 === 0) return REMINDERS.CONDITION_AUDIT;
 
     // Priority 5: Threat Seed Integrity (Every 6 turns during TENSION/COMBAT,
     // every 10 turns otherwise)
-    if ((mode === 'TENSION' || mode === 'COMBAT') && turnCount % 6 === 0) return REMINDERS.THREAT_SEED_INTEGRITY;
+    if (mode === 'TENSION' && turnCount % 6 === 0) return REMINDERS.THREAT_SEED_INTEGRITY;
     if (turnCount % 10 === 0) return REMINDERS.THREAT_SEED_INTEGRITY;
 
     // Priority 5.25: Genre Consistency (Every 5 turns, offset by 2) — v1.15

@@ -21,6 +21,29 @@ export type WorldSeedId = Brand<string, 'WorldSeedId'>;
 export const SCENE_MODES = ['NARRATIVE', 'SOCIAL', 'TENSION', 'COMBAT'] as const;
 export type SceneMode = typeof SCENE_MODES[number];
 
+// v1.20: Clock-derived narrative time phase. The engine derives the current
+// phase from the world clock at prompt-build time and injects it into the
+// system prompt; the AI echoes back the phase its narrative depicts via
+// `scene_time_phase`. A mismatch is the AI hallucinating time of day.
+export const SCENE_TIME_PHASES = [
+    'deep_night', 'pre_dawn', 'dawn', 'morning', 'midday',
+    'afternoon', 'dusk', 'evening', 'night'
+] as const;
+export type SceneTimePhase = typeof SCENE_TIME_PHASES[number];
+
+// v1.21: Time-velocity ladder. ORTHOGONAL to `scene_mode` — scene_mode carries
+// tone/danger (NARRATIVE/SOCIAL/TENSION/COMBAT) while time_mode carries time
+// velocity + pipeline gating. When the AI omits time_mode the engine derives a
+// default from scene_mode (see deriveTimeModeFromScene), so legacy saves and
+// older responses keep working without a save migration.
+//   TICK     seconds–minutes   AI owns clock   cap 30m    skip world-tick
+//   SCENE    minutes–hours     AI (clock-bound) cap 120m  all steps
+//   ACTIVITY hours (declared)  player          cap 1440m  skip combat
+//   REST     hours (declared)  player/engine   cap 540m   skip combat + faction
+//   MONTAGE  days–years        player          calendar   summary-only
+export const TIME_MODES = ['TICK', 'SCENE', 'ACTIVITY', 'REST', 'MONTAGE'] as const;
+export type TimeMode = typeof TIME_MODES[number];
+
 export enum Role {
     USER = 'user',
     MODEL = 'model',
@@ -550,6 +573,10 @@ export interface RollRequest {
     advantage?: boolean;
     disadvantage?: boolean;
     relevant_skill?: string;
+    /** Optional category hint, used only when `relevant_skill` names a skill the
+     *  character does not yet have and Path B must auto-create it. Defaults to
+     *  'knowledge' when omitted. */
+    relevant_skill_category?: SkillCategory;
 }
 
 export interface BargainRequest {
@@ -603,8 +630,12 @@ export interface CharacterUpdates {
     removed_goals?: string[];
     skill_updates?: Array<{
         skill_name: string;
-        new_level: ProficiencyLevel;
+        /** AI-declared target level. Typed as string because the model can emit
+         *  out-of-vocabulary values; the engine validates before applying. */
+        new_level: string;
         reason: string;
+        /** Optional category for AI-declared NEW skills. Defaults to 'knowledge'. */
+        category?: SkillCategory;
     }>;
 }
 
@@ -613,6 +644,16 @@ export interface ModelResponseSchema {
     scene_mode: SceneMode;
     tension_level: number;
     narrative: string;
+
+    // v1.20: Phase the narrative depicts. Optional in TS for back-compat with
+    // saved responses from before this field existed; the response schema
+    // marks it required so new generations always supply it.
+    scene_time_phase?: SceneTimePhase;
+
+    // v1.21: Time-velocity mode (orthogonal to scene_mode). Optional — when
+    // absent the engine derives it from scene_mode. Drives time caps + pipeline
+    // gating, not tone.
+    time_mode?: TimeMode;
 
     time_passed_minutes?: number;
     biological_inputs?: BioInputs;
@@ -814,8 +855,14 @@ export interface GameWorld {
 
     // State Tracking
     sceneMode: SceneMode;
+    // v1.21: Time-velocity mode (orthogonal to sceneMode). Optional & not
+    // persisted to the projection row — re-derived from sceneMode on load, so
+    // no save migration is needed. Set at runtime each turn.
+    timeMode?: TimeMode;
     tensionLevel: number;
     time: WorldTime;
+    /** Optional per-world calendar override (hydrated from the world seed). Defaults to DEFAULT_CALENDAR. */
+    calendar?: CalendarConfig;
     lastWorldTickTurn: number;
 
     // v1.3 — Simulation Integrity Systems
@@ -880,11 +927,37 @@ export interface GameWorld {
     worldTags?: string[];
 }
 
+export interface CalendarConfig {
+    daysPerYear: number;
+    monthsPerYear: number;
+    daysPerMonth: number;
+    seasonsPerYear: number;
+    daysPerSeason: number;
+    /** Season labels; length should equal seasonsPerYear. Defaults to spring/summer/autumn/winter. */
+    seasonNames: string[];
+    /** Optional month labels; length should equal monthsPerYear. If absent, display uses "Month N". */
+    monthNames?: string[];
+    /** Minutes in a day. Defaults to 1440 when omitted. */
+    minutesPerDay?: number;
+}
+
 export interface WorldTime {
     totalMinutes: number;
+    /** 1-based absolute day count since campaign start (kept for back-compat / montage math). */
     day: number;
     hour: number;
     minute: number;
+    // --- Calendar fields (derived from totalMinutes via CalendarConfig) ---
+    /** 1-based year. */
+    year: number;
+    /** 1-based month within the year (1..monthsPerYear). */
+    month: number;
+    /** 1-based day within the month (1..daysPerMonth). */
+    dayOfMonth: number;
+    /** 1-based day within the year (1..daysPerYear). */
+    dayOfYear: number;
+    /** Season label for the current dayOfYear. */
+    season: string;
     display: string;
 }
 

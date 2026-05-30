@@ -8,6 +8,7 @@ import { SYSTEM_INSTRUCTIONS } from '../systemInstructions'; // v1.19: Wire pers
 import { GeminiService } from '../geminiService';
 import { useGameStore } from '../store';
 import { SimulationEngine } from '../utils/simulationEngine';
+import { deriveTimePhase } from '../utils/engine/timeUtils';
 import { getSectionReminders } from '../sectionReminders';
 
 // Extracted Hooks & Utils
@@ -348,6 +349,63 @@ export const useGeminiClient = () => {
                             ? `[DRIFT] Resample still showing signals: ${driftAfter.matches.join(', ')} — accepting anyway`
                             : `[DRIFT] Resample cleared sanitization signals`,
                         type: driftAfter.drifted ? 'warning' : 'success'
+                    }
+                ]
+            }));
+        }
+
+        // v1.20: Clock-drift regeneration. The prompt injects the clock-derived
+        // time phase; the AI echoes back `scene_time_phase`. If they disagree the
+        // AI is hallucinating time of day — regenerate with a correction reminder.
+        // Max 2 retries, then accept (the pipeline annotates [CLOCK_DRIFT]).
+        const clockPhase = deriveTimePhase(preCallState.gameWorld.time?.hour ?? 9);
+        let clockRetries = 0;
+        while (
+            response.scene_time_phase &&
+            response.scene_time_phase !== clockPhase &&
+            clockRetries < 2
+        ) {
+            clockRetries++;
+            const declared = response.scene_time_phase;
+            setGameHistory(prev => ({
+                ...prev,
+                debugLog: [
+                    ...prev.debugLog,
+                    {
+                        timestamp: new Date().toISOString(),
+                        message: `[CLOCK_DRIFT] AI declared phase=${declared}, clock phase=${clockPhase} — regenerating (attempt ${clockRetries}/2)`,
+                        type: 'info'
+                    }
+                ]
+            }));
+
+            const clockReminder = `[CLOCK CORRECTION] The current time phase is "${clockPhase}". Your narrative must depict this phase and set scene_time_phase to "${clockPhase}" unless your narrative explicitly advances the clock across a phase boundary. Do not narrate a different time of day.`;
+            const reinforcedReminder = [activeReminder, clockReminder]
+                .filter((s): s is string => Boolean(s))
+                .join('\n\n---\n\n');
+
+            response = await service.sendMessage(
+                fullSystemPrompt,
+                [...preCallState.gameHistory.history, userMsg],
+                preCallState.gameHistory.lastActiveSummary,
+                preCallState.gameWorld.bannedNameMap ?? {},
+                reinforcedReminder
+            );
+
+            if (latestRequestId.current !== requestId) {
+                console.log("Discarding stale clock-drift response", requestId);
+                return;
+            }
+        }
+        if (response.scene_time_phase && response.scene_time_phase !== clockPhase) {
+            setGameHistory(prev => ({
+                ...prev,
+                debugLog: [
+                    ...prev.debugLog,
+                    {
+                        timestamp: new Date().toISOString(),
+                        message: `[CLOCK_DRIFT] Phase still ${response.scene_time_phase} vs clock ${clockPhase} after ${clockRetries} retr${clockRetries === 1 ? 'y' : 'ies'} — accepting anyway`,
+                        type: 'warning'
                     }
                 ]
             }));

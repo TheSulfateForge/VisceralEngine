@@ -26,7 +26,7 @@
 
 import type { ModelResponseSchema, GameWorld, Character, DebugLogEntry, LoreItem } from '../types';
 import { executePipeline } from './pipeline/runner';
-import { buildTurnContext, DEFAULT_PIPELINE } from './pipeline/pipelineConfig';
+import { buildTurnContext, buildPipeline } from './pipeline/pipelineConfig';
 import type { SimulationResult } from './pipeline/types';
 
 /**
@@ -76,8 +76,11 @@ export const SimulationEngine = {
             playerInput
         );
 
-        // Execute all pipeline steps in order
-        return executePipeline(DEFAULT_PIPELINE, ctx);
+        // v1.21: Select the pipeline for this turn's time_mode. buildTurnContext
+        // has already resolved ctx.effectiveTimeMode (AI-declared or derived from
+        // scene_mode); MONTAGE/REST/etc. gate out the steps they disable.
+        const pipeline = buildPipeline(ctx.effectiveTimeMode);
+        return executePipeline(pipeline, ctx);
     }
 };
 

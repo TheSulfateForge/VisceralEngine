@@ -86,6 +86,7 @@ export const assembleStateStep: PipelineStep = {
             environment: ctx.nextEnv,
             knownEntities: ctx.updatedKnownEntities,
             sceneMode: finalSceneMode,
+            timeMode: ctx.effectiveTimeMode,   // v1.21: runtime-only (not persisted to projection row)
             tensionLevel: finalTensionLevel,
             lastWorldTickTurn: ctx.lastWorldTickTurn,
             turnCount: newTurnCount,

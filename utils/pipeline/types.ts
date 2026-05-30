@@ -6,6 +6,7 @@ import type {
     LoreItem,
     KnownEntity,
     SceneMode,
+    TimeMode,
     WorldTime,
     ThreatDenialTracker,
     ThreatArcHistory,
@@ -45,6 +46,7 @@ export interface TurnContext {
     sessionDenialCount: number;
     lastThreatArcEndTurn: number;
     effectiveSceneMode: SceneMode;
+    effectiveTimeMode: TimeMode;   // v1.21: resolved time-velocity mode for this turn
     newPlayerLocation: string;
     updatedKnownEntities: KnownEntity[];
     processedThreats: WorldTickEvent[] | undefined;

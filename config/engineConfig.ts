@@ -4,6 +4,8 @@
 //        characterDelta.ts, bioEngine.ts, promptUtils.ts
 // ============================================================================
 
+import type { CalendarConfig } from '../types';
+
 // ---------------------------------------------------------------------------
 // Entity Status Lifecycle (v1.14)
 // ---------------------------------------------------------------------------
@@ -23,6 +25,23 @@ export const TRIANGLE_INEQUALITY_TOLERANCE = 1.2;
 export const MAX_INSTANT_TRAVEL_MINUTES = 30;
 /** Default minutes per turn for distance→ETA conversion. */
 export const DEFAULT_MINUTES_PER_TURN = 15;
+
+// ---------------------------------------------------------------------------
+// Calendar (v1.23) — 360-day year, 12×30-day months, 4×90-day seasons.
+// `totalMinutes` remains the canonical substrate; calendar fields are derived
+// from it. World seeds may override via an optional `calendar` field on the
+// world state (GameWorld.calendar); otherwise this default applies.
+// ---------------------------------------------------------------------------
+
+export const DEFAULT_CALENDAR: CalendarConfig = {
+    daysPerYear: 360,
+    monthsPerYear: 12,
+    daysPerMonth: 30,
+    seasonsPerYear: 4,
+    daysPerSeason: 90,
+    seasonNames: ['spring', 'summer', 'autumn', 'winter'],
+    minutesPerDay: 1440,
+};
 
 // ---------------------------------------------------------------------------
 // Threat Seed Pipeline
@@ -114,6 +133,18 @@ export const TIME_CAPS = {
     COMBAT_MAX: 30,
     SOCIAL_MAX: 15,       // v1.19.1: Hard cap for SOCIAL scene mode dialogue turns
 } as const;
+
+// v1.21: Per-mode time caps for the orthogonal time-velocity ladder. When a
+// turn's time_mode is known, calculateTimeDelta uses these caps instead of the
+// scene-mode-derived TIME_CAPS above. MONTAGE is calendar-bounded (one 360-day
+// year) rather than truly uncapped, to avoid runaway clock advances.
+export const TIME_MODE_CAPS: Record<string, number> = {
+    TICK: 30,
+    SCENE: 120,
+    ACTIVITY: 1440,    // one day
+    REST: 540,         // sleep window
+    MONTAGE: 518400,   // 360 days (one calendar year)
+};
 
 /** v1.19.1: Default time when AI returns 0 or undefined during non-sleep turns. */
 export const TIME_FLOOR_MINUTES = 1;

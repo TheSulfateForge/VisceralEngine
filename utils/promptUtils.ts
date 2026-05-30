@@ -20,6 +20,7 @@ import { buildTraumaPromptBlock } from './traumaSystem';
 import { buildSkillPromptBlock } from './skillSystem';
 import { buildFactionPromptBlock } from './factionSystem';
 import { buildSeedBrief } from './seedBrief';
+import { deriveTimePhase, getAmbientCue } from './engine/timeUtils';
 import { db } from '../db';
 
 /**
@@ -660,6 +661,13 @@ export const constructGeminiPrompt = async (
   const currentMode = gameWorld.sceneMode || 'NARRATIVE';
   const timeDisplay = gameWorld.time?.display || "Day 1, 09:00";
 
+  // v1.20: Clock-derived time phase + ambient cue, injected into the
+  // atmosphere block so the AI anchors its sensory rendering and echoes the
+  // phase back via `scene_time_phase` (validated against the clock).
+  const currentPhase = deriveTimePhase(gameWorld.time?.hour ?? 9);
+  const seasonLabel = gameWorld.time?.season ?? '';
+  const ambientCue = getAmbientCue(currentPhase);
+
   // 4. Build Instructions
   const bioStatus = buildBioStatus(character.bio, timeDisplay);
   const pacingInstruction = buildPacingInstruction(tension, currentMode, isDowntime);
@@ -781,6 +789,8 @@ ${sanitise(knownEntitiesContext)}
 [CURRENT ATMOSPHERE]
 Mode: ${currentMode}
 Tension Level: ${tension}/100
+Time Phase: ${currentPhase}${seasonLabel ? ` (${seasonLabel})` : ''} — ${ambientCue}
+Set \`scene_time_phase\` to "${currentPhase}" unless your narrative explicitly advances the clock across a phase boundary.
 
 ${sanitise(bioStatus)}
 
