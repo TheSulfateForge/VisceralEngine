@@ -55,7 +55,7 @@ export const DeclaredActionPicker: React.FC<Props> = ({ disabled }) => {
             </button>
 
             {open && (
-                <div className="absolute bottom-full mb-2 right-0 w-72 bg-[#0a0a0a] border border-purple-900/40 p-4 rounded-sm shadow-2xl z-[120] space-y-3">
+                <div className="fixed left-4 right-4 bottom-24 sm:absolute sm:left-auto sm:right-0 sm:bottom-full sm:mb-2 sm:w-72 bg-[#0a0a0a] border border-purple-900/40 p-4 rounded-sm shadow-2xl z-[120] space-y-3 max-h-[75vh] overflow-y-auto">
                     <p className="text-[9px] text-gray-500 uppercase tracking-widest">Declare a time skip</p>
 
                     <div>
