@@ -1,5 +1,5 @@
 import { GameHistory, GameWorld, Character, SceneMode, MemoryItem, LoreItem, KnownEntity, BioMonitor, ActiveThreat, DormantHook, FactionExposure, ThreatDenialTracker, ChatMessage, SummarySegment, Role } from '../types';
-import { retrieveRelevantContext, retrieveRelevantMemories, retrieveRelevantSegments, RAGResult } from './ragEngine';
+import { retrieveRelevantContext, retrieveRelevantMemories, retrieveRelevantSegments, findAliasMatchedEntities, RAGResult } from './ragEngine';
 import {
   buildHybridContext,
   retrieveRelevantContextHybrid,
@@ -227,14 +227,20 @@ const buildLoreContext = (lore: LoreItem[]): string => {
     return lore.map(l => `[${l.keyword}]: ${l.content}`).join('\n');
 };
 
-const buildEntityContext = (entities: KnownEntity[]): string => {
+const buildEntityContext = (entities: KnownEntity[], forceActiveIds: Set<string> = new Set()): string => {
     if (entities.length === 0) return "";
 
-    // Only inject full context for present/nearby entities
-    const active = entities.filter(e =>
-        !e.status || e.status === 'present' || e.status === 'nearby'
-    );
-    const distant = entities.filter(e => e.status === 'distant');
+    // v1.23: An entity the player just named (forceActiveIds) is rendered with
+    // its full canonical block even if its lifecycle status is still 'distant'.
+    // Seed NPCs hydrate as 'distant', so without this the player's first
+    // interaction with them showed only a name/role one-liner — the model never
+    // saw their personality and improvised (the "Aster is an elf" symptom).
+    const isActive = (e: KnownEntity) =>
+        forceActiveIds.has(e.id) || !e.status || e.status === 'present' || e.status === 'nearby';
+
+    // Only inject full context for present/nearby/just-named entities
+    const active = entities.filter(e => e.status !== 'dead' && isActive(e));
+    const distant = entities.filter(e => e.status === 'distant' && !forceActiveIds.has(e.id));
     const dead = entities.filter(e => e.status === 'dead');
 
     let context = '';
@@ -652,7 +658,13 @@ export const constructGeminiPrompt = async (
     hybridCtx,
   );
   const loreContext = buildLoreContext(relevantLore);
-  const knownEntitiesContext = buildEntityContext(relevantEntities);
+  // v1.23: Entities the player just named must render with full personality even
+  // if still 'distant' (first interaction with a seed NPC). Force them active.
+  const forceActiveEntityIds = new Set(
+    findAliasMatchedEntities(userInput, gameHistory.history, gameWorld.knownEntities || [])
+      .map(e => e.id)
+  );
+  const knownEntitiesContext = buildEntityContext(relevantEntities, forceActiveEntityIds);
 
   // 3. Narrative Intent & State
   const lowerInput = userInput.toLowerCase();

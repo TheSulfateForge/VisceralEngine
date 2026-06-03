@@ -13,6 +13,38 @@ import {
 import { checkNameCollision, registerEntityName } from '../../nameResolver';
 
 /**
+ * v1.23: Significant name parts — parens stripped, lowercased, short/blacklisted
+ * tokens (incl. honorifics like "Lord"/"Countess") dropped. The FIRST entry is
+ * treated as the given name.
+ */
+const significantNameParts = (name: string): string[] =>
+    name
+        .replace(/\([^)]*\)/g, '')
+        .split(/\s+/)
+        .map(p => p.toLowerCase().trim())
+        .filter(p => p.length >= 3 && !ENTITY_EXTRACTION_BLACKLIST.has(p));
+
+/**
+ * v1.23: Two entity records describe the SAME person only when they share a
+ * given name (first significant token) AND at least one other token (typically
+ * the surname) — or, for single-token names, an exact token match.
+ *
+ * This is the core fix for the "33 seed NPCs collapse to ~18" bug: the old
+ * dedup treated ANY shared name part as a duplicate, so same-surname family
+ * members ("Aster/Lyrelle/Cassian/... Verancourt") were merged into one
+ * record. Requiring a given-name match keeps relatives distinct while still
+ * merging title/format variants of one individual
+ * ("Halric Vance" ⇄ "Guildmaster Halric Vance").
+ */
+const isSamePerson = (nameA: string, nameB: string): boolean => {
+    const a = significantNameParts(nameA);
+    const b = significantNameParts(nameB);
+    if (a.length === 0 || b.length === 0) return false;
+    if (a.length === 1 || b.length === 1) return a.some(p => b.includes(p));
+    return a[0] === b[0] && a.slice(1).some(p => b.includes(p));
+};
+
+/**
  * Step 6: Entity Pipeline — v1.8: Enhanced dedup with fuzzy name matching
  *
  * Processes known entity updates, deduplicates, handles name collisions,
@@ -42,24 +74,15 @@ export const entityLifecycleStep: PipelineStep = {
                 }
 
                 if (existingIdx < 0) {
-                    // Fuzzy first-name match: extract significant name words and check overlap
-                    const updateNameParts = update.name
-                        .replace(/\([^)]*\)/g, '')
-                        .split(/\s+/)
-                        .map(p => p.toLowerCase().trim())
-                        .filter(p => p.length >= 3 && !ENTITY_EXTRACTION_BLACKLIST.has(p));
+                    // v1.23: Person-identity match — requires a given-name match,
+                    // not just a shared surname (see isSamePerson).
+                    const updateNameParts = significantNameParts(update.name);
 
                     if (updateNameParts.length > 0) {
                         existingIdx = updatedKnownEntities.findIndex(e => {
-                            const existingParts = e.name
-                                .replace(/\([^)]*\)/g, '')
-                                .split(/\s+/)
-                                .map(p => p.toLowerCase().trim())
-                                .filter(p => p.length >= 3 && !ENTITY_EXTRACTION_BLACKLIST.has(p));
+                            if (!isSamePerson(update.name, e.name)) return false;
 
-                            const nameMatch = existingParts.some(ep => updateNameParts.includes(ep));
-                            if (!nameMatch) return false;
-
+                            const existingParts = significantNameParts(e.name);
                             const matchedParts = existingParts.filter(ep => updateNameParts.includes(ep));
                             const isBannedNameCollision = matchedParts.some(p => bannedReplacementNames.has(p));
 
@@ -135,64 +158,64 @@ export const entityLifecycleStep: PipelineStep = {
             }
         }
 
-        // v1.8: Post-processing dedup pass
+        // v1.23: Post-processing dedup pass — person-identity based.
+        // Compares each entity against already-kept entities via isSamePerson
+        // so same-surname relatives are preserved. (Previously keyed on any
+        // shared name part, which collapsed entire noble houses into one NPC.)
         {
-            const seen = new Map<string, number>();
-            const toRemove: number[] = [];
+            const keptIdx: number[] = [];
+            const toRemove = new Set<number>();
+
             for (let i = 0; i < updatedKnownEntities.length; i++) {
                 const entity = updatedKnownEntities[i];
-                const nameParts = entity.name
-                    .replace(/\([^)]*\)/g, '')
-                    .split(/\s+/)
-                    .map(p => p.toLowerCase().trim())
-                    .filter(p => p.length >= 3 && !ENTITY_EXTRACTION_BLACKLIST.has(p));
+                let dupKi = -1;
 
-                let isDuplicate = false;
-                for (const part of nameParts) {
-                    if (seen.has(part)) {
-                        const existingIdx = seen.get(part)!;
-                        const existingEntity = updatedKnownEntities[existingIdx];
+                for (const ki of keptIdx) {
+                    const other = updatedKnownEntities[ki];
+                    if (!isSamePerson(entity.name, other.name)) continue;
 
-                        const isBannedCollision = bannedReplacementNames.has(part);
-                        if (isBannedCollision) {
-                            const roleWords = (role: string) => new Set(
-                                (role ?? '').toLowerCase().split(/[\s/,()]+/).filter(w => w.length >= 3)
-                            );
-                            const entityRoleWords = roleWords(entity.role);
-                            const existingRoleWords = roleWords(existingEntity.role);
-                            const sharedRoleWords = [...entityRoleWords].filter(w => existingRoleWords.has(w));
-
-                            if (entityRoleWords.size >= 1 && existingRoleWords.size >= 1 && sharedRoleWords.length === 0) {
-                                continue;
-                            }
+                    // Distinct people renamed onto the same banned replacement
+                    // name but holding clearly different roles are NOT duplicates.
+                    const sharedParts = significantNameParts(entity.name)
+                        .filter(p => significantNameParts(other.name).includes(p));
+                    const isBannedCollision = sharedParts.some(p => bannedReplacementNames.has(p));
+                    if (isBannedCollision) {
+                        const roleWords = (role: string) => new Set(
+                            (role ?? '').toLowerCase().split(/[\s/,()]+/).filter(w => w.length >= 3)
+                        );
+                        const entityRoleWords = roleWords(entity.role);
+                        const otherRoleWords = roleWords(other.role);
+                        const sharedRoleWords = [...entityRoleWords].filter(w => otherRoleWords.has(w));
+                        if (entityRoleWords.size >= 1 && otherRoleWords.size >= 1 && sharedRoleWords.length === 0) {
+                            continue;
                         }
-
-                        const existingLen = (existingEntity.impression ?? '').length;
-                        const currentLen = (entity.impression ?? '').length;
-                        if (currentLen > existingLen) {
-                            toRemove.push(existingIdx);
-                            seen.set(part, i);
-                        } else {
-                            toRemove.push(i);
-                        }
-                        isDuplicate = true;
-                        ctx.debugLogs.push({
-                            timestamp: new Date().toISOString(),
-                            message: `[ENTITY DEDUP — v1.8 POST-PROCESS] Duplicate detected: "${entity.name}" shares name part "${part}" with "${existingEntity.name}". Keeping more detailed entry.`,
-                            type: 'warning'
-                        });
-                        break;
                     }
+
+                    dupKi = ki;
+                    break;
                 }
-                if (!isDuplicate) {
-                    for (const part of nameParts) {
-                        seen.set(part, i);
+
+                if (dupKi >= 0) {
+                    const other = updatedKnownEntities[dupKi];
+                    const keepCurrent = (entity.impression ?? '').length > (other.impression ?? '').length;
+                    if (keepCurrent) {
+                        toRemove.add(dupKi);
+                        keptIdx[keptIdx.indexOf(dupKi)] = i;
+                    } else {
+                        toRemove.add(i);
                     }
+                    ctx.debugLogs.push({
+                        timestamp: new Date().toISOString(),
+                        message: `[ENTITY DEDUP — v1.23 POST-PROCESS] "${entity.name}" and "${other.name}" resolved to the same person. Keeping the more detailed record.`,
+                        type: 'warning'
+                    });
+                } else {
+                    keptIdx.push(i);
                 }
             }
-            if (toRemove.length > 0) {
-                const removeSet = new Set(toRemove);
-                updatedKnownEntities = updatedKnownEntities.filter((_, i) => !removeSet.has(i));
+
+            if (toRemove.size > 0) {
+                updatedKnownEntities = updatedKnownEntities.filter((_, i) => !toRemove.has(i));
             }
         }
 

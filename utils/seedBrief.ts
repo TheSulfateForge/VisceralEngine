@@ -21,7 +21,7 @@ import { WorldSeed } from '../types';
 // when the seed is densely populated. Raise/lower here if budget changes.
 const MAX_LOCATIONS = 5;
 const MAX_FACTIONS = 5;
-const MAX_NPCS = 8;
+const MAX_NPCS = 16;  // v1.23: was 8 — too aggressive for densely-populated seeds (e.g. 33 NPCs), truncated whole families out of the turn-0 primer
 const MAX_LORE = 8;
 const PER_ITEM_DESC_CHARS = 180; // one-line summary ceiling for descriptions
 

@@ -36,11 +36,14 @@ export function loreSourceText(l: Pick<LoreItem, 'keyword' | 'content'>): string
 }
 
 export function entitySourceText(
-  e: Pick<KnownEntity, 'name' | 'role' | 'impression' | 'leverage' | 'ledger'>
+  e: Pick<KnownEntity, 'name' | 'role' | 'impression' | 'personality' | 'leverage' | 'ledger'>
 ): string {
   const parts: string[] = [];
   if (e.name) parts.push(e.name);
   if (e.role) parts.push(`(${e.role})`);
+  // Personality is canonical characterization; include it so trait-oriented
+  // queries ("who is warm/cruel/scheming?") retrieve the right NPC.
+  if (e.personality) parts.push(e.personality);
   if (e.impression) parts.push(e.impression);
   if (e.leverage) parts.push(`leverage: ${e.leverage}`);
   if (e.ledger?.length) parts.push(e.ledger.join(' '));
@@ -75,6 +78,7 @@ export function sourceTextFromRow(
                               name: (row as EntityRow).name,
                               role: (row as EntityRow).role,
                               impression: (row as EntityRow).impression,
+                              personality: (row as EntityRow).personality ?? undefined,
                               leverage: (row as EntityRow).leverage,
                               ledger: [],   // ledger items live in their own table
                             } as KnownEntity);

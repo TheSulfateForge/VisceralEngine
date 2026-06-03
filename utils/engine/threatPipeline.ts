@@ -76,6 +76,12 @@ export const HOOK_RATE_LIMIT_TURNS = 5;
 
 export const ENTITY_EXTRACTION_BLACKLIST = new Set([
     'the', 'this', 'that', 'these', 'those', 'there',
+    // Honorifics / noble titles — these are NOT name parts. Without this,
+    // dedup treated a shared title (e.g. every "Lord") as evidence of a
+    // duplicate entity, and given-name detection couldn't skip the title.
+    'count', 'countess', 'lord', 'lady', 'duke', 'duchess', 'baron', 'baroness',
+    'sir', 'dame', 'master', 'mistress', 'king', 'queen', 'prince', 'princess',
+    'inquisitor', 'guildmaster', 'mayor',
     'inspector', 'captain', 'magistrate', 'registrar', 'guild', 'city',
     'safety', 'guard', 'guards', 'crew', 'gang', 'squad', 'patrol',
     'council', 'court', 'office', 'hall', 'tavern', 'district',

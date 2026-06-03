@@ -251,7 +251,7 @@ export function retrieveRelevantContext(
 
     items.push({
       item: e,
-      analysis: analyzeText(`${e.name} ${e.role} ${e.location} ${e.impression}`),
+      analysis: analyzeText(`${e.name} ${e.role} ${e.location} ${e.impression} ${e.personality ?? ''}`),
       score: 0,
       type: 'entity',
       isMandatory,
