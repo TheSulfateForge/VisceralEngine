@@ -32,7 +32,7 @@ export const WorldTickAnnotations: React.FC<WorldTickAnnotationsProps> = ({ even
                     return (
                         <div key={idx} className="flex items-start gap-2 text-xs">
                             <span className={`${color}`}>{icon}</span>
-                            <div className="flex-1">
+                            <div className="flex-1 min-w-0 break-words">
                                 <span className="text-gray-300">{event.description}</span>
                                 {event.turns_until_impact !== undefined && event.status !== 'expired' && event.status !== 'triggered' && (
                                     <span className="ml-2 text-[10px] text-gray-500 uppercase tracking-widest">

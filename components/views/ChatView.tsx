@@ -109,7 +109,7 @@ export const ChatView: React.FC = () => {
     return (
         <>
             <div 
-                className="flex-1 overflow-y-auto p-6 md:p-12 space-y-16 pb-64 md:pb-96 max-w-4xl mx-auto w-full custom-scrollbar" 
+                className="flex-1 overflow-y-auto overflow-x-hidden p-6 md:p-12 space-y-16 pb-64 md:pb-96 max-w-4xl mx-auto w-full min-w-0 custom-scrollbar"
                 ref={scrollRef}
                 onScroll={onScroll}
             >

@@ -70,7 +70,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({ msg, executeLocalRol
 
     return (
         <div className={`flex ${msg.role === Role.USER ? 'justify-end' : 'justify-start'} animate-fade-in`}>
-            <div className={`w-full ${msg.role === Role.USER ? 'max-w-[85%]' : ''}`}>
+            <div className={`w-full min-w-0 break-words ${msg.role === Role.USER ? 'max-w-[85%]' : ''}`}>
                 
                 {msg.npcInteraction && (
                     <div className="mb-4 ml-2 max-w-lg">

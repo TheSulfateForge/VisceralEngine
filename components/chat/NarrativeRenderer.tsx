@@ -14,7 +14,7 @@ interface NarrativeRendererProps {
 export const NarrativeRenderer: React.FC<NarrativeRendererProps> = ({ message, onResolveBargain }) => {
     // If it's a user message, just render normally
     if (message.role === 'user') {
-        return <div className="text-gray-200 whitespace-pre-wrap">{message.text}</div>;
+        return <div className="text-gray-200 whitespace-pre-wrap break-words min-w-0">{message.text}</div>;
     }
 
     // Process system/assistant messages
@@ -59,7 +59,7 @@ export const NarrativeRenderer: React.FC<NarrativeRendererProps> = ({ message, o
         if (line.trim().startsWith('"') && line.trim().endsWith('"') && line.trim().length > 2) {
             flushParagraph();
             blocks.push(
-                <div key={`dialogue-${i}`} className="my-3 pl-4 border-l-2 border-gray-600 italic text-gray-200">
+                <div key={`dialogue-${i}`} className="my-3 pl-4 border-l-2 border-gray-600 italic text-gray-200 break-words min-w-0">
                     {line}
                 </div>
             );

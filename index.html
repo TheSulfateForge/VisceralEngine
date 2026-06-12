@@ -49,6 +49,39 @@
             font-family: 'JetBrains Mono', monospace;
         }
         /* Markdown Styles */
+        /* Layout hardening: AI narrative can contain long unbreakable tokens
+           (coined names, URLs, unspaced strings, ASCII dividers, code fences).
+           Without these guards such tokens force the message column far wider
+           than the viewport and the whole layout collapses into a right-side
+           sliver. overflow-wrap:anywhere also lowers min-content width so the
+           flex message column can actually shrink. */
+        .markdown-content {
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+        .markdown-content a {
+            overflow-wrap: anywhere;
+            word-break: break-all;
+        }
+        .markdown-content pre {
+            white-space: pre-wrap;
+            word-break: break-word;
+            overflow-x: auto;
+            max-width: 100%;
+        }
+        .markdown-content code {
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+        .markdown-content img {
+            max-width: 100%;
+            height: auto;
+        }
+        .markdown-content table {
+            display: block;
+            max-width: 100%;
+            overflow-x: auto;
+        }
         .markdown-content p {
             margin-bottom: 1.75rem;
         }
