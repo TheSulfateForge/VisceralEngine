@@ -4,11 +4,12 @@ import { generateMessageId } from '../idUtils';
 import { mapSystemErrorToNarrative } from '../utils';
 import { useToast } from '../components/providers/ToastProvider';
 import { constructGeminiPrompt } from '../utils/promptUtils';
+import { getResponseSchema, SchemaMode } from '../schemas/responseSchema';
 import { SYSTEM_INSTRUCTIONS } from '../systemInstructions'; // v1.19: Wire persona into API call
 import { GeminiService } from '../geminiService';
 import { useGameStore } from '../store';
 import { SimulationEngine } from '../utils/simulationEngine';
-import { deriveTimePhase } from '../utils/engine/timeUtils';
+import { phaseAfterElapsed } from '../utils/engine/timeUtils';
 import { getSectionReminders } from '../sectionReminders';
 
 // Extracted Hooks & Utils
@@ -282,12 +283,34 @@ export const useGeminiClient = () => {
         // Previously only dynamic game state context was being sent.
         const fullSystemPrompt = `${SYSTEM_INSTRUCTIONS}\n\n${contextPrompt}`;
 
+        // Review item 3: send a compact, scene-mode-aware response schema.
+        // handleSend never runs a MONTAGE beat (that path lives in useMontage),
+        // so the schema for this turn follows the current sceneMode and drops
+        // the combat / location / montage branches it doesn't need.
+        const turnSchema = getResponseSchema(
+            (preCallState.gameWorld.sceneMode ?? 'NARRATIVE') as SchemaMode
+        );
+
+        // Review item 4: only spend a second generation on sanitization drift
+        // when the beat is actually mature — a softening signal on a mundane
+        // shopping scene isn't worth a full re-roll.
+        const lastNarrative = [...preCallState.gameHistory.history]
+            .reverse()
+            .find(m => m.role === Role.MODEL)?.text ?? '';
+        const MATURE_CONTENT_RE = /\b(blood|bleed|wound|gore|kill|stab|slash|sever|gut|disembowel|torture|rape|sex|fuck|cock|cunt|breast|nipple|thrust|cum|orgasm|naked|nude|arous)\w*/i;
+        const matureContextActive =
+            preCallState.gameWorld.sceneMode === 'COMBAT' ||
+            (preCallState.gameWorld.tensionLevel ?? 0) >= 40 ||
+            MATURE_CONTENT_RE.test(text) ||
+            MATURE_CONTENT_RE.test(lastNarrative);
+
         let response: ModelResponseSchema = await service.sendMessage(
             fullSystemPrompt,
             [...preCallState.gameHistory.history, userMsg],
             preCallState.gameHistory.lastActiveSummary,
             preCallState.gameWorld.bannedNameMap ?? {},  // v1.7
-            activeReminder  // v1.19: Trailing reminder for recency-biased compliance
+            activeReminder,  // v1.19: Trailing reminder for recency-biased compliance
+            turnSchema  // Review item 3
         );
 
         if (latestRequestId.current !== requestId) {
@@ -304,7 +327,22 @@ export const useGeminiClient = () => {
         // The detector reads ONLY thought_process so narrative prose using
         // words like "softly" isn't a false positive.
         const drift = detectSanitizationDrift(response.thought_process);
-        if (drift.drifted) {
+        if (drift.drifted && !matureContextActive) {
+            // Drift signal in a non-mature beat — log it but don't pay for a
+            // re-roll. (Review item 4: gate the resample by context.)
+            console.log('[VRE] Sanitization drift detected (non-mature beat, not resampling):', drift.matches);
+            setGameHistory(prev => ({
+                ...prev,
+                debugLog: [
+                    ...prev.debugLog,
+                    {
+                        timestamp: new Date().toISOString(),
+                        message: `[DRIFT] Signal in non-mature beat — skipping resample. Matches: ${drift.matches.join(', ')}`,
+                        type: 'info'
+                    }
+                ]
+            }));
+        } else if (drift.drifted) {
             console.log('[VRE] Sanitization drift detected:', drift.matches);
             setGameHistory(prev => ({
                 ...prev,
@@ -327,7 +365,8 @@ export const useGeminiClient = () => {
                 [...preCallState.gameHistory.history, userMsg],
                 preCallState.gameHistory.lastActiveSummary,
                 preCallState.gameWorld.bannedNameMap ?? {},
-                reinforcedReminder
+                reinforcedReminder,
+                turnSchema  // Review item 3
             );
 
             if (latestRequestId.current !== requestId) {
@@ -354,58 +393,29 @@ export const useGeminiClient = () => {
             }));
         }
 
-        // v1.20: Clock-drift regeneration. The prompt injects the clock-derived
-        // time phase; the AI echoes back `scene_time_phase`. If they disagree the
-        // AI is hallucinating time of day — regenerate with a correction reminder.
-        // Max 2 retries, then accept (the pipeline annotates [CLOCK_DRIFT]).
-        const clockPhase = deriveTimePhase(preCallState.gameWorld.time?.hour ?? 9);
-        let clockRetries = 0;
-        while (
-            response.scene_time_phase &&
-            response.scene_time_phase !== clockPhase &&
-            clockRetries < 2
-        ) {
-            clockRetries++;
+        // Review item 4: deterministic clock correction (replaces up to 2 full
+        // regenerations). The authoritative phase is derived from the clock —
+        // start time plus the minutes this beat advanced. If the model's
+        // declared phase disagrees, the prose is almost always fine and only the
+        // enum is wrong, so we simply overwrite it instead of re-rolling an
+        // entire expensive generation. No extra API calls.
+        const startTime = preCallState.gameWorld.time;
+        const authoritativePhase = phaseAfterElapsed(
+            startTime?.hour ?? 9,
+            startTime?.minute ?? 0,
+            response.time_passed_minutes ?? 0,
+        );
+        if (response.scene_time_phase && response.scene_time_phase !== authoritativePhase) {
             const declared = response.scene_time_phase;
+            response.scene_time_phase = authoritativePhase;
             setGameHistory(prev => ({
                 ...prev,
                 debugLog: [
                     ...prev.debugLog,
                     {
                         timestamp: new Date().toISOString(),
-                        message: `[CLOCK_DRIFT] AI declared phase=${declared}, clock phase=${clockPhase} — regenerating (attempt ${clockRetries}/2)`,
+                        message: `[CLOCK_DRIFT_CORRECTED] AI declared phase=${declared}; overwrote with clock-derived ${authoritativePhase}. No re-roll.`,
                         type: 'info'
-                    }
-                ]
-            }));
-
-            const clockReminder = `[CLOCK CORRECTION] The current time phase is "${clockPhase}". Your narrative must depict this phase and set scene_time_phase to "${clockPhase}" unless your narrative explicitly advances the clock across a phase boundary. Do not narrate a different time of day.`;
-            const reinforcedReminder = [activeReminder, clockReminder]
-                .filter((s): s is string => Boolean(s))
-                .join('\n\n---\n\n');
-
-            response = await service.sendMessage(
-                fullSystemPrompt,
-                [...preCallState.gameHistory.history, userMsg],
-                preCallState.gameHistory.lastActiveSummary,
-                preCallState.gameWorld.bannedNameMap ?? {},
-                reinforcedReminder
-            );
-
-            if (latestRequestId.current !== requestId) {
-                console.log("Discarding stale clock-drift response", requestId);
-                return;
-            }
-        }
-        if (response.scene_time_phase && response.scene_time_phase !== clockPhase) {
-            setGameHistory(prev => ({
-                ...prev,
-                debugLog: [
-                    ...prev.debugLog,
-                    {
-                        timestamp: new Date().toISOString(),
-                        message: `[CLOCK_DRIFT] Phase still ${response.scene_time_phase} vs clock ${clockPhase} after ${clockRetries} retr${clockRetries === 1 ? 'y' : 'ies'} — accepting anyway`,
-                        type: 'warning'
                     }
                 ]
             }));
@@ -474,8 +484,12 @@ export const useGeminiClient = () => {
             isThinking: false,
             turnCount: nextTurn,
             debugLog: [
-                ...currentHistoryState.debugLog, 
+                ...currentHistoryState.debugLog,
                 { timestamp: new Date().toISOString(), message: `Response Received [${requestId}]`, type: 'success' },
+                // Review item 1: real token accounting from Gemini usageMetadata.
+                { timestamp: new Date().toISOString(), message: response.usageMetadata
+                    ? `[TOKENS] prompt=${response.usageMetadata.promptTokenCount} (cached ${response.usageMetadata.cachedContentTokenCount}) · output=${response.usageMetadata.candidatesTokenCount} · thoughts=${response.usageMetadata.thoughtsTokenCount} · total=${response.usageMetadata.totalTokenCount}`
+                    : `[TOKENS] usageMetadata unavailable for this turn`, type: 'info' },
                 { timestamp: new Date().toISOString(), message: `[RAG] Lore: ${ragDebug.filteredLore}/${ragDebug.totalLore} | Entities: ${ragDebug.filteredEntities}/${ragDebug.totalEntities} | Tokens: [${ragDebug.queryTokens.slice(0, 10).join(', ')}]`, type: 'info' },
                 ...debugLogs
             ]

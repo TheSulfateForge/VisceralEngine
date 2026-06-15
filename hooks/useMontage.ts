@@ -32,6 +32,7 @@ import { useGameStore } from '../store';
 import { useToast } from '../components/providers/ToastProvider';
 import { useGeminiService } from './useGeminiService';
 import { constructGeminiPrompt } from '../utils/promptUtils';
+import { getResponseSchema } from '../schemas/responseSchema';
 import { SYSTEM_INSTRUCTIONS } from '../systemInstructions';
 import { buildMontageInstruction } from '../utils/montagePrompt';
 import { resolveDeclaredAction } from '../utils/engine/declaredActions';
@@ -106,6 +107,7 @@ export const useMontage = () => {
             state.gameHistory.lastActiveSummary,
             state.gameWorld.bannedNameMap ?? {},
             instruction,
+            getResponseSchema('MONTAGE'),  // Review item 3: montage variant keeps montage_block
         );
     }, [getService]);
 

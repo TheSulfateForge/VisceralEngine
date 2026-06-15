@@ -31,6 +31,11 @@
 
 /** Phrases that strongly indicate the model is talking itself into a softer render. */
 const DRIFT_PHRASES: RegExp[] = [
+    // Explicit self-report tag (review item 5): the terse thought_process flags
+    // contract asks the model to emit the literal token SOFTENED whenever it
+    // compromised explicit rendering. Match it as a standalone word.
+    /\bSOFTENED\b/,
+
     // Direct fade / time-jump confessions
     /\bfade(?:\s+to)?\s+black\b/i,
     /\bcut\s+away\b/i,

@@ -6,7 +6,7 @@ export const RESPONSE_SCHEMA: Schema = {
   properties: {
     thought_process: {
       type: Type.STRING,
-      description: "Analyze the scene before writing. Determine intent, mood, and time passed."
+      description: "TERSE FLAGS ONLY — not prose. A short, comma-separated list of tags / single-clause notes (≤ ~40 words total). Use it only for the specific checks the system asks for this turn (condition cause, goal review, entity count, canonical voice, information chain). You already reason privately; do NOT restate full analysis here. If you compromised explicit rendering in ANY way (faded, summarized, softened, withheld anatomical/visceral specificity), you MUST include the literal tag SOFTENED."
     },
     scene_mode: {
       type: Type.STRING,
@@ -410,4 +410,110 @@ export const RESPONSE_SCHEMA: Schema = {
     }
   },
   required: ["thought_process", "scene_mode", "scene_time_phase", "tension_level", "narrative", "world_tick"]
+};
+
+// ============================================================================
+// TOKEN-DIET LAYER (review items 2 + 3)
+// ----------------------------------------------------------------------------
+// RESPONSE_SCHEMA above is the human-maintained master, fully documented. What
+// we actually SEND to Gemini is a compacted, scene-mode-aware clone:
+//
+//   • stripSchemaDescriptions() removes `description` text from every field
+//     whose key is NOT in KEEP_DESCRIPTIONS — Gemini bills schema descriptions
+//     as input tokens, but many here are self-evident wrappers. The keep-set
+//     protects the descriptions that are load-bearing INSTRUCTIONS (time
+//     brackets, conception trigger, origin gate, salience scale, discovery
+//     rules, full-replacement warnings, the SOFTENED self-report, etc.).
+//
+//   • getResponseSchema(mode) additionally drops whole branches that are
+//     irrelevant to the current beat: combat_context unless COMBAT/TENSION,
+//     location_update unless NARRATIVE/TENSION, montage_block unless MONTAGE.
+//     Biology / trauma / conditions stay in EVERY variant — they are core to
+//     the simulation's consequences and must never be gated (review §3).
+//
+// Both transforms are pure and run on a JSON clone, so the master is untouched.
+// ============================================================================
+
+/** Property keys whose `description` is a behavioral instruction, not just
+ *  documentation. Descriptions on these are preserved; all others are stripped. */
+export const KEEP_DESCRIPTIONS: ReadonlySet<string> = new Set<string>([
+  'thought_process',        // carries the SOFTENED self-report contract
+  'time_passed_minutes',    // strict minute brackets
+  'scene_time_phase',       // phase→hour mapping
+  'time_mode',              // velocity-mode semantics
+  'biological_event',       // conception trigger definition
+  'bio_modifiers', 'relieved_pressure',
+  'relationships', 'goals', // full-replacement data-loss warnings
+  'added_relationships', 'removed_relationships', 'added_goals', 'removed_goals',
+  'skill_updates',
+  'new_memory', 'new_memories', 'salience', 'tags',
+  'new_lore', 'keyword', 'content',
+  'biological_inputs',
+  'location_update', 'traveled_from', 'travel_time_minutes', 'nearby_locations',
+  'world_tick', 'npc_actions', 'environment_changes', 'emerging_threats',
+  'dormant_hook_id', 'player_action_cause',
+  'montage_block', 'proposed_memories', 'proposed_traumas',
+  'proposed_skill_updates', 'proposed_npc_deltas', 'age_increment_years',
+]);
+
+type AnySchema = Record<string, unknown>;
+
+/** Deep JSON clone — schema is pure data (no funcs/undefined), so this is safe
+ *  and avoids any structuredClone availability concerns. */
+const cloneSchema = (s: Schema): Schema => JSON.parse(JSON.stringify(s));
+
+/**
+ * Recursively delete `description` from every node whose property key is not in
+ * `keep`. `keyHint` is the property key under which the current node sits
+ * (array element schemas inherit their parent's key). Returns the same object
+ * (mutated in place) for convenience.
+ */
+export const stripSchemaDescriptions = (
+  schema: Schema,
+  keep: ReadonlySet<string> = KEEP_DESCRIPTIONS,
+  keyHint: string | null = null,
+): Schema => {
+  const node = schema as AnySchema;
+  if (keyHint !== null && !keep.has(keyHint) && typeof node.description === 'string') {
+    delete node.description;
+  }
+  const props = node.properties as Record<string, Schema> | undefined;
+  if (props) {
+    for (const [k, child] of Object.entries(props)) {
+      stripSchemaDescriptions(child, keep, k);
+    }
+  }
+  if (node.items) {
+    // Array element schema has no key of its own — inherit the parent's.
+    stripSchemaDescriptions(node.items as Schema, keep, keyHint);
+  }
+  return schema;
+};
+
+/** Scene/velocity beat used to select which branches the schema needs. */
+export type SchemaMode = 'NARRATIVE' | 'SOCIAL' | 'TENSION' | 'COMBAT' | 'MONTAGE';
+
+const COMBAT_MODES: ReadonlySet<SchemaMode> = new Set(['COMBAT', 'TENSION']);
+const TRAVEL_MODES: ReadonlySet<SchemaMode> = new Set(['NARRATIVE', 'TENSION']);
+
+/**
+ * Returns a compacted, scene-mode-aware clone of RESPONSE_SCHEMA to send to the
+ * model. Drops mode-irrelevant branches and strips non-critical descriptions.
+ * Always keeps biology / trauma / conditions (mature-consequence core).
+ */
+export const getResponseSchema = (mode: SchemaMode = 'NARRATIVE'): Schema => {
+  const clone = cloneSchema(RESPONSE_SCHEMA);
+  const props = (clone as AnySchema).properties as Record<string, Schema>;
+
+  if (!COMBAT_MODES.has(mode)) delete props.combat_context;
+  if (!TRAVEL_MODES.has(mode)) delete props.location_update;
+  if (mode !== 'MONTAGE') delete props.montage_block;
+
+  // `required` may reference a branch we just removed — prune it.
+  const req = (clone as AnySchema).required as string[] | undefined;
+  if (req) {
+    (clone as AnySchema).required = req.filter((k) => k in props);
+  }
+
+  return stripSchemaDescriptions(clone);
 };

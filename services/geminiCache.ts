@@ -44,12 +44,50 @@ interface CacheEntry {
     contentHash: string;
 }
 
+/** localStorage key prefix for persisted cache pointers (review item 6). */
+const STORAGE_PREFIX = 'visceral_sys_cache_';
+/** Set this localStorage flag to '1' to force-disable explicit caching — e.g.
+ *  to confirm via usageMetadata that 2.5 implicit caching already covers you. */
+const DISABLE_FLAG = 'visceral_disable_explicit_cache';
+
+const hasLocalStorage = (): boolean => {
+    try { return typeof localStorage !== 'undefined'; } catch { return false; }
+};
+
 export class SystemInstructionCache {
     /** Per-model cache. Key: `${modelName}` (one cache per model family). */
     private readonly entries = new Map<string, CacheEntry>();
 
     /** Models known to reject cache requests (updated at runtime on 4xx). */
     private readonly blocklist = new Set<string>();
+
+    constructor() {
+        // Review item 6: hydrate persisted cache pointers so a PWA reload reuses
+        // a still-valid server-side cache instead of paying to recreate it.
+        if (!hasLocalStorage()) return;
+        try {
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (!key || !key.startsWith(STORAGE_PREFIX)) continue;
+                const raw = localStorage.getItem(key);
+                if (!raw) continue;
+                const entry = JSON.parse(raw) as CacheEntry;
+                if (entry && entry.name && entry.expiresAtMs > Date.now()) {
+                    this.entries.set(key.slice(STORAGE_PREFIX.length), entry);
+                }
+            }
+        } catch { /* corrupt entry — ignore, we'll rebuild on demand */ }
+    }
+
+    private persist(modelName: string, entry: CacheEntry): void {
+        if (!hasLocalStorage()) return;
+        try { localStorage.setItem(STORAGE_PREFIX + modelName, JSON.stringify(entry)); } catch { /* quota */ }
+    }
+
+    private removePersisted(modelName: string): void {
+        if (!hasLocalStorage()) return;
+        try { localStorage.removeItem(STORAGE_PREFIX + modelName); } catch { /* ignore */ }
+    }
 
     /**
      * Returns a cached-content resource name for the given static prompt, or
@@ -63,6 +101,11 @@ export class SystemInstructionCache {
         ttlSeconds: number = DEFAULT_CACHE_TTL_SECONDS,
     ): Promise<string | null> {
         if (this.blocklist.has(modelName)) return null;
+
+        // Review item 6: honor the manual kill-switch.
+        if (hasLocalStorage()) {
+            try { if (localStorage.getItem(DISABLE_FLAG) === '1') return null; } catch { /* ignore */ }
+        }
 
         // Skip tiny prompts that Google would reject anyway.
         if (estimateTokens(staticPrompt) < MIN_CACHEABLE_TOKENS) return null;
@@ -113,11 +156,9 @@ export class SystemInstructionCache {
 
             // Expire 60s early to avoid races with server-side TTL.
             const expiresAtMs = now + (ttlSeconds - 60) * 1000;
-            this.entries.set(modelName, {
-                name: created.name,
-                expiresAtMs,
-                contentHash,
-            });
+            const entry: CacheEntry = { name: created.name, expiresAtMs, contentHash };
+            this.entries.set(modelName, entry);
+            this.persist(modelName, entry);  // Review item 6
             return created.name;
         } catch (err) {
             // Any failure (min-token rejection, unsupported model, auth) →
@@ -136,6 +177,7 @@ export class SystemInstructionCache {
      */
     public invalidate(modelName: string): void {
         this.entries.delete(modelName);
+        this.removePersisted(modelName);  // Review item 6
     }
 }
 

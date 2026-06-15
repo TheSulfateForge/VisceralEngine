@@ -43,6 +43,22 @@ export const deriveTimePhase = (hour: number): SceneTimePhase => {
 };
 
 /**
+ * Review item 4: authoritative time phase AFTER a beat advances the clock.
+ * Deterministic — start hour/minute plus elapsed minutes, wrapped to 0–23,
+ * mapped through deriveTimePhase. Used to overwrite a model-declared
+ * scene_time_phase instead of paying for a regeneration.
+ */
+export const phaseAfterElapsed = (
+    startHour: number,
+    startMinute: number,
+    elapsedMinutes: number,
+): SceneTimePhase => {
+    const totalMin = startHour * 60 + startMinute + (elapsedMinutes || 0);
+    const endHour = ((Math.floor(totalMin / 60) % 24) + 24) % 24;
+    return deriveTimePhase(endHour);
+};
+
+/**
  * v1.20: One-line ambient cue (light level + typical sounds) for a phase,
  * injected into the system prompt to anchor the AI's sensory rendering.
  */

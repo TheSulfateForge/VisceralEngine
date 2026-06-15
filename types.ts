@@ -784,8 +784,19 @@ export interface MontageProposal {
     status: MontageProposalStatus;
 }
 
+/** Review item 1: per-call token usage surfaced from Gemini's usageMetadata. */
+export interface TokenUsage {
+    promptTokenCount: number;
+    candidatesTokenCount: number;
+    cachedContentTokenCount: number;
+    thoughtsTokenCount: number;
+    totalTokenCount: number;
+}
+
 export interface ModelResponseSchema {
     thought_process: string;
+    /** Review item 1: token accounting for this generation (runtime-only, not in the response schema). */
+    usageMetadata?: TokenUsage;
     scene_mode: SceneMode;
     tension_level: number;
     narrative: string;

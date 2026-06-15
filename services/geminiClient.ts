@@ -1,9 +1,9 @@
 
-import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
+import { GoogleGenAI, GenerateContentResponse, Schema } from "@google/genai";
 import { GEMINI_SAFETY_SETTINGS, THINKING_DEFAULTS } from "../constants";
 import { ChatMessage, Role, ModelResponseSchema, SCENE_MODES, SceneMode, Lighting, LIGHTING_LEVELS,
-    MontageBlock, MontageType, ProposedMemory, ProposedTrauma, ProposedSkillUpdate, ProposedNpcDelta } from "../types";
-import { RESPONSE_SCHEMA } from "../schemas/responseSchema";
+    MontageBlock, MontageType, ProposedMemory, ProposedTrauma, ProposedSkillUpdate, ProposedNpcDelta, TokenUsage } from "../types";
+import { getResponseSchema } from "../schemas/responseSchema";
 import { sanitiseHistory } from '../utils/nameResolver';
 import { getContextProfile } from '../config/engineConfig';
 import { systemInstructionCache } from './geminiCache';
@@ -314,6 +314,7 @@ export class GeminiClient {
       historicalSummary?: string,
       nameMap?: Record<string, string>,  // v1.7
       trailingReminder?: string | null,  // v1.19: Appended to user message for recency compliance
+      responseSchema?: Schema,  // Review item 3: scene-mode-aware compact schema. Defaults to NARRATIVE.
       onChunk?: (textSoFar: string) => void  // v1.19: Streaming callback
   ): Promise<ModelResponseSchema> {
     
@@ -391,7 +392,7 @@ export class GeminiClient {
         topK: 40,
         safetySettings: GEMINI_SAFETY_SETTINGS,
         responseMimeType: "application/json",
-        responseSchema: RESPONSE_SCHEMA,
+        responseSchema: responseSchema ?? getResponseSchema('NARRATIVE'),
         ...(thinkingConfig ? { thinkingConfig } : {}),
     };
 
@@ -432,6 +433,9 @@ export class GeminiClient {
       // we surface each accumulated delta to the caller; otherwise we simply
       // accumulate and return the final text as before. Streaming reduces
       // perceived latency dramatically on long generations.
+      // Review item 1: capture usageMetadata off the stream. The final
+      // chunk carries the complete token counts; we keep the last non-null.
+      let capturedUsage: TokenUsage | undefined;
       const runStream = async (): Promise<string> => {
           const chatAsStream = chat as unknown as {
               sendMessageStream: (args: { message: string }) =>
@@ -440,12 +444,23 @@ export class GeminiClient {
           const stream = await chatAsStream.sendMessageStream({ message: userMessageWithReminder });
           let accumulated = '';
           for await (const piece of stream) {
-              const delta = (piece as GenerateContentResponse).text ?? '';
+              const p = piece as GenerateContentResponse & { usageMetadata?: Record<string, number> };
+              const delta = p.text ?? '';
               if (delta) {
                   accumulated += delta;
                   if (onChunk) {
                       try { onChunk(accumulated); } catch { /* swallow UI errors */ }
                   }
+              }
+              if (p.usageMetadata) {
+                  const u = p.usageMetadata;
+                  capturedUsage = {
+                      promptTokenCount: u.promptTokenCount ?? 0,
+                      candidatesTokenCount: u.candidatesTokenCount ?? 0,
+                      cachedContentTokenCount: u.cachedContentTokenCount ?? 0,
+                      thoughtsTokenCount: u.thoughtsTokenCount ?? 0,
+                      totalTokenCount: u.totalTokenCount ?? 0,
+                  };
               }
           }
           return accumulated;
@@ -459,12 +474,14 @@ export class GeminiClient {
       ]));
 
       if (!text) throw new Error("Empty response from model.");
-      
+
       const jsonStr = this.cleanJsonOutput(text);
-      
+
       try {
           const raw = JSON.parse(jsonStr);
-          return this.validateResponse(raw);
+          const validated = this.validateResponse(raw);
+          if (capturedUsage) validated.usageMetadata = capturedUsage;
+          return validated;
       } catch (jsonError) {
           console.error("JSON Parse Error:", jsonError);
           if (text.length > 20) {
@@ -474,7 +491,8 @@ export class GeminiClient {
                   scene_mode: "NARRATIVE",
                   tension_level: 50,
                   time_passed_minutes: 0,
-                  world_tick: { npc_actions: [], environment_changes: [], emerging_threats: [] }
+                  world_tick: { npc_actions: [], environment_changes: [], emerging_threats: [] },
+                  usageMetadata: capturedUsage,
                };
           }
           throw new Error("Failed to parse model response structure.");
