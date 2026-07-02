@@ -45,6 +45,53 @@ const isSamePerson = (nameA: string, nameB: string): boolean => {
 };
 
 /**
+ * v1.24: Code-side enforcement of the §10 "one-of-four cap". The model has a
+ * known failure mode of default-filling NEW NPCs with threat-archetype traits
+ * (predatory/cold/calculating/clinical + synonyms). The prompt asks it not
+ * to; this enforces it. For a comma/semicolon-separated personality string,
+ * segments containing an archetype trait beyond the FIRST archetype-bearing
+ * segment are dropped. Non-list personalities (no separators) pass through
+ * untouched — surgery on prose risks mangling dual-layer structures.
+ */
+const ARCHETYPE_TRAIT_RE = /\b(predator(?:y|ial)?|cold(?:ly)?|calculating|calculated|clinical|shrewd|detached|opportunistic|analytical|cunning|icy|glacial|surgical)\b/i;
+
+const enforcePersonalityDiversity = (
+    personality: string,
+    entityName: string,
+    debugLogs: TurnContext['debugLogs'],
+): string => {
+    // Dual-layer personalities are deliberate structures — never edit them.
+    if (/performed surface|actual core/i.test(personality)) return personality;
+    const segments = personality.split(/([,;])/); // keep separators
+    const archetypeSegs = segments.filter(s => ARCHETYPE_TRAIT_RE.test(s));
+    if (archetypeSegs.length < 2) return personality;
+    if (!/[,;]/.test(personality)) return personality; // prose — leave alone
+
+    let kept = 0;
+    const out: string[] = [];
+    for (const seg of segments) {
+        if (seg === ',' || seg === ';') { out.push(seg); continue; }
+        if (ARCHETYPE_TRAIT_RE.test(seg)) {
+            kept++;
+            if (kept > 1) continue; // drop archetype traits beyond the first
+        }
+        out.push(seg);
+    }
+    const result = out.join('')
+        .replace(/[,;]\s*[,;]/g, ',')     // collapse doubled separators
+        .replace(/^\s*[,;]\s*|\s*[,;]\s*$/g, '') // trim dangling separators
+        .trim();
+    if (result !== personality.trim()) {
+        debugLogs.push({
+            timestamp: new Date().toISOString(),
+            message: `[PERSONALITY CAP — v1.24] "${entityName}" arrived with ${archetypeSegs.length} threat-archetype traits; §10 allows one. Trimmed to: "${result}"`,
+            type: 'warning',
+        });
+    }
+    return result || personality;
+};
+
+/**
  * Step 6: Entity Pipeline — v1.8: Enhanced dedup with fuzzy name matching
  *
  * Processes known entity updates, deduplicates, handles name collisions,
@@ -116,12 +163,38 @@ export const entityLifecycleStep: PipelineStep = {
 
                 if (existingIdx >= 0) {
                     const existingEntity = updatedKnownEntities[existingIdx];
-                    updatedKnownEntities[existingIdx] = {
+                    // v1.24 CRITICAL FIX: merge INTO the existing record instead
+                    // of replacing it. The response schema doesn't carry
+                    // personality/voice_sample/lifecycle fields, so the old
+                    // `{ ...update, id }` replacement silently WIPED canonical
+                    // personality every time the model updated an entity — a
+                    // primary cause of NPC voice drift in long campaigns.
+                    const merged = {
+                        ...existingEntity,
                         ...update,
                         id: existingEntity.id,
                     };
+                    // Engine-owned fields: an absent/blank update never clears them.
+                    if (!merged.personality?.trim()) merged.personality = existingEntity.personality;
+                    if (!merged.voice_sample?.trim()) merged.voice_sample = existingEntity.voice_sample;
+                    merged.status = existingEntity.status;
+                    merged.lastSeenTurn = existingEntity.lastSeenTurn;
+                    merged.firstSeenTurn = existingEntity.firstSeenTurn;
+                    merged.statusChangedTurn = existingEntity.statusChangedTurn;
+                    merged.exitReason = existingEntity.exitReason;
+                    updatedKnownEntities[existingIdx] = merged;
                 } else {
-                    updatedKnownEntities.push(update);
+                    // v1.24: New entity — enforce the one-of-four archetype cap
+                    // in code before the record enters the registry.
+                    const newEntity = { ...update };
+                    if (newEntity.personality?.trim()) {
+                        newEntity.personality = enforcePersonalityDiversity(
+                            newEntity.personality,
+                            newEntity.name,
+                            ctx.debugLogs,
+                        );
+                    }
+                    updatedKnownEntities.push(newEntity);
                 }
             }
         }

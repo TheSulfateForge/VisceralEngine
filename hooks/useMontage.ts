@@ -93,7 +93,8 @@ export const useMontage = () => {
             state.gameHistory.lastActiveSummary,
         );
 
-        const fullSystemPrompt = `${SYSTEM_INSTRUCTIONS}\n\n${contextPrompt}`;
+        // v1.24: static instructions as system prompt; per-turn context rides
+        // in the final user message via `dynamicContext` (cache-friendly).
         const instruction = buildMontageInstruction(
             declaredAction,
             montageType,
@@ -102,12 +103,13 @@ export const useMontage = () => {
         );
 
         return service.sendMessage(
-            fullSystemPrompt,
+            SYSTEM_INSTRUCTIONS,
             [...state.gameHistory.history, userMsg],
             state.gameHistory.lastActiveSummary,
             state.gameWorld.bannedNameMap ?? {},
             instruction,
             getResponseSchema('MONTAGE'),  // Review item 3: montage variant keeps montage_block
+            contextPrompt,  // v1.24: dynamic context → final user message
         );
     }, [getService]);
 

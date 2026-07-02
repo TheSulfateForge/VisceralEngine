@@ -191,6 +191,7 @@ export const sanitiseAllFields = (
             impression: clean(entity.impression),
             leverage: clean(entity.leverage),
             ledger: (entity.ledger ?? []).map(clean),
+            ...(entity.voice_sample ? { voice_sample: clean(entity.voice_sample) } : {}),
         }));
     }
 

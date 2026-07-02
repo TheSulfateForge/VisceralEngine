@@ -252,9 +252,16 @@ const buildEntityContext = (entities: KnownEntity[], forceActiveIds: Set<string>
             const personalityLine = e.personality?.trim()
                 ? ` Personality (CANONICAL — honor these traits): ${e.personality.trim()}\n`
                 : '';
+            // v1.24: Voice sample — an exemplar of how this NPC actually
+            // talks. Imitating a sample beats obeying adjectives; this is
+            // the strongest anchor against voice drift.
+            const voiceLine = e.voice_sample?.trim()
+                ? ` Voice sample (write their dialogue in THIS register): "${e.voice_sample.trim()}"\n`
+                : '';
             return (
                 `ID: ${e.id}\n Name: ${e.name} (${e.role})\n Location: ${e.location}\n` +
                 personalityLine +
+                voiceLine +
                 ` Current State: [${e.relationship_level}] - ${e.impression}\n` +
                 ` Leverage: ${e.leverage}\n Ledger: [${e.ledger.join(', ')}]`
             );

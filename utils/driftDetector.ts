@@ -115,6 +115,79 @@ export const detectSanitizationDrift = (
     return { drifted: matches.length > 0, matches };
 };
 
+// ============================================================================
+// v1.24: OUTPUT-SIDE SOFTENING TELLS
+//
+// detectSanitizationDrift only catches CONFESSIONS — the model announcing in
+// thought_process that it softened. A model can fade to black silently. These
+// checks read the OUTPUT: a fade-to-black is, mechanically, a time-skip plus
+// a length collapse plus a scene-break transition. All three are computable.
+//
+// Deliberately conservative (each false positive costs a full regeneration):
+// only evaluated when the beat is mature AND the scene is SOCIAL.
+// ============================================================================
+
+/** Scene-break transitions that skip over an in-progress intimate beat. */
+const SCENE_BREAK_RE = /\b(later that (night|day|evening|morning)|some ?time later|hours? (later|passed)|when (it|they) (was|were) (over|done|finished|spent)|by the time (they|she|he))\b/i;
+
+/** Time-skip threshold (minutes) for a player-initiated intimate beat. §2 says
+ *  dialogue turns are 1-10 min; a 30+ minute jump in a SOCIAL beat means the
+ *  scene was summarized rather than rendered. */
+const INTIMATE_TIME_SKIP_MINUTES = 30;
+
+export interface SofteningTellsInput {
+    narrative: string | undefined | null;
+    timePassedMinutes: number | undefined | null;
+    /** The beat's scene mode (model-declared or engine state). */
+    sceneMode: string | undefined | null;
+    /** Caller's mature-context gate — tells are only meaningful on mature beats. */
+    matureContextActive: boolean;
+    /** Lengths (chars) of recent model narratives, for the collapse baseline. */
+    recentNarrativeLengths: number[];
+}
+
+/**
+ * Detect silent fade-to-black from output shape. Returns the same DriftReport
+ * form as detectSanitizationDrift so callers can merge the two.
+ */
+export const detectSofteningTells = (input: SofteningTellsInput): DriftReport => {
+    const { narrative, timePassedMinutes, sceneMode, matureContextActive, recentNarrativeLengths } = input;
+    if (!matureContextActive || sceneMode !== 'SOCIAL' || !narrative) {
+        return { drifted: false, matches: [] };
+    }
+
+    const matches: string[] = [];
+
+    // Tell 1 — time-skip. A fade-to-black IS a time-skip: the clock advances
+    // past the scene the player initiated.
+    if ((timePassedMinutes ?? 0) > INTIMATE_TIME_SKIP_MINUTES) {
+        matches.push(`time-skip: ${timePassedMinutes}min in a SOCIAL beat (cap expectation ~15)`);
+    }
+
+    // Baseline for length checks: average of recent model narratives.
+    const avg = recentNarrativeLengths.length >= 3
+        ? recentNarrativeLengths.reduce((a, b) => a + b, 0) / recentNarrativeLengths.length
+        : 0;
+
+    // Tell 2 — scene-break transition, but only when the narrative is ALSO
+    // short for this campaign ("Afterward, ..." after a fully rendered scene
+    // is legitimate residue per §10; a scene-break in a SHORT narrative is a
+    // skip). Guards against false positives on properly rendered beats.
+    const breakMatch = narrative.match(SCENE_BREAK_RE);
+    if (breakMatch && avg > 0 && narrative.length < 0.6 * avg) {
+        matches.push(`scene-break in short narrative: "${breakMatch[0]}"`);
+    }
+
+    // Tell 3 — hard length collapse: mature SOCIAL beat rendered at under 40%
+    // of the recent average (min floor 300 chars so short campaigns don't
+    // trip on natural variance).
+    if (avg > 0 && narrative.length < Math.max(300, 0.4 * avg)) {
+        matches.push(`length collapse: ${narrative.length} chars vs ~${Math.round(avg)} recent avg`);
+    }
+
+    return { drifted: matches.length > 0, matches };
+};
+
 /**
  * Trailing reminder to append to the user message on a resample after drift
  * was detected. Positive prescriptive — never names the drift behavior by

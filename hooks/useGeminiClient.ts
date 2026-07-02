@@ -19,10 +19,61 @@ import { useScenarioGen } from './useScenarioGen';
 import { useCharacterGen } from './useCharacterGen';
 import { processCharacterUpdates } from '../utils/characterDelta';
 import { deduplicateConditions } from '../utils/characterUtils';
-import { significantWords } from '../utils/contentValidation';
-import { getContextProfile } from '../config/engineConfig';
+import { significantWords, checkMemoryDuplicate, evictBySalience } from '../utils/contentValidation';
+import { generateMemoryId } from '../idUtils';
+import { getContextProfile, MEMORY_CAP, DEFAULT_MEMORY_SALIENCE, MAX_REGISTRY_LINES } from '../config/engineConfig';
 import { extractDeniedMechanisms } from '../utils/mechanismDenial';
-import { detectSanitizationDrift, RESAMPLE_REMINDER } from '../utils/driftDetector';
+import { detectSanitizationDrift, detectSofteningTells, RESAMPLE_REMINDER } from '../utils/driftDetector';
+
+// ---------------------------------------------------------------------------
+// v1.24: Threat-pipeline instrumentation. The Origin Gate / cooldown machinery
+// has been tuned by feel across v1.17-v1.19; these rolling counters put
+// numbers on it. Module-scoped (resets on reload) — this is a tuning
+// instrument, not persisted state. Every THREAT_STATS_WINDOW turns a
+// [THREAT STATS] line lands in the debug log.
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// v1.24: World-pulse trigger. Fire-and-forget after a turn commits, when the
+// beat implies downtime (large time skip) or on a fixed cadence. Runs on
+// Flash-Lite, writes to the hidden registry, never blocks or fails the live
+// turn. Guarded against concurrent runs.
+// ---------------------------------------------------------------------------
+const WORLD_PULSE_CADENCE_TURNS = 10;
+const WORLD_PULSE_DOWNTIME_MINUTES = 240;
+let worldPulseInFlight = false;
+
+const THREAT_STATS_WINDOW = 20;
+const threatStats = { seeded: 0, blocked: 0, cooldownTurns: 0, windowStartTurn: -1 };
+
+const recordThreatStats = (
+    debugLogs: Array<{ message: string }>,
+    nextTurn: number,
+    cooldownActive: boolean,
+): string | null => {
+    if (threatStats.windowStartTurn < 0) threatStats.windowStartTurn = nextTurn;
+    for (const log of debugLogs) {
+        if (log.message.includes('[ORIGIN GATE ✓')) threatStats.seeded++;
+        else if (log.message.includes('[ORIGIN GATE ✗')) threatStats.blocked++;
+    }
+    if (cooldownActive) threatStats.cooldownTurns++;
+
+    if (nextTurn - threatStats.windowStartTurn + 1 >= THREAT_STATS_WINDOW) {
+        const total = threatStats.seeded + threatStats.blocked;
+        const blockRate = total > 0 ? Math.round((threatStats.blocked / total) * 100) : 0;
+        const line =
+            `[THREAT STATS T${threatStats.windowStartTurn}-T${nextTurn}] ` +
+            `seeded=${threatStats.seeded} blocked=${threatStats.blocked} (${blockRate}% block rate) ` +
+            `cooldownTurns=${threatStats.cooldownTurns}/${THREAT_STATS_WINDOW}. ` +
+            `Healthy range: 20-60% blocks. ~0 seeds + high blocks = over-suppression; ` +
+            `~0 blocks = the gate isn't being exercised.`;
+        threatStats.seeded = 0;
+        threatStats.blocked = 0;
+        threatStats.cooldownTurns = 0;
+        threatStats.windowStartTurn = nextTurn + 1;
+        return line;
+    }
+    return null;
+};
 
 export const useGeminiClient = () => {
   const { 
@@ -78,7 +129,38 @@ export const useGeminiClient = () => {
       const window = history.slice(-intervalSize);
       if (window.length === 0) return;
 
-      const summary = await service.summarizeHistory(window);
+      // v1.24: Salvage pass — the same summarization call also extracts
+      // memory-worthy facts the model narrated but never recorded via
+      // new_memories. Without this, those facts survive only in raw history
+      // and are silently lost when the window scrolls past maxHistory.
+      const { summary, memoryCandidates } = await service.summarizeHistoryWithSalvage(window);
+
+      if (memoryCandidates.length > 0) {
+          setGameWorld(prevWorld => {
+              let pool = [...prevWorld.memory];
+              let added = 0;
+              for (const cand of memoryCandidates) {
+                  const { isDuplicate } = checkMemoryDuplicate(cand.fact, pool);
+                  if (isDuplicate) continue;
+                  pool.push({
+                      id: generateMemoryId(),
+                      fact: cand.fact,
+                      timestamp: new Date().toISOString(),
+                      salience: cand.salience ?? DEFAULT_MEMORY_SALIENCE,
+                      tags: cand.tags && cand.tags.length > 0 ? cand.tags : undefined,
+                      turnCreated: currentTurn,
+                  });
+                  added++;
+              }
+              if (added === 0) return prevWorld;
+              if (pool.length > MEMORY_CAP) {
+                  pool = evictBySalience(pool, MEMORY_CAP, currentTurn, []);
+              }
+              console.log(`[SALVAGE] Recovered ${added} memory fragment(s) from summarization window.`);
+              return { ...prevWorld, memory: pool };
+          });
+      }
+
       if (!summary) return;
 
       setGameHistory(prev => {
@@ -108,7 +190,7 @@ export const useGeminiClient = () => {
               lastActiveSummary: summary,
           };
       });
-  }, [setGameHistory]);
+  }, [setGameHistory, setGameWorld]);
 
   // Main Turn Orchestrator
   const handleSend = useCallback(async (text: string) => {
@@ -278,10 +360,26 @@ export const useGeminiClient = () => {
             }));
         }
 
-        // v1.19: Prepend SYSTEM_INSTRUCTIONS so the VRE persona, core directives,
-        // banned names, and output protocol actually reach config.systemInstruction.
-        // Previously only dynamic game state context was being sent.
-        const fullSystemPrompt = `${SYSTEM_INSTRUCTIONS}\n\n${contextPrompt}`;
+        // v1.24: CACHE-FRIENDLY PROMPT SPLIT. The static SYSTEM_INSTRUCTIONS
+        // travel alone as the system prompt (explicit-cached in geminiClient);
+        // the volatile per-turn context travels as `dynamicContext` and lands
+        // in the FINAL user message. Previously the two were concatenated,
+        // which made the "system instruction" change every turn and killed
+        // the implicit-cache prefix for the entire history behind it.
+        const fullSystemPrompt = SYSTEM_INSTRUCTIONS;
+
+        // Task 10 (regression harness): expose this turn's full prompt parts
+        // on window so problem turns can be captured as goldens from the
+        // console: copy(JSON.stringify(window.__vreLastTurn)).
+        (window as unknown as Record<string, unknown>).__vreLastTurn = {
+            capturedAt: new Date().toISOString(),
+            turn: preCallState.gameHistory.turnCount,
+            modelName: service.modelName,
+            systemInstruction: SYSTEM_INSTRUCTIONS,
+            dynamicContext: contextPrompt,
+            userText: text,
+            sceneMode: preCallState.gameWorld.sceneMode,
+        };
 
         // Review item 3: send a compact, scene-mode-aware response schema.
         // handleSend never runs a MONTAGE beat (that path lives in useMontage),
@@ -310,7 +408,8 @@ export const useGeminiClient = () => {
             preCallState.gameHistory.lastActiveSummary,
             preCallState.gameWorld.bannedNameMap ?? {},  // v1.7
             activeReminder,  // v1.19: Trailing reminder for recency-biased compliance
-            turnSchema  // Review item 3
+            turnSchema,  // Review item 3
+            contextPrompt  // v1.24: dynamic context → final user message (cache-friendly)
         );
 
         if (latestRequestId.current !== requestId) {
@@ -326,7 +425,27 @@ export const useGeminiClient = () => {
         // indicates a deeper prompt issue, not a one-off attractor lapse.
         // The detector reads ONLY thought_process so narrative prose using
         // words like "softly" isn't a false positive.
-        const drift = detectSanitizationDrift(response.thought_process);
+        // v1.24: Two independent softening detectors, merged into one report:
+        //   (a) confession drift — the model ADMITS sanitizing in thought_process
+        //   (b) output tells — silent fade-to-black measured from the output
+        //       itself (time-skip, scene-break, length collapse in a mature
+        //       SOCIAL beat). Catches what (a) misses.
+        const recentNarrativeLengths = preCallState.gameHistory.history
+            .filter(m => m.role === Role.MODEL)
+            .slice(-6)
+            .map(m => m.text.length);
+        const confessionDrift = detectSanitizationDrift(response.thought_process);
+        const outputTells = detectSofteningTells({
+            narrative: response.narrative,
+            timePassedMinutes: response.time_passed_minutes,
+            sceneMode: response.scene_mode ?? preCallState.gameWorld.sceneMode,
+            matureContextActive,
+            recentNarrativeLengths,
+        });
+        const drift = {
+            drifted: confessionDrift.drifted || outputTells.drifted,
+            matches: [...confessionDrift.matches, ...outputTells.matches],
+        };
         if (drift.drifted && !matureContextActive) {
             // Drift signal in a non-mature beat — log it but don't pay for a
             // re-roll. (Review item 4: gate the resample by context.)
@@ -366,7 +485,8 @@ export const useGeminiClient = () => {
                 preCallState.gameHistory.lastActiveSummary,
                 preCallState.gameWorld.bannedNameMap ?? {},
                 reinforcedReminder,
-                turnSchema  // Review item 3
+                turnSchema,  // Review item 3
+                contextPrompt  // v1.24: dynamic context → final user message
             );
 
             if (latestRequestId.current !== requestId) {
@@ -444,13 +564,24 @@ export const useGeminiClient = () => {
         const nextTurn = (currentHistory.turnCount || 0) + 1;
         
         const { worldUpdate, characterUpdate, debugLogs, pendingLore } = SimulationEngine.processTurn(
-            response, 
-            currentWorld, 
-            tempCharUpdates, 
+            response,
+            currentWorld,
+            tempCharUpdates,
             nextTurn,
             playerRemovedConditions,
             text  // v1.17: Pass player input for cooldown detection
         );
+
+        // v1.24: Threat-pipeline instrumentation — rolling window counters.
+        const cooldownActive = (worldUpdate.threatCooldownUntilTurn ?? 0) > nextTurn;
+        const threatStatsLine = recordThreatStats(debugLogs, nextTurn, cooldownActive);
+        if (threatStatsLine) {
+            debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: threatStatsLine,
+                type: 'info',
+            });
+        }
 
         // Deduplicate conditions on the final update (extracted to utils/characterUtils.ts)
         const finalCharacterUpdate = {
@@ -494,6 +625,54 @@ export const useGeminiClient = () => {
                 ...debugLogs
             ]
         }));
+
+        // v1.24: Background world pulse — the world moves while the player
+        // isn't looking. Downtime beats (sleep, travel, long skips) and every
+        // Nth turn advance offscreen NPC/faction agendas via a cheap
+        // non-blocking call; results land in the hidden registry where the
+        // next turn's narrator surfaces them organically.
+        const shouldPulse =
+            (response.time_passed_minutes ?? 0) >= WORLD_PULSE_DOWNTIME_MINUTES ||
+            (nextTurn > 0 && nextTurn % WORLD_PULSE_CADENCE_TURNS === 0);
+        if (shouldPulse && !worldPulseInFlight) {
+            worldPulseInFlight = true;
+            (async () => {
+                try {
+                    const pulseWorld = useGameStore.getState().gameWorld;
+                    const result = await service.worldPulse(pulseWorld, nextTurn);
+                    if (!result) return;
+                    const lines = [
+                        ...result.developments.map(d => `[WORLD-PULSE T${nextTurn}] ${d}`),
+                        ...result.opportunities.map(o => `[OPPORTUNITY T${nextTurn}] ${o}`),
+                    ];
+                    if (lines.length === 0) return;
+                    setGameWorld(prev => {
+                        const registry = (prev.hiddenRegistry ?? '').split('\n').filter(Boolean);
+                        const merged = [...registry, ...lines].slice(-MAX_REGISTRY_LINES);
+                        return {
+                            ...prev,
+                            hiddenRegistry: merged.join('\n'),
+                            lastWorldTickTurn: nextTurn,
+                        };
+                    });
+                    setGameHistory(prev => ({
+                        ...prev,
+                        debugLog: [
+                            ...prev.debugLog,
+                            {
+                                timestamp: new Date().toISOString(),
+                                message: `[WORLD PULSE T${nextTurn}] ${result.developments.length} development(s), ${result.opportunities.length} opportunity(ies) → hidden registry.`,
+                                type: 'info',
+                            },
+                        ],
+                    }));
+                } catch (e) {
+                    console.warn('[WORLD PULSE] background run failed:', e);
+                } finally {
+                    worldPulseInFlight = false;
+                }
+            })();
+        }
 
     } catch (e: unknown) {
         if (latestRequestId.current !== requestId) return;

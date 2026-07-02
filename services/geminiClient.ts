@@ -315,27 +315,46 @@ export class GeminiClient {
       nameMap?: Record<string, string>,  // v1.7
       trailingReminder?: string | null,  // v1.19: Appended to user message for recency compliance
       responseSchema?: Schema,  // Review item 3: scene-mode-aware compact schema. Defaults to NARRATIVE.
+      dynamicContext?: string | null,  // v1.24: Per-turn world context, injected into the FINAL user message (see below)
       onChunk?: (textSoFar: string) => void  // v1.19: Streaming callback
   ): Promise<ModelResponseSchema> {
-    
+
     // v1.21: Model-adaptive context limits — lite models get shorter history
     // and progressive compression of older messages to preserve attention budget.
     const profile = getContextProfile(this.modelName);
 
     const contextHistory = history.length > 0 ? history.slice(0, -1) : [];
-    const recentHistory = contextHistory.slice(-profile.maxHistory);
+
+    // v1.24 CACHE-STABLE WINDOWING. Implicit caching is prefix-based: the
+    // request must start with byte-identical content to a previous request.
+    // The old `slice(-maxHistory)` sliding window shifted the window start
+    // every turn, so the history prefix NEVER matched and nothing behind the
+    // explicit SYSTEM_INSTRUCTIONS cache ever hit. Instead, advance the
+    // window start in steps of HISTORY_WINDOW_STEP messages: the prefix then
+    // stays stable for several turns between steps, and those turns get
+    // implicit cache hits on the whole history.
+    const HISTORY_WINDOW_STEP = 10;
+    const overflow = Math.max(0, contextHistory.length - profile.maxHistory);
+    const windowStart = Math.ceil(overflow / HISTORY_WINDOW_STEP) * HISTORY_WINDOW_STEP;
+    const recentHistory = contextHistory.slice(windowStart);
 
     // v1.7: Sanitise history to remove any banned names before sending to AI.
     const cleanHistory = nameMap
       ? sanitiseHistory(recentHistory, nameMap)
       : recentHistory;
 
-    // v1.21: Progressive history compression — keep recent messages at full
-    // length, but truncate older messages to save tokens for system instructions.
-    // This preserves narrative continuity while freeing attention budget.
+    // v1.21/v1.24: Progressive history compression — keep recent messages at
+    // full length, truncate older ones. v1.24: the full/compressed boundary is
+    // QUANTIZED to steps of COMPRESS_BOUNDARY_STEP. The old boundary was
+    // relative (`len - recentFullMessages`), so one message flipped from full
+    // to compressed every turn — breaking the cacheable prefix at that point.
+    // With a stepped boundary, the rendered history is byte-identical between
+    // steps and the prefix caches.
+    const COMPRESS_BOUNDARY_STEP = 10;
+    const rawBoundary = Math.max(0, cleanHistory.length - profile.recentFullMessages);
+    const compressBoundary = Math.floor(rawBoundary / COMPRESS_BOUNDARY_STEP) * COMPRESS_BOUNDARY_STEP;
     const compressedHistory = cleanHistory.map((msg, i) => {
-      const isRecent = i >= cleanHistory.length - profile.recentFullMessages;
-      if (isRecent || msg.text.length <= profile.compressedMessageLength) return msg;
+      if (i >= compressBoundary || msg.text.length <= profile.compressedMessageLength) return msg;
       return {
         ...msg,
         text: msg.text.slice(0, profile.compressedMessageLength) + '…'
@@ -396,20 +415,19 @@ export class GeminiClient {
         ...(thinkingConfig ? { thinkingConfig } : {}),
     };
 
+    // v1.24: Any leftover dynamic remainder in the systemPrompt (legacy
+    // callers that still concatenate) is folded into the per-turn dynamic
+    // context rather than injected as a top-of-history preamble. A preamble
+    // that changes every turn sits IN FRONT of the whole history and breaks
+    // the implicit-caching prefix for everything behind it — the exact
+    // opposite of what we want. Volatile content belongs at the END.
+    let turnContext = dynamicContext?.trim() ? dynamicContext.trim() : '';
     if (cachedContentName) {
-        // When using cached content, the cached systemInstruction is already
-        // baked in — Google rejects requests that set both. We pass the
-        // dynamic remainder as a USER-role preamble at the top of history.
         chatConfig.cachedContent = cachedContentName;
         if (effectiveSystemInstruction.trim().length > 0) {
-            apiHistory.unshift({
-                role: Role.USER,
-                parts: [{ text: `[DYNAMIC CONTEXT]\n${effectiveSystemInstruction}` }],
-            });
-            apiHistory.splice(1, 0, {
-                role: Role.MODEL,
-                parts: [{ text: 'Acknowledged. Proceeding with current state.' }],
-            });
+            turnContext = turnContext
+                ? `${effectiveSystemInstruction.trim()}\n\n${turnContext}`
+                : effectiveSystemInstruction.trim();
         }
     } else {
         chatConfig.systemInstruction = effectiveSystemInstruction;
@@ -422,12 +440,23 @@ export class GeminiClient {
     });
 
     try {
-      // v1.19: Append section reminders to the END of the user message.
-      // Gemini pays strongest attention to the very bottom of context (recency bias).
-      // Moving enforcement reminders here forces compliance even in long conversations.
-      const userMessageWithReminder = trailingReminder
-          ? `${currentUserMsg.text}\n\n[SYSTEM REFRESH — MANDATORY COMPLIANCE]\n${trailingReminder}`
-          : currentUserMsg.text;
+      // v1.19/v1.24: Final user message layout — the only volatile part of
+      // the request, so everything per-turn lives here:
+      //   [CURRENT STATE]   ← dynamic world context (was in systemInstruction,
+      //                       where it invalidated the cache prefix every turn)
+      //   [PLAYER ACTION]   ← what the player actually typed
+      //   [SYSTEM REFRESH]  ← trailing reminders (recency-bias compliance)
+      const parts: string[] = [];
+      if (turnContext) {
+          parts.push(`[CURRENT STATE — this turn's world context]\n${turnContext}`);
+          parts.push(`[PLAYER ACTION]\n${currentUserMsg.text}`);
+      } else {
+          parts.push(currentUserMsg.text);
+      }
+      if (trailingReminder) {
+          parts.push(`[SYSTEM REFRESH — MANDATORY COMPLIANCE]\n${trailingReminder}`);
+      }
+      const userMessageWithReminder = parts.join('\n\n');
 
       // v1.19: Always use streaming transport. When `onChunk` is provided,
       // we surface each accumulated delta to the caller; otherwise we simply

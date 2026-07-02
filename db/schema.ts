@@ -228,6 +228,12 @@ export interface EntityRow {
    * needed when it lands — Dexie persists arbitrary row fields.
    */
   personality: string | null;
+  /**
+   * v1.24: Canonical dialogue exemplar (register anchor for voice
+   * consistency). Non-indexed — Dexie persists arbitrary row fields, so
+   * no schema version bump is needed.
+   */
+  voice_sample: string | null;
   relationship_level: RelationshipLevel;
   leverage: string;
   status: EntityStatus;

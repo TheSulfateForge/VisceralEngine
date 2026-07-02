@@ -158,7 +158,8 @@ export const RESPONSE_SCHEMA: Schema = {
           impression: { type: Type.STRING },
           relationship_level: { type: Type.STRING, enum: ['NEMESIS', 'HOSTILE', 'COLD', 'NEUTRAL', 'WARM', 'ALLIED', 'DEVOTED'] },
           leverage: { type: Type.STRING },
-          ledger: { type: Type.ARRAY, items: { type: Type.STRING } }
+          ledger: { type: Type.ARRAY, items: { type: Type.STRING } },
+          voice_sample: { type: Type.STRING, nullable: true, description: "One or two lines of this NPC's ACTUAL spoken dialogue that capture their authentic register (vocabulary, rhythm, tics). Set ONLY when creating a new named NPC or when a defining line lands this turn. Omit on routine updates — the engine preserves the existing sample." }
         },
         required: ["id", "name", "role", "location", "impression", "relationship_level", "leverage", "ledger"]
       }

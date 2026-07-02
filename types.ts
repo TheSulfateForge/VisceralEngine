@@ -176,6 +176,15 @@ export interface KnownEntity {
      */
     personality?: string;
 
+    /**
+     * v1.24: One or two lines of this NPC's actual dialogue, captured at
+     * creation or when a defining line lands. Injected into the ACTIVE
+     * ENTITIES block as a register anchor — models imitate an exemplar far
+     * more reliably than they obey trait adjectives, so this is the primary
+     * defense against voice drift across long campaigns.
+     */
+    voice_sample?: string;
+
     // --- v1.14: Entity Status Lifecycle ---
     status?: EntityStatus;
     lastSeenTurn?: number;

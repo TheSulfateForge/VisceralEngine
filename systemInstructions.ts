@@ -70,7 +70,10 @@ moves even when the player looks away.
 **Entity registry.** If an NPC speaks, acts autonomously, or is named this
 turn and isn't registered, add them via \`known_entity_updates\` before the
 turn ends. Minimum: name, role, location, impression, relationship_level,
-leverage, one ledger entry or goal.
+leverage, one ledger entry or goal. For named NPCs who speak, also set
+\`voice_sample\`: one line of their ACTUAL dialogue that captures their
+register — it becomes the permanent anchor for how they sound. Omit it on
+routine updates; the engine preserves the existing sample.
 
 **NPCs only know what they could know.** In thought_process, state HOW an
 NPC obtained information before having them act on it. Acquisition paths:
@@ -140,7 +143,15 @@ sequential roll chains.
 
 **Skill modifiers.** Set \`relevant_skill\` to the applicable skill; the
 engine applies the proficiency modifier. Your \`bonus\` is ONLY situational
-(weather, injuries, equipment, terrain).
+(weather, injuries, equipment, terrain). The engine AUTO-TRACKS each use of
+\`relevant_skill\` and advances the skill over time on its own — you do not
+report routine practice. If the named skill is new to the character, the engine
+creates it at "untrained"; pass \`relevant_skill_category\` to classify it.
+
+**Skill advancement (\`skill_updates\`).** Use this ONLY for narratively
+decisive jumps — a teacher's lesson completed, a hard-won breakthrough, a
+revelation that reframes a craft. Do NOT use it for ordinary practice; that is
+what usage tracking above is for. Never downgrade a skill.
 
 **Devil's Bargain.** Guaranteed success offered alongside a difficult roll
 in exchange for a known, specific, permanent cost. Offer ONLY when: failure
