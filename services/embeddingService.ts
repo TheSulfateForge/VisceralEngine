@@ -13,10 +13,22 @@
 // ============================================================================
 import { generateUUID } from '../idUtils';
 
-// Default to MiniLM-L6-v2: 384-dim, ~25MB on disk, fast on CPU/WebGPU.
-// Override via embeddingService.setModel() if you want bge-small or similar.
-export const DEFAULT_EMBEDDING_MODEL = 'Xenova/all-MiniLM-L6-v2';
+// Default to bge-small-en-v1.5: 384-dim, ~34MB quantized, retrieval-tuned.
+// Unlike MiniLM (a symmetric similarity model), bge is trained for
+// asymmetric short-query → passage retrieval — exactly the "player phrases
+// it differently than the lore keyword" case. Same dim as MiniLM so the
+// schema is unchanged; the backfill re-embeds automatically because stored
+// rows carry model_id and it no longer matches.
+// Override via embeddingService.setModel() if you want a different model.
+export const DEFAULT_EMBEDDING_MODEL = 'Xenova/bge-small-en-v1.5';
 export const DEFAULT_EMBEDDING_DIM = 384;
+
+// BGE-family models want this instruction prepended to QUERIES ONLY
+// (documents are embedded bare). Other models get no prefix.
+const QUERY_PREFIXES: Record<string, string> = {
+  'Xenova/bge-small-en-v1.5':
+    'Represent this sentence for searching relevant passages: ',
+};
 
 export interface EmbeddingProgressEvent {
   status?: string;          // 'downloading' | 'progress' | 'done' | ...
@@ -159,6 +171,17 @@ class EmbeddingService {
     });
     this.inThreadExtractor = pipe as unknown as typeof this.inThreadExtractor;
     this.inThreadModel = this.model;
+  }
+
+  /**
+   * Encode a retrieval QUERY (user input / recent history). Prepends the
+   * model's query instruction when one is defined (bge family). Documents
+   * must go through encode()/encodeBatch() — never this method — or the
+   * query/passage asymmetry is lost.
+   */
+  async encodeQuery(text: string): Promise<Float32Array> {
+    const prefix = QUERY_PREFIXES[this.model] ?? '';
+    return this.encode(prefix + text);
   }
 
   async encode(text: string): Promise<Float32Array> {

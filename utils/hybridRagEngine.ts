@@ -56,6 +56,14 @@ const W_RECENCY = 0.05;
 const MANDATORY_BOOST = 1.0;
 const PINNED_BOOST = 0.3;
 const RECENCY_TAU = 30;             // turns
+// The history tail is a weaker relevance signal than what the player just
+// typed — it captures scene continuity, not intent. Weight it down so a
+// lore hit against the tail alone can't outrank a hit against the input.
+const TAIL_WEIGHT = 0.7;
+// Cap the tail fed to the embedder. The model truncates at ~512 wordpieces
+// anyway; without a cap, five turns of prose mean-pool into a mush vector.
+// Keep the most recent characters — they're closest to the current scene.
+const TAIL_MAX_CHARS = 1500;
 const PINNED_TAGS = new Set([
   'vow', 'oath', 'debt', 'reveal', 'death', 'identity', 'betrayal',
 ]);
@@ -107,8 +115,32 @@ function normaliseLexical(score: number, maxLexical: number): number {
 export interface HybridContext {
   campaignId: SaveId;
   embeddings: EmbeddingRow[];
-  queryVector: Float32Array | null;        // null when embedder unavailable
+  /** Embedding of the user's input alone — the primary intent signal. */
+  inputVector: Float32Array | null;        // null when embedder unavailable
+  /** Embedding of the recent-history tail — scene-continuity signal. */
+  tailVector: Float32Array | null;
   queryText: string;
+}
+
+/**
+ * Semantic score for a document vector: best of (a) similarity to what the
+ * player just typed, (b) down-weighted similarity to the recent scene.
+ *
+ * Previously the input and five turns of history were concatenated into ONE
+ * embedding. Mean-pooling over that much text produced a diluted, generic
+ * query vector — every lore item scored a similar mediocre cosine, ranking
+ * degraded to lexical, and lore without exact keyword overlap was missed.
+ * Two focused vectors + max() keeps both signals sharp.
+ */
+function semScore(ctx: HybridContext, vec: Float32Array): number {
+  let s = 0;
+  if (ctx.inputVector) s = Math.max(s, dot(ctx.inputVector, vec));
+  if (ctx.tailVector) s = Math.max(s, TAIL_WEIGHT * dot(ctx.tailVector, vec));
+  return Math.max(0, s);
+}
+
+function hasQueryVectors(ctx: HybridContext): boolean {
+  return ctx.inputVector !== null || ctx.tailVector !== null;
 }
 
 export async function buildHybridContext(
@@ -117,29 +149,45 @@ export async function buildHybridContext(
   recentHistory: ChatMessage[],
   lookback: number = 5
 ): Promise<HybridContext> {
-  // 1. Build the query string the embedder sees: user input + last few turns
-  //    of either party, mirroring the lexical analyzer's recall window.
+  // 1. Build the tail string: last few turns of either party, mirroring the
+  //    lexical analyzer's recall window, capped so the embedder isn't fed
+  //    more than it can attend to. slice(-N) keeps the most recent text.
   const tail = recentHistory
     .filter((m) => m.role === Role.USER || m.role === Role.MODEL)
     .slice(-lookback)
     .map((m) => m.text)
-    .join(' ');
+    .join(' ')
+    .slice(-TAIL_MAX_CHARS);
   const queryText = `${userInput} ${tail}`.trim();
 
-  // 2. Try to encode. If the embedder isn't available (cold start failure,
-  //    no Worker, etc.) we fall through with a null vector and the caller
-  //    degrades to lexical-only.
-  let queryVector: Float32Array | null = null;
+  // 2. Encode input and tail SEPARATELY (see semScore above). encodeQuery
+  //    applies the model's query instruction prefix (bge family). If the
+  //    embedder isn't available (cold start failure, no Worker, etc.) we
+  //    fall through with null vectors and the caller degrades to
+  //    lexical-only.
+  let inputVector: Float32Array | null = null;
+  let tailVector: Float32Array | null = null;
   try {
-    queryVector = await embeddingService.encode(queryText);
+    [inputVector, tailVector] = await Promise.all([
+      userInput.trim() ? embeddingService.encodeQuery(userInput) : Promise.resolve(null),
+      tail ? embeddingService.encodeQuery(tail) : Promise.resolve(null),
+    ]);
   } catch (err) {
     console.warn('[hybridRagEngine] query encoding failed, falling back to lexical:', err);
+    inputVector = null;
+    tailVector = null;
   }
 
-  // 3. Load all embeddings for this campaign in one query.
-  const embeddings = await embeddingsRepo.listForCampaign(campaignId);
+  // 3. Load all embeddings for this campaign in one query, keeping only
+  //    rows produced by the CURRENT model. After a model swap the backfill
+  //    re-embeds in the background; until it finishes, stale vectors live
+  //    in a different embedding space and comparing against them is noise —
+  //    those items degrade gracefully to lexical-only instead.
+  const modelId = embeddingService.getModelId();
+  const embeddings = (await embeddingsRepo.listForCampaign(campaignId))
+    .filter((r) => r.model_id === modelId);
 
-  return { campaignId, embeddings, queryVector, queryText };
+  return { campaignId, embeddings, inputVector, tailVector, queryText };
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -228,14 +276,14 @@ export function retrieveRelevantContextHybrid(
     if (candidates[i].lex > maxLex) maxLex = candidates[i].lex;
   }
 
-  // 3. Semantic scoring — cosine against query vector (if available)
-  if (ctx.queryVector) {
+  // 3. Semantic scoring — max of input/tail cosine (if vectors available)
+  if (hasQueryVectors(ctx)) {
     for (const c of candidates) {
       const ownerKind: EmbeddingOwnerKind = c.type === 'lore' ? 'lore' : 'entity';
       const vec = embMap.get(`${ownerKind}:${stampEmbKey(ctx.campaignId, c.id)}`);
       if (vec) {
         // Vectors are normalised so cos = dot.
-        c.sem = Math.max(0, dot(ctx.queryVector, vec));
+        c.sem = semScore(ctx, vec);
       }
     }
   }
@@ -315,9 +363,9 @@ export function retrieveRelevantMemoriesHybrid(
     const lex = scoreDocument(analyses[i], queryAnalysis, idf);
     if (lex > maxLex) maxLex = lex;
     let sem = 0;
-    if (ctx.queryVector) {
+    if (hasQueryVectors(ctx)) {
       const vec = embMap.get(`memory:${stampEmbKey(ctx.campaignId, m.id)}`);
-      if (vec) sem = Math.max(0, dot(ctx.queryVector, vec));
+      if (vec) sem = semScore(ctx, vec);
     }
     const salience = (m.salience ?? 2) / 5;
     const recency = recencyBoost(currentTurn, m.turnCreated);
@@ -375,9 +423,9 @@ export function retrieveRelevantSegmentsHybrid(
     const lex = scoreDocument(analyses[i], queryAnalysis, idf);
     if (lex > maxLex) maxLex = lex;
     let sem = 0;
-    if (ctx.queryVector) {
+    if (hasQueryVectors(ctx)) {
       const vec = embMap.get(`summary_segment:${segmentRowIds[i]}`);
-      if (vec) sem = Math.max(0, dot(ctx.queryVector, vec));
+      if (vec) sem = semScore(ctx, vec);
     }
     return { s, lex, sem };
   });
