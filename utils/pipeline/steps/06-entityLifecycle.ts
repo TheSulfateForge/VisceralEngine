@@ -271,6 +271,32 @@ export const entityLifecycleStep: PipelineStep = {
                 if (dupKi >= 0) {
                     const other = updatedKnownEntities[dupKi];
                     const keepCurrent = (entity.impression ?? '').length > (other.impression ?? '').length;
+                    // v1.24: Before discarding the loser, rescue canonical
+                    // fields the winner lacks. Previously a name-variant
+                    // duplicate with a longer impression could win and take
+                    // the seed personality down with the discarded record.
+                    // Copy-on-write: entity objects are shared with the undo
+                    // snapshot, so never mutate them in place.
+                    const winnerIdx = keepCurrent ? i : dupKi;
+                    const winner = updatedKnownEntities[winnerIdx];
+                    const loser = keepCurrent ? other : entity;
+                    const rescued = { ...winner };
+                    let rescuedAny = false;
+                    if (!rescued.personality?.trim() && loser.personality?.trim()) {
+                        rescued.personality = loser.personality;
+                        rescuedAny = true;
+                    }
+                    if (!rescued.voice_sample?.trim() && loser.voice_sample?.trim()) {
+                        rescued.voice_sample = loser.voice_sample;
+                        rescuedAny = true;
+                    }
+                    if ((rescued.ledger?.length ?? 0) === 0 && (loser.ledger?.length ?? 0) > 0) {
+                        rescued.ledger = loser.ledger;
+                        rescuedAny = true;
+                    }
+                    if (rescuedAny) {
+                        updatedKnownEntities[winnerIdx] = rescued;
+                    }
                     if (keepCurrent) {
                         toRemove.add(dupKi);
                         keptIdx[keptIdx.indexOf(dupKi)] = i;

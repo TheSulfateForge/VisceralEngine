@@ -155,7 +155,7 @@ export const RESPONSE_SCHEMA: Schema = {
           name: { type: Type.STRING },
           role: { type: Type.STRING },
           location: { type: Type.STRING },
-          impression: { type: Type.STRING },
+          impression: { type: Type.STRING, description: "The PC's CURRENT situational read of this NPC: mood right now, stance toward the PC, what they appear to want this scene. NOT a personality summary — personality is canonical, engine-owned, and cannot be changed from here. Never compress a character into archetype adjectives (predatory/cold/calculating/clinical)." },
           relationship_level: { type: Type.STRING, enum: ['NEMESIS', 'HOSTILE', 'COLD', 'NEUTRAL', 'WARM', 'ALLIED', 'DEVOTED'] },
           leverage: { type: Type.STRING },
           ledger: { type: Type.ARRAY, items: { type: Type.STRING } },

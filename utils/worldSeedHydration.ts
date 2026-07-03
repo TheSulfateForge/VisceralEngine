@@ -10,6 +10,37 @@ import type {
 } from '../types';
 import { generateLoreId } from '../idUtils';
 
+/**
+ * v1.24: Repair pass for personality loss. The pre-v1.24 entity-update path
+ * REPLACED entity records with the model's schema-limited update, wiping the
+ * canonical `personality` field — after which the model characterized NPCs
+ * from `impression` alone and they collapsed into archetype caricatures
+ * ("predatory", "calculated"). This re-joins seed personalities onto any
+ * entity record that lost its own. Idempotent; entities that still carry a
+ * personality are untouched, so in-play character development (if you ever
+ * allow it) is never reverted.
+ */
+export function repairSeedPersonalities(
+  entities: KnownEntity[],
+  seed: WorldSeed,
+): { entities: KnownEntity[]; repairedNames: string[] } {
+  const repairedNames: string[] = [];
+  const seedId = (name: string) => `npc_${name.toLowerCase().replace(/\s+/g, '_')}`;
+  const out = entities.map(e => {
+    if (e.personality?.trim()) return e;
+    const npc = seed.npcs.find(n =>
+      seedId(n.name) === e.id ||
+      n.name.toLowerCase() === e.name.toLowerCase()
+    );
+    if (npc?.personality?.trim()) {
+      repairedNames.push(e.name);
+      return { ...e, personality: npc.personality.trim() };
+    }
+    return e;
+  });
+  return { entities: out, repairedNames };
+}
+
 export function hydrateWorldSeed(seed: WorldSeed): Partial<GameWorld> {
   // Convert locations to LocationGraph
   const locationGraph: LocationGraph = {

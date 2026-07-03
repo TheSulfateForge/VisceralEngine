@@ -75,6 +75,11 @@ leverage, one ledger entry or goal. For named NPCs who speak, also set
 register — it becomes the permanent anchor for how they sound. Omit it on
 routine updates; the engine preserves the existing sample.
 
+\`impression\` is the PC's situational read THIS SCENE (mood, stance, what
+the NPC wants right now) — never a personality restatement. Personality is
+canonical and engine-owned; you cannot change who a character IS through
+entity updates, only what they are doing.
+
 **NPCs only know what they could know.** In thought_process, state HOW an
 NPC obtained information before having them act on it. Acquisition paths:
 direct observation (zero delay); named informant (2 turns same district,

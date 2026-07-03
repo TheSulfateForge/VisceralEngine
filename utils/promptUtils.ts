@@ -262,7 +262,10 @@ const buildEntityContext = (entities: KnownEntity[], forceActiveIds: Set<string>
                 `ID: ${e.id}\n Name: ${e.name} (${e.role})\n Location: ${e.location}\n` +
                 personalityLine +
                 voiceLine +
-                ` Current State: [${e.relationship_level}] - ${e.impression}\n` +
+                // v1.24: labeled "situational" so the model reads impression as
+                // this-scene state, not as characterization that can override
+                // the canonical personality line above.
+                ` Situational read (this scene only — personality above is who they ARE): [${e.relationship_level}] - ${e.impression}\n` +
                 ` Leverage: ${e.leverage}\n Ledger: [${e.ledger.join(', ')}]`
             );
         }).join('\n----------------\n');

@@ -24,6 +24,8 @@ import { generateMemoryId } from '../idUtils';
 import { getContextProfile, MEMORY_CAP, DEFAULT_MEMORY_SALIENCE, MAX_REGISTRY_LINES } from '../config/engineConfig';
 import { extractDeniedMechanisms } from '../utils/mechanismDenial';
 import { detectSanitizationDrift, detectSofteningTells, RESAMPLE_REMINDER } from '../utils/driftDetector';
+import { repairSeedPersonalities } from '../utils/worldSeedHydration';
+import { db } from '../db';
 
 // ---------------------------------------------------------------------------
 // v1.24: Threat-pipeline instrumentation. The Origin Gate / cooldown machinery
@@ -41,6 +43,10 @@ import { detectSanitizationDrift, detectSofteningTells, RESAMPLE_REMINDER } from
 const WORLD_PULSE_CADENCE_TURNS = 10;
 const WORLD_PULSE_DOWNTIME_MINUTES = 240;
 let worldPulseInFlight = false;
+
+// v1.24: One-shot personality repair per session — restores canonical seed
+// personalities that the pre-v1.24 entity-replace bug wiped from saves.
+let personalityRepairDone = false;
 
 const THREAT_STATS_WINDOW = 20;
 const threatStats = { seeded: 0, blocked: 0, cooldownTurns: 0, windowStartTurn: -1 };
@@ -252,6 +258,40 @@ export const useGeminiClient = () => {
                 historyForSummarization.turnCount,
                 contextProfile.summarizationInterval,
             ).catch(console.error);
+        }
+
+        // v1.24: Repair wiped seed personalities once per session, BEFORE the
+        // prompt is built, so this turn already renders canonical traits.
+        if (!personalityRepairDone) {
+            personalityRepairDone = true;
+            const repairWorld = useGameStore.getState().gameWorld;
+            if (repairWorld.worldSeedId && (repairWorld.knownEntities ?? []).some(e => !e.personality?.trim())) {
+                try {
+                    const seed = await db.loadWorldSeed(repairWorld.worldSeedId);
+                    if (seed) {
+                        const { entities, repairedNames } = repairSeedPersonalities(
+                            repairWorld.knownEntities ?? [],
+                            seed,
+                        );
+                        if (repairedNames.length > 0) {
+                            setGameWorld(prev => ({ ...prev, knownEntities: entities }));
+                            setGameHistory(prev => ({
+                                ...prev,
+                                debugLog: [
+                                    ...prev.debugLog,
+                                    {
+                                        timestamp: new Date().toISOString(),
+                                        message: `[PERSONALITY REPAIR] Restored canonical personality on: ${repairedNames.join(', ')}`,
+                                        type: 'success',
+                                    },
+                                ],
+                            }));
+                        }
+                    }
+                } catch (e) {
+                    console.warn('[PERSONALITY REPAIR] failed:', e);
+                }
+            }
         }
 
         const preCallState = useGameStore.getState();
