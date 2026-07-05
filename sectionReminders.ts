@@ -256,14 +256,9 @@ Before writing NPC actions this turn, verify:
 The simulation has NO PLACE for incompetent allies next to omniscient enemies.
 That is not drama — it is a rigged game.`,
 
-    WORLD_PULSE: `[SYSTEM REMINDER: WORLD PULSE — PROACTIVITY CHECK]
-The world_tick field is REQUIRED. Before writing your narrative:
-1. What did at least ONE named NPC do this turn? (Check their goals in the entity registry.)
-2. Did anything change in the environment? (Time, weather, crowds, sounds.)
-3. Is any threat developing off-screen? (Seed emerging_threats for future turns.)
-4. Should any NPC interrupt this scene? (Debt collectors, rivals, allies with news.)
-If no NPC has a pressing goal, show mundane life — they are people, not quest markers.
-DO NOT submit a response with an empty world_tick.`,
+    // v1.25: WORLD_PULSE reminder removed — it was defined but never selected
+    // by either reminder selector (dead weight). Its job is now done better by
+    // the background world-pulse service + ambient hook nudge.
 
     BARGAIN_CHECK: `[SYSTEM REMINDER: DEVIL'S BARGAIN — MANDATORY OFFER DUE]
 The Devil's Bargain clock has exceeded 20 turns without an offer.

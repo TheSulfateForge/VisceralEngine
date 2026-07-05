@@ -25,6 +25,7 @@ import { getContextProfile, MEMORY_CAP, DEFAULT_MEMORY_SALIENCE, MAX_REGISTRY_LI
 import { extractDeniedMechanisms } from '../utils/mechanismDenial';
 import { detectSanitizationDrift, detectSofteningTells, RESAMPLE_REMINDER } from '../utils/driftDetector';
 import { repairSeedPersonalities } from '../utils/worldSeedHydration';
+import { shouldNudgeHook, selectAmbientHook, markHookNudged } from '../utils/hookNudge';
 import { db } from '../db';
 
 // ---------------------------------------------------------------------------
@@ -380,9 +381,24 @@ export const useGeminiClient = () => {
             tensionLevel,
             canonicalPersonalityNpcPresent,  // v1.22
         );
-        // Join multiple reminders into a single string for the prompt
-        const activeReminder = activeReminders.length > 0 
-            ? activeReminders.join('\n\n---\n\n') 
+        // v1.25: Ambient hook nudge — on a jittered cadence during calm
+        // NARRATIVE beats, surface ONE ignorable hook drawn from established
+        // world state (world-pulse opportunities > dormant-hook foreshadow >
+        // offscreen NPC traces). Timing, selection, and non-repetition are
+        // all code-side; the model only weaves the given line into prose.
+        const ambientHook = shouldNudgeHook(
+            preCallState.gameHistory.turnCount,
+            preCallState.gameWorld,
+        )
+            ? selectAmbientHook(preCallState.gameWorld)
+            : null;
+
+        // Join reminders (+ optional hook nudge) into a single trailing string
+        const reminderParts = ambientHook
+            ? [...activeReminders, ambientHook.block]
+            : activeReminders;
+        const activeReminder = reminderParts.length > 0
+            ? reminderParts.join('\n\n---\n\n')
             : null;
         let requestLogs = [...preCallState.gameHistory.debugLog];
         
@@ -611,6 +627,23 @@ export const useGeminiClient = () => {
             playerRemovedConditions,
             text  // v1.17: Pass player input for cooldown detection
         );
+
+        // v1.25: Ambient hook bookkeeping — reset the cadence and strike the
+        // consumed [OPPORTUNITY] line from the registry so it never repeats.
+        if (ambientHook) {
+            markHookNudged(nextTurn);
+            if (ambientHook.consumeRegistryLine && worldUpdate.hiddenRegistry) {
+                worldUpdate.hiddenRegistry = worldUpdate.hiddenRegistry
+                    .split('\n')
+                    .filter(l => l.trim() !== ambientHook.consumeRegistryLine!.trim())
+                    .join('\n');
+            }
+            debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[AMBIENT HOOK] Surfaced (${ambientHook.summary})`,
+                type: 'info',
+            });
+        }
 
         // v1.24: Threat-pipeline instrumentation — rolling window counters.
         const cooldownActive = (worldUpdate.threatCooldownUntilTurn ?? 0) > nextTurn;
