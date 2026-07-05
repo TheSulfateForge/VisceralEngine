@@ -239,14 +239,9 @@ export const RESPONSE_SCHEMA: Schema = {
       required: ["location_name"]
     },
     hidden_update: { type: Type.STRING, nullable: true },
-    new_memory: {
-      type: Type.OBJECT,
-      nullable: true,
-      description: "DEPRECATED v1.22 — prefer new_memories[]. Kept for back-compat. PERSISTENT HISTORY: Record one major life event.",
-      properties: {
-        fact: { type: Type.STRING, description: "The absolute truth to remember forever." }
-      }
-    },
+    // v1.26: legacy new_memory singleton removed from the schema — every
+    // property costs request tokens. validateResponse still accepts it from
+    // any model that emits it out of habit; new_memories[] is the contract.
     new_memories: {
       type: Type.ARRAY,
       nullable: true,
@@ -447,7 +442,7 @@ export const KEEP_DESCRIPTIONS: ReadonlySet<string> = new Set<string>([
   'relationships', 'goals', // full-replacement data-loss warnings
   'added_relationships', 'removed_relationships', 'added_goals', 'removed_goals',
   'skill_updates',
-  'new_memory', 'new_memories', 'salience', 'tags',
+  'new_memories', 'salience', 'tags',
   'new_lore', 'keyword', 'content',
   'biological_inputs',
   'location_update', 'traveled_from', 'travel_time_minutes', 'nearby_locations',

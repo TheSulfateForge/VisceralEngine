@@ -83,7 +83,7 @@ export const useMontage = () => {
             timestamp: new Date().toISOString(),
         };
 
-        const { prompt: contextPrompt } = await constructGeminiPrompt(
+        const { prompt: contextPrompt, staticContext } = await constructGeminiPrompt(
             state.gameHistory,
             state.gameWorld,
             state.character,
@@ -109,7 +109,9 @@ export const useMontage = () => {
             state.gameWorld.bannedNameMap ?? {},
             instruction,
             getResponseSchema('MONTAGE'),  // Review item 3: montage variant keeps montage_block
-            contextPrompt,  // v1.24: dynamic context → final user message
+            contextPrompt,   // v1.24: dynamic context → final user message
+            staticContext,   // v1.26: campaign canon → cached prefix
+            'medium',        // v1.26: montage compression benefits from real deliberation
         );
     }, [getService]);
 

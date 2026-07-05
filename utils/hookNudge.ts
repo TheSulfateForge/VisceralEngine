@@ -22,6 +22,7 @@
 // ============================================================================
 
 import { GameWorld } from '../types';
+import { getTuning } from '../config/tuning';
 
 export interface AmbientHook {
     /** Prompt block appended to the trailing reminder. */
@@ -34,11 +35,14 @@ export interface AmbientHook {
 
 // Cadence state — module-scoped, resets on reload (harmless: worst case the
 // first nudge of a session arrives a few turns early or late).
-const NUDGE_INTERVAL_MIN = 8;
-const NUDGE_INTERVAL_JITTER = 5;   // interval ∈ [8, 12]
+// v1.26: interval bounds are runtime tone dials (Settings → Simulation Tuning).
 let lastNudgeTurn = 0;
-let currentInterval =
-    NUDGE_INTERVAL_MIN + Math.floor(Math.random() * NUDGE_INTERVAL_JITTER);
+let currentInterval: number | null = null;
+
+const rollInterval = (): number => {
+    const t = getTuning();
+    return t.hookCadenceMin + Math.floor(Math.random() * (t.hookCadenceJitter + 1));
+};
 
 const TENSION_CEILING = 40;
 const IMMINENT_THREAT_ETA = 3;
@@ -46,6 +50,7 @@ const MIN_TURN = 5;
 
 /** Eligibility: calm NARRATIVE beat, cadence elapsed, nothing imminent. */
 export const shouldNudgeHook = (turnCount: number, world: GameWorld): boolean => {
+    if (currentInterval === null) currentInterval = rollInterval();
     if (turnCount < MIN_TURN) return false;
     if (turnCount - lastNudgeTurn < currentInterval) return false;
     if ((world.sceneMode ?? 'NARRATIVE') !== 'NARRATIVE') return false;
@@ -59,8 +64,7 @@ export const shouldNudgeHook = (turnCount: number, world: GameWorld): boolean =>
 /** Record that a nudge fired this turn and re-roll the next interval. */
 export const markHookNudged = (turn: number): void => {
     lastNudgeTurn = turn;
-    currentInterval =
-        NUDGE_INTERVAL_MIN + Math.floor(Math.random() * NUDGE_INTERVAL_JITTER);
+    currentInterval = rollInterval();
 };
 
 const buildBlock = (hookText: string, extraRule: string = ''): string => `[AMBIENT HOOK — surface ONCE, gently]

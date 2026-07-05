@@ -26,6 +26,7 @@ import { extractDeniedMechanisms } from '../utils/mechanismDenial';
 import { detectSanitizationDrift, detectSofteningTells, RESAMPLE_REMINDER } from '../utils/driftDetector';
 import { repairSeedPersonalities } from '../utils/worldSeedHydration';
 import { shouldNudgeHook, selectAmbientHook, markHookNudged } from '../utils/hookNudge';
+import { getTuning } from '../config/tuning';
 import { db } from '../db';
 
 // ---------------------------------------------------------------------------
@@ -41,7 +42,6 @@ import { db } from '../db';
 // Flash-Lite, writes to the hidden registry, never blocks or fails the live
 // turn. Guarded against concurrent runs.
 // ---------------------------------------------------------------------------
-const WORLD_PULSE_CADENCE_TURNS = 10;
 const WORLD_PULSE_DOWNTIME_MINUTES = 240;
 let worldPulseInFlight = false;
 
@@ -305,7 +305,7 @@ export const useGeminiClient = () => {
         // Phase 2: constructGeminiPrompt is async (encodes the query
         // embedding off-thread for hybrid retrieval). Awaits ~5–20ms warm,
         // a few seconds on the very first call while the model loads.
-        const { prompt: contextPrompt, ragDebug } = await constructGeminiPrompt(
+        const { prompt: contextPrompt, staticContext, blockSizes, ragDebug } = await constructGeminiPrompt(
             preCallState.gameHistory,
             preCallState.gameWorld,
             preCallState.character,
@@ -432,6 +432,7 @@ export const useGeminiClient = () => {
             turn: preCallState.gameHistory.turnCount,
             modelName: service.modelName,
             systemInstruction: SYSTEM_INSTRUCTIONS,
+            staticContext,
             dynamicContext: contextPrompt,
             userText: text,
             sceneMode: preCallState.gameWorld.sceneMode,
@@ -458,6 +459,16 @@ export const useGeminiClient = () => {
             MATURE_CONTENT_RE.test(text) ||
             MATURE_CONTENT_RE.test(lastNarrative);
 
+        // v1.26: Thought tokens are output-priced — spend them where they
+        // matter. Calm beats get 'low'; combat/tension get 'high'.
+        const currentSceneMode = preCallState.gameWorld.sceneMode ?? 'NARRATIVE';
+        const turnThinking =
+            currentSceneMode === 'COMBAT' ||
+            currentSceneMode === 'TENSION' ||
+            (preCallState.gameWorld.tensionLevel ?? 0) >= 60
+                ? 'high'
+                : 'low';
+
         let response: ModelResponseSchema = await service.sendMessage(
             fullSystemPrompt,
             [...preCallState.gameHistory.history, userMsg],
@@ -465,7 +476,9 @@ export const useGeminiClient = () => {
             preCallState.gameWorld.bannedNameMap ?? {},  // v1.7
             activeReminder,  // v1.19: Trailing reminder for recency-biased compliance
             turnSchema,  // Review item 3
-            contextPrompt  // v1.24: dynamic context → final user message (cache-friendly)
+            contextPrompt,  // v1.24: dynamic context → final user message (cache-friendly)
+            staticContext,  // v1.26: campaign canon → cached prefix
+            turnThinking    // v1.26: scene-mode thinking budget
         );
 
         if (latestRequestId.current !== requestId) {
@@ -542,7 +555,9 @@ export const useGeminiClient = () => {
                 preCallState.gameWorld.bannedNameMap ?? {},
                 reinforcedReminder,
                 turnSchema,  // Review item 3
-                contextPrompt  // v1.24: dynamic context → final user message
+                contextPrompt,  // v1.24: dynamic context → final user message
+                staticContext,  // v1.26: campaign canon → cached prefix
+                turnThinking    // v1.26: scene-mode thinking budget
             );
 
             if (latestRequestId.current !== requestId) {
@@ -695,6 +710,8 @@ export const useGeminiClient = () => {
                     ? `[TOKENS] prompt=${response.usageMetadata.promptTokenCount} (cached ${response.usageMetadata.cachedContentTokenCount}) · output=${response.usageMetadata.candidatesTokenCount} · thoughts=${response.usageMetadata.thoughtsTokenCount} · total=${response.usageMetadata.totalTokenCount}`
                     : `[TOKENS] usageMetadata unavailable for this turn`, type: 'info' },
                 { timestamp: new Date().toISOString(), message: `[RAG] Lore: ${ragDebug.filteredLore}/${ragDebug.totalLore} | Entities: ${ragDebug.filteredEntities}/${ragDebug.totalEntities} | Tokens: [${ragDebug.queryTokens.slice(0, 10).join(', ')}]`, type: 'info' },
+                // v1.26: per-block char counts — the token-diet instrument.
+                { timestamp: new Date().toISOString(), message: `[PROMPT BLOCKS] ${Object.entries(blockSizes).map(([k, v]) => `${k}=${v}c`).join(' ')} | thinking=${turnThinking}`, type: 'info' },
                 ...debugLogs
             ]
         }));
@@ -706,7 +723,7 @@ export const useGeminiClient = () => {
         // next turn's narrator surfaces them organically.
         const shouldPulse =
             (response.time_passed_minutes ?? 0) >= WORLD_PULSE_DOWNTIME_MINUTES ||
-            (nextTurn > 0 && nextTurn % WORLD_PULSE_CADENCE_TURNS === 0);
+            (nextTurn > 0 && nextTurn % getTuning().worldPulseCadence === 0);
         if (shouldPulse && !worldPulseInFlight) {
             worldPulseInFlight = true;
             (async () => {

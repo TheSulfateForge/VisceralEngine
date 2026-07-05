@@ -93,12 +93,17 @@ export class GeminiClient {
   // is combined with responseMimeType + responseSchema.
   // Gemini 3.x models: use thinkingLevel with string values
   // ("minimal" | "low" | "medium" | "high").
-  private buildThinkingConfig(): Record<string, unknown> | undefined {
+  //
+  // v1.26: optional per-turn override. Thought tokens are OUTPUT-priced —
+  // the most expensive tokens in the request — and a quiet dialogue beat
+  // doesn't need combat-grade deliberation. Callers pass 'low' for
+  // NARRATIVE/SOCIAL turns and 'high' for COMBAT/TENSION.
+  private buildThinkingConfig(levelOverride?: string | null): Record<string, unknown> | undefined {
     const defaults = THINKING_DEFAULTS[this.modelName];
     if (!defaults) return undefined; // 2.5 models + unknown models — omit entirely
 
     // 3.x models use string-based thinkingLevel
-    return { thinkingLevel: defaults.value };
+    return { thinkingLevel: levelOverride ?? defaults.value };
   }
 
   protected validateResponse(data: unknown): ModelResponseSchema {
@@ -316,6 +321,8 @@ export class GeminiClient {
       trailingReminder?: string | null,  // v1.19: Appended to user message for recency compliance
       responseSchema?: Schema,  // Review item 3: scene-mode-aware compact schema. Defaults to NARRATIVE.
       dynamicContext?: string | null,  // v1.24: Per-turn world context, injected into the FINAL user message (see below)
+      campaignStatic?: string | null,  // v1.26: Campaign-static canon (identity/tags/rules) — folded into the cached prefix
+      thinkingLevel?: string | null,   // v1.26: Per-turn thinking override ('low' for calm beats, 'high' for combat)
       onChunk?: (textSoFar: string) => void  // v1.19: Streaming callback
   ): Promise<ModelResponseSchema> {
 
@@ -375,33 +382,34 @@ export class GeminiClient {
 
     const currentUserMsg = history[history.length - 1];
 
-    // v1.19: Build model-appropriate thinking config.
-    // Gemini 2.5 → thinkingBudget (tokens), Gemini 3.x → thinkingLevel (0-3).
-    const thinkingConfig = this.buildThinkingConfig();
+    // v1.19/v1.26: Build model-appropriate thinking config, with per-turn
+    // level override (calm beats think less, combat thinks more).
+    const thinkingConfig = this.buildThinkingConfig(thinkingLevel);
 
-    // v1.19: Context caching for the static SYSTEM_INSTRUCTIONS block.
-    // We detect whether the caller prefixed the system prompt with the
-    // SYSTEM_INSTRUCTIONS constant; if so, we split it off and cache it.
-    // The dynamic remainder is passed as the normal systemInstruction.
-    // This is best-effort — if the Gemini caches API isn't available for
-    // this model or the cache creation fails, we transparently fall back
-    // to the uncached path (see geminiCache.ts).
+    // v1.19/v1.26: Context caching. The cached prefix is now TWO tiers:
+    //   SYSTEM_INSTRUCTIONS (app-static)
+    // + [CAMPAIGN CANON] (campaign-static: character identity, world tags,
+    //   world rules — changes rarely).
+    // geminiCache keys on a content hash, so when the canon DOES change
+    // (level-up appearance edit, new world rule), the cache transparently
+    // rebuilds on the next turn. Best-effort — on any cache failure we fall
+    // back to sending the whole block inline as systemInstruction.
+    const staticBlock = campaignStatic?.trim()
+        ? `${fullSystemInstruction}\n\n// CAMPAIGN CANON (static for this campaign) =============================\n${campaignStatic.trim()}`
+        : fullSystemInstruction;
+
     let cachedContentName: string | null = null;
-    let effectiveSystemInstruction = fullSystemInstruction;
-    if (fullSystemInstruction.startsWith(SYSTEM_INSTRUCTIONS)) {
+    let effectiveSystemInstruction = staticBlock;
+    if (staticBlock.startsWith(SYSTEM_INSTRUCTIONS)) {
         const cacheResult = await systemInstructionCache.getOrCreate(
             this.ai,
             this.modelName,
-            SYSTEM_INSTRUCTIONS,
+            staticBlock,
         );
         if (cacheResult) {
             cachedContentName = cacheResult;
-            // Strip the cached portion (and the two-newline separator) from
-            // what we send inline — the model still "sees" SYSTEM_INSTRUCTIONS
-            // because the cache is attached via config.cachedContent below.
-            effectiveSystemInstruction = fullSystemInstruction
-                .slice(SYSTEM_INSTRUCTIONS.length)
-                .replace(/^\n{1,2}/, '');
+            // The whole static block lives in the cache — nothing inline.
+            effectiveSystemInstruction = '';
         }
     }
 

@@ -1,6 +1,7 @@
 
 import React, { useRef, useState } from 'react';
 import { MODELS } from "../../constants";
+import { getTuning, setTuning, resetTuning, TUNING_DEFAULTS, TuningValues } from "../../config/tuning";
 
 interface SettingsOverlayProps {
     currentModel: string;
@@ -19,9 +20,19 @@ export const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ currentModel, 
     const [temperature, setTemperature] = useState(() => 
         parseFloat(localStorage.getItem('visceral_temperature') || '0.9')
     );
-    const [fontSize, setFontSize] = useState(() => 
+    const [fontSize, setFontSize] = useState(() =>
         localStorage.getItem('visceral_font_size') || 'xl'
     );
+    // v1.26: Simulation tone dials (runtime, no recompile)
+    const [tuning, setTuningState] = useState<TuningValues>(() => getTuning());
+
+    const handleTuningChange = (key: keyof TuningValues, value: number) => {
+        setTuningState(setTuning({ [key]: value }));
+    };
+
+    const handleTuningReset = () => {
+        setTuningState(resetTuning());
+    };
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -111,6 +122,44 @@ export const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ currentModel, 
                         </button>
                     ))}
                 </div>
+            </div>
+
+            {/* SIMULATION TUNING — v1.26 tone dials */}
+            <div className="space-y-4 pt-4 border-t border-gray-900">
+                <div className="flex items-center justify-between">
+                    <label className="text-[10px] font-bold text-gray-700 uppercase tracking-widest block">Simulation Tuning</label>
+                    <button onClick={handleTuningReset} className="text-[8px] text-gray-600 hover:text-red-900 uppercase tracking-widest underline underline-offset-2">
+                        Reset Defaults
+                    </button>
+                </div>
+
+                {([
+                    { key: 'hookCadenceMin' as const, label: 'Ambient Hook Cadence', min: 4, max: 25, lo: 'Frequent (4)', hi: 'Rare (25)', unit: 'turns' },
+                    { key: 'worldPulseCadence' as const, label: 'World Pulse Cadence', min: 5, max: 30, lo: 'Busy (5)', hi: 'Quiet (30)', unit: 'turns' },
+                    { key: 'bargainClockTurns' as const, label: "Devil's Bargain Clock", min: 10, max: 60, lo: 'Tempting (10)', hi: 'Rare (60)', unit: 'turns' },
+                    { key: 'dreamTraumaThreshold' as const, label: 'Dream Trauma Threshold', min: 30, max: 90, lo: 'Haunted (30)', hi: 'Resilient (90)', unit: '/100' },
+                ]).map(dial => (
+                    <div key={dial.key} className="space-y-2">
+                        <label className="text-[9px] text-gray-600 font-mono uppercase tracking-widest block">{dial.label}</label>
+                        <input
+                            type="range"
+                            min={dial.min}
+                            max={dial.max}
+                            step={1}
+                            value={tuning[dial.key]}
+                            onChange={(e) => handleTuningChange(dial.key, parseInt(e.target.value, 10))}
+                            className="w-full accent-red-900 bg-gray-900 h-1 appearance-none rounded-lg cursor-pointer"
+                        />
+                        <div className="flex justify-between text-[8px] text-gray-600 font-mono">
+                            <span>{dial.lo}</span>
+                            <span className="text-red-900 font-bold">{tuning[dial.key]} {dial.unit}{tuning[dial.key] !== TUNING_DEFAULTS[dial.key] ? ' •' : ''}</span>
+                            <span>{dial.hi}</span>
+                        </div>
+                    </div>
+                ))}
+                <p className="text-[8px] text-gray-700 font-mono leading-relaxed">
+                    Pacing dials apply from the next turn. Dot marks a value changed from default.
+                </p>
             </div>
 
             <div className="space-y-3 pt-4 border-t border-gray-900">

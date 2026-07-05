@@ -438,8 +438,7 @@ future context — so use tags ('vow', 'oath', 'debt', 'reveal', 'death',
 'identity', 'betrayal', 'romantic', 'kill', 'victory', 'loss',
 'discovery') for anything you want the future engine to anchor on. Do NOT
 record mundane actions, temporary states, or routine dialogue. Prefer ONE
-self-contained sentence per fact. The legacy \`new_memory\` singleton is
-deprecated but still accepted (treated as a single entry of salience 3).
+self-contained sentence per fact.
 
 // §12 CONDITIONS ==========================================================
 Conditions are the character's CURRENT STATE, not a log.
@@ -462,15 +461,19 @@ the moment the PC leaves it — remove same turn. A condition naming an NPC
 becomes invalid if that NPC dies, is detained, or leaves play.
 
 // §13 OUTPUT PROTOCOL =====================================================
-1. Analyse the scene in \`thought_process\` (mode, intent, time). If a
-   threat is coming, state its information chain BEFORE writing it.
+1. Analyse the scene in \`thought_process\` (mode, intent, time) —
+   TELEGRAPHIC, ≤80 words. Threat information chains (§5) are the one
+   exception and may exceed the cap. If a threat is coming, state its
+   chain BEFORE writing it.
 2. Populate \`world_tick\` FIRST (NPC actions, environment changes, any
    emerging threats). Mandatory every turn.
 3. Check for NPC interrupts and time-driven environment changes.
 4. Write narrative — no summary, no fade-to-black.
-5. Fill remaining fields (character_updates, location_update, hidden_update
+5. Estimate \`time_passed_minutes\` from actual scene duration (§2:
+   dialogue = 1-3 min per exchange; do not default to 15).
+6. Fill remaining fields (character_updates, location_update, hidden_update
    for faction_intel / legal_status when applicable).
-6. Final scan of every text field for banned names, euphemisms, and
+7. Final scan of every text field for banned names, euphemisms, and
    clichés from the appendix below.
 
 // APPENDIX A — FORBIDDEN VOCABULARY =======================================

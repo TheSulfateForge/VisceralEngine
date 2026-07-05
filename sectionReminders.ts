@@ -43,6 +43,7 @@
 // ============================================================================
 
 import { SceneMode } from './types';
+import { getTuning } from './config/tuning';
 
 // Condensed reinforcements derived from SYSTEM_INSTRUCTIONS
 const REMINDERS = {
@@ -186,8 +187,15 @@ sound a body makes when it stops being whole.
    post-fight collapse and the shakes. The body is a chemical system
    under load; render its chemistry.`,
 
-    NARRATIVE_INTEGRITY: `[SYSTEM REMINDER: NARRATIVE INTEGRITY]
+    // v1.26: FIDELITY merged in — the two reminders overlapped ~60% and
+    // diluted each other's rotation slots.
+    NARRATIVE_INTEGRITY: `[SYSTEM REMINDER: INTEGRITY & FIDELITY SWEEP]
 Before writing this turn, audit your output against these checks:
+
+GROUNDING: Is everything you are about to render grounded in established facts?
+→ Physics, biology, world lore, and NPC capabilities consistent with prior turns.
+→ NPCs know only what they could have obtained through shown means.
+→ The world does not bend to create convenient drama — it runs on its own logic.
 
 CONDITIONS: Are you adding a new condition this turn?
 → State in thought_process: "This condition is caused by [specific event THIS turn]."
@@ -376,12 +384,6 @@ ENCOUNTER GENERATION RULE: Start from the 70% baseline, not the 10%.
 → If the player is moving quietly with no flags, default is ordinary human interaction.
 
 Threat seeds must not treat every NPC as a latent enemy or faction operative.`,
-
-    FIDELITY: `[SYSTEM REMINDER: SIMULATION FIDELITY]
-FIDELITY CHECK: Is everything you are about to render grounded in established facts?
-→ Physics, biology, world lore, and NPC capabilities must be consistent with prior turns.
-→ NPCs do not have knowledge they could not have obtained through shown means.
-→ The world does not bend to create convenient drama — it operates on its own logic.`,
 
     DREAM_PROTOCOL: `[SYSTEM REMINDER: DREAM / NIGHTMARE PROTOCOL v1.19]
 A [DREAM SEED] block is present in this turn's context. The player character
@@ -643,9 +645,10 @@ export const getSectionReminders = (
 
     // -----------------------------------------------------------------------
     // BAND 2: Overdue clocks (max 1) — fires alongside Band 1 if applicable
+    // v1.26: threshold is a runtime tone dial (Settings → Simulation Tuning).
     // -----------------------------------------------------------------------
     const turnsSinceLastBargain = currentTurnCount - lastBargainTurn;
-    if (turnsSinceLastBargain >= 25 && currentTurnCount > 0) {
+    if (turnsSinceLastBargain >= getTuning().bargainClockTurns && currentTurnCount > 0) {
         // Only add if Band 1 didn't already grab a slot, or if stacking is allowed
         if (reminders.length < 2) {
             reminders.push(REMINDERS.BARGAIN_CHECK);
@@ -727,8 +730,15 @@ export const getSectionReminders = (
         rotatingReminder = REMINDERS.THREAT_SEED_INTEGRITY;
     } else if ((turnCount - 4) % 8 === 0 && turnCount >= 4) {
         rotatingReminder = REMINDERS.WORLD_NORMALCY;
+    // v1.26: GENRE_CONSISTENCY and FACTION_PARITY restored to the LIVE
+    // rotation — they had silently stopped firing when the selector moved to
+    // getSectionReminders (they only existed in the deleted legacy selector).
+    } else if ((turnCount - 2) % 5 === 0 && turnCount >= 2) {
+        rotatingReminder = REMINDERS.GENRE_CONSISTENCY;
+    } else if ((turnCount - 3) % 7 === 0 && turnCount >= 3) {
+        rotatingReminder = REMINDERS.FACTION_PARITY;
     } else if (turnCount % 6 === 1) {
-        rotatingReminder = REMINDERS.FIDELITY;
+        rotatingReminder = REMINDERS.NARRATIVE_INTEGRITY;
     } else if (currentTurnCount > 10 && goalCount < 2) {
         rotatingReminder = REMINDERS.GOAL_LIFECYCLE;
     } else if (mode === 'NARRATIVE' && turnCount % 3 === 0 && goalCount < 3) {
@@ -749,139 +759,9 @@ export const getSectionReminders = (
     return reminders;
 };
 
-/**
- * Returns the appropriate section reminder for this turn, or null if none applies.
- *
- * v1.6: THREAT_SEED_INTEGRITY now leads with the Origin Gate checklist.
- */
-export const getSectionReminder = (
-    turnCount: number,
-    mode: SceneMode,
-    lastBargainTurn: number = 0,
-    currentTurnCount: number = 0,
-    conditionsCount: number = 0,
-    entityCount: number = 0,
-    goalCount: number = 999,
-    emergingThreatsCount: number = 0,
-    passiveAlliesDetected: boolean = false,  // v1.10
-    dreamSeedActive: boolean = false,        // v1.19
-    foreignSpeechPending: boolean = false,   // v1.19
-    recentInjuryAdded: boolean = false,      // v1.19
-    hostileEntityPresent: boolean = false,   // v1.20
-    tensionLevel: number = 0,                // v1.20
-    canonicalPersonalityNpcPresent: boolean = false,  // v1.22
-): string | null => {
-    // Priority -2 (Turn-shape override): Dream turns change the whole output
-    // structure and must beat everything else.
-    if (dreamSeedActive) return REMINDERS.DREAM_PROTOCOL;
-
-    // Priority -1 (Absolute): Mandatory Condition Audit when conditions > 30
-    if (conditionsCount > 30) {
-        return REMINDERS.CONDITION_AUDIT;
-    }
-
-    // Priority -0.75 (v1.19): Language barrier — foreign speech must be
-    // rendered correctly or the scene breaks.
-    if (foreignSpeechPending) return REMINDERS.LANGUAGES_FOREIGN;
-
-    // Priority -0.6 (v1.19): Healing marker reminder when an injury was
-    // just added — low-cost, only fires on injury turns.
-    if (recentInjuryAdded) return REMINDERS.HEALING_TIMELINE;
-
-    if (turnCount < 3) return null;
-
-    // v1.10: Priority -0.5: LOGISTICS fires EVERY turn when allied passivity detected
-    // This takes precedence over bargain clock because passive allies in combat
-    // is a more urgent issue than bargain timing.
-    if (passiveAlliesDetected) {
-        return REMINDERS.LOGISTICS_CHECK;
-    }
-
-    // Priority 0: BARGAIN CLOCK
-    const turnsSinceLastBargain = currentTurnCount - lastBargainTurn;
-    if (turnsSinceLastBargain >= 25 && currentTurnCount > 0) {
-        return REMINDERS.BARGAIN_CHECK;
-    }
-
-    // Priority 0.5: Entity Density — fires every turn while obligation is unmet
-    if (entityDensityViolated(currentTurnCount, entityCount)) {
-        return REMINDERS.ENTITY_DENSITY;
-    }
-
-    // v1.20 Priority 1.0: Hostile NPC Protocol — fires every turn while
-    // adversarial conditions are active. Higher priority than rotating
-    // reminders so the threat-action rules aren't displaced by a vocab check.
-    const hostileScene =
-        hostileEntityPresent ||
-        tensionLevel >= 50 ||
-        emergingThreatsCount > 0 ||
-        mode === 'COMBAT';
-    if (hostileScene) {
-        return REMINDERS.HOSTILE_NPC_PROTOCOL;
-    }
-
-    // v1.22 Priority 1.15: Canonical voice lock — when a registered entity
-    // with a canonical personality is in scene, this beats VISCERAL_RENDER
-    // for the slot. Archetype substitution is a deeper drift than rendering
-    // register; we lose the body register before we lose the character.
-    if (canonicalPersonalityNpcPresent) {
-        return REMINDERS.CANONICAL_VOICE_LOCK;
-    }
-
-    // v1.21 Priority 1.25: Visceral render register — when the scene is
-    // intimate (SOCIAL) or high-tension but not hostile-actor territory,
-    // anchor the rendering register positively. Intimate scenes are where
-    // Gemini's sanitization gravity is strongest; this fires every turn
-    // they're active until a stronger reminder displaces it.
-    const visceralScene =
-        mode === 'SOCIAL' ||
-        tensionLevel >= 60;
-    if (visceralScene) {
-        return REMINDERS.VISCERAL_RENDER;
-    }
-
-    // Priority 1.5: Logistics Check — fires every turn while threats exist
-    if (emergingThreatsCount > 0) {
-        // Only fire every other turn to avoid drowning out other reminders
-        if (turnCount % 2 === 0) return REMINDERS.LOGISTICS_CHECK;
-    }
-
-    // Priority 1: Vocabulary (Every 4 turns)
-    if (turnCount % 4 === 0) return REMINDERS.VOCABULARY;
-
-    // Priority 2/3 (Intimate Protocol, Combat Tactics) removed: unreachable here.
-    // SOCIAL scenes already return VISCERAL_RENDER (1.25) and COMBAT scenes return
-    // HOSTILE_NPC_PROTOCOL (1.0) above — both fire every turn those modes are
-    // active, so these mode-gated rotating reminders could never run. The live
-    // getSectionReminders() selector handles intimate/combat rotation correctly.
-
-    // Priority 4: Condition Audit (Every 5 turns)
-    if (turnCount % 5 === 0) return REMINDERS.CONDITION_AUDIT;
-
-    // Priority 5: Threat Seed Integrity (Every 6 turns during TENSION/COMBAT,
-    // every 10 turns otherwise)
-    if (mode === 'TENSION' && turnCount % 6 === 0) return REMINDERS.THREAT_SEED_INTEGRITY;
-    if (turnCount % 10 === 0) return REMINDERS.THREAT_SEED_INTEGRITY;
-
-    // Priority 5.25: Genre Consistency (Every 5 turns, offset by 2) — v1.15
-    if ((turnCount - 2) % 5 === 0 && turnCount >= 2) return REMINDERS.GENRE_CONSISTENCY;
-
-    // Priority 5.5: World Normalcy (Every 8 turns, offset by 4)
-    if ((turnCount - 4) % 8 === 0 && turnCount >= 4) return REMINDERS.WORLD_NORMALCY;
-
-    // Priority 5.75: Faction Parity (Every 7 turns, offset by 3) — v1.15
-    if ((turnCount - 3) % 7 === 0 && turnCount >= 3) return REMINDERS.FACTION_PARITY;
-
-    // Priority 6: Simulation Fidelity (Every 6 turns, offset from threat check)
-    if (turnCount % 6 === 1) return REMINDERS.FIDELITY;
-
-    // Priority 6.5: Goal Lifecycle
-    if (currentTurnCount > 10 && goalCount < 2) return REMINDERS.GOAL_LIFECYCLE;
-    if (mode === 'NARRATIVE' && turnCount % 3 === 0 && goalCount < 3) return REMINDERS.GOAL_LIFECYCLE;
-    if ((turnCount - 2) % 8 === 0 && turnCount >= 2) return REMINDERS.GOAL_LIFECYCLE;
-
-    // Priority 7: Narrative Integrity (Every 7 turns)
-    if (turnCount % 7 === 0) return REMINDERS.NARRATIVE_INTEGRITY;
-
-    return null;
-};
+// v1.26: The legacy single-reminder selector `getSectionReminder` was deleted.
+// It had no callers — the live path has been getSectionReminders (plural)
+// since v1.12 — and its private rotation was the only place
+// GENRE_CONSISTENCY and FACTION_PARITY ever fired, which is why those two
+// reminders silently stopped reaching the model. Both are now in the live
+// Band 4 rotation above.

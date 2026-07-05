@@ -13,9 +13,10 @@ import { partitionConditions } from './contentValidation';
 import { applyExistingMap } from './nameResolver';
 import {
     DOWNTIME_KEYWORDS, DENIAL_SUPPRESSION_THRESHOLD, getContextProfile,
-    SLEEP_KEYWORDS, DREAM_TRAUMA_THRESHOLD,
+    SLEEP_KEYWORDS,
     PINNED_MEMORY_TAGS, PINNED_MEMORY_SALIENCE_THRESHOLD, DEFAULT_MEMORY_SALIENCE,
 } from '../config/engineConfig';
+import { getTuning } from '../config/tuning';
 import { buildTraumaPromptBlock } from './traumaSystem';
 import { buildSkillPromptBlock } from './skillSystem';
 import { buildFactionPromptBlock } from './factionSystem';
@@ -42,6 +43,15 @@ const USE_HYBRID_RAG = true;
 
 export interface PromptResult {
     prompt: string;
+    /**
+     * v1.26: Campaign-static context — character identity, world tags, world
+     * rules. Changes rarely (hash-detected), so geminiClient folds it into
+     * the explicit-cached prefix alongside SYSTEM_INSTRUCTIONS instead of
+     * paying full price for it every turn.
+     */
+    staticContext: string;
+    /** v1.26: Char count per dynamic block — token-diet instrumentation. */
+    blockSizes: Record<string, number>;
     ragDebug: RAGResult['debugInfo'];
 }
 
@@ -290,26 +300,43 @@ const buildEntityContext = (entities: KnownEntity[], forceActiveIds: Set<string>
 };
 
 const buildBioStatus = (bio: BioMonitor | undefined, timeDisplay: string): string => {
-    const safeBio = bio || { 
-        metabolism: { calories: 80, hydration: 80, stamina: 100, libido: 5 }, 
+    const safeBio = bio || {
+        metabolism: { calories: 80, hydration: 80, stamina: 100, libido: 5 },
         pressures: { bladder: 0, bowels: 0, lactation: 0, seminal: 0 },
         timestamps: { lastSleep: 0, lastMeal: 0, lastOrgasm: 0 },
         modifiers: { calories: 1.0, hydration: 1.0, stamina: 1.0, lactation: 1.0 }
     };
 
+    // v1.26: Conditional verbosity. A nominal body doesn't need 15 lines of
+    // prompt every turn — one line carries the same information. The full
+    // block renders only when something is off-baseline and thus narratively
+    // load-bearing (hunger, thirst, fatigue, pressure, active modifiers).
+    const m = safeBio.metabolism;
+    const p = safeBio.pressures;
+    const mods = safeBio.modifiers;
+    const nominal =
+        m.calories >= 50 && m.hydration >= 50 && m.stamina >= 50 &&
+        p.bladder < 25 && p.bowels < 25 && p.lactation < 25 && (p.seminal ?? 0) < 25 &&
+        mods.calories === 1.0 && mods.hydration === 1.0 &&
+        mods.stamina === 1.0 && mods.lactation === 1.0;
+
+    if (nominal) {
+        return `[BIOLOGICAL STATUS] Time: ${timeDisplay} | Nominal — cal ${Math.round(m.calories)}/100, hyd ${Math.round(m.hydration)}/100, stam ${Math.round(m.stamina)}/100, mods ×1.0`;
+    }
+
     return `
 [BIOLOGICAL STATUS]
 Time: ${timeDisplay}
-Calories: ${Math.round(safeBio.metabolism.calories)}/100 ${safeBio.metabolism.calories < 40 ? "(HUNGRY)" : ""}
-Hydration: ${Math.round(safeBio.metabolism.hydration)}/100 ${safeBio.metabolism.hydration < 40 ? "(THIRSTY)" : ""}
-Stamina: ${Math.round(safeBio.metabolism.stamina)}/100
-Lactation Pressure: ${Math.round(safeBio.pressures.lactation)}%
+Calories: ${Math.round(m.calories)}/100 ${m.calories < 40 ? "(HUNGRY)" : ""}
+Hydration: ${Math.round(m.hydration)}/100 ${m.hydration < 40 ? "(THIRSTY)" : ""}
+Stamina: ${Math.round(m.stamina)}/100
+Bladder: ${Math.round(p.bladder)}% | Bowels: ${Math.round(p.bowels)}% | Lactation: ${Math.round(p.lactation)}%
 
 [ACTIVE MODIFIERS] (1.0 = Base)
-Calorie Burn: x${safeBio.modifiers.calories}
-Water Burn: x${safeBio.modifiers.hydration}
-Stamina Burn: x${safeBio.modifiers.stamina}
-Lactation Rate: x${safeBio.modifiers.lactation}
+Calorie Burn: x${mods.calories}
+Water Burn: x${mods.hydration}
+Stamina Burn: x${mods.stamina}
+Lactation Rate: x${mods.lactation}
     `.trim();
 };
 
@@ -340,7 +367,29 @@ The simulation is running standard narrative protocols.
     `.trim();
 };
 
-const buildCharacterBlock = (character: Character): string => {
+/**
+ * v1.26: Character identity — the campaign-STATIC half of the old character
+ * block (name, body, backstory, setting, languages). Changes rarely, so it
+ * travels in the cached system prefix instead of the per-turn prompt.
+ */
+const buildCharacterIdentityBlock = (character: Character): string => {
+    return `
+**Primary Directive: Player Character Identity**
+This is the player character. This data is ABSOLUTE TRUTH.
+- **Name:** ${character.name} (${character.gender}, ${character.race})
+- **Appearance:** ${character.appearance}
+- **Markings:** ${character.notableFeatures}
+- **Backstory:** ${character.backstory}
+- **Setting:** ${character.setting}
+- **Languages Known:** ${(character.languagesKnown && character.languagesKnown.length > 0) ? character.languagesKnown.join(', ') : 'Unspecified — treat as common tongue only; render foreign speech as unintelligible subtext.'}
+    `.trim();
+};
+
+/**
+ * v1.26: Character state — the volatile half (inventory, conditions,
+ * relationships, goals, skills). Stays in the per-turn dynamic prompt.
+ */
+const buildCharacterStateBlock = (character: Character): string => {
     // Partition conditions: long personality/trait paragraphs that leaked in from
     // character creation are separated from short mechanical game-states.
     // Traits go into the CHARACTER TRAITS section (read-only context for the AI).
@@ -354,17 +403,10 @@ const buildCharacterBlock = (character: Character): string => {
     const skillBlock = buildSkillPromptBlock(character.skills ?? []);
 
     return `
-**Primary Directive: Player Character Data**
-This is the player character. This data is ABSOLUTE TRUTH.
-- **Name:** ${character.name} (${character.gender}, ${character.race})
-- **Appearance:** ${character.appearance}
-- **Markings:** ${character.notableFeatures}
-- **Backstory:** ${character.backstory}
-- **Setting:** ${character.setting}
+**Player Character — Current State (identity canon is in the system preamble)**
 - **Inventory:** ${character.inventory.join(', ')}
 - **Active Conditions (mechanical game-states, may be updated):** ${activeConditions.length > 0 ? activeConditions.join(', ') : 'None'}${traitsSection}
 - **Relationships:** ${character.relationships.join(', ')}
-- **Languages Known:** ${(character.languagesKnown && character.languagesKnown.length > 0) ? character.languagesKnown.join(', ') : 'Unspecified — treat as common tongue only; render foreign speech as unintelligible subtext.'}
 - **Goals:** ${character.goals.join(', ')}${skillBlock}
     `.trim();
 };
@@ -563,7 +605,9 @@ const buildDreamSeed = (
     world: GameWorld,
     userInput: string
 ): string => {
-    if ((character.trauma ?? 0) < DREAM_TRAUMA_THRESHOLD) return '';
+    // v1.26: threshold is a runtime tone dial (Settings → Simulation Tuning).
+    const dreamThreshold = getTuning().dreamTraumaThreshold;
+    if ((character.trauma ?? 0) < dreamThreshold) return '';
     const input = userInput.toLowerCase();
     const isSleeping = SLEEP_KEYWORDS.some(kw => input.includes(kw));
     if (!isSleeping) return '';
@@ -578,7 +622,7 @@ const buildDreamSeed = (
 
     return `
 [DREAM SEED — NIGHTMARE TRIGGER ACTIVE]
-The player is sleeping. Character trauma is ${character.trauma}/100 (≥ ${DREAM_TRAUMA_THRESHOLD}).
+The player is sleeping. Character trauma is ${character.trauma}/100 (≥ ${dreamThreshold}).
 A dream MUST be rendered this turn, per Section 11 of the system instructions.
 
 Seed fragment (the dream should riff on, distort, or re-contextualize this memory — do NOT retell it literally):
@@ -693,7 +737,9 @@ export const constructGeminiPrompt = async (
   // 4. Build Instructions
   const bioStatus = buildBioStatus(character.bio, timeDisplay);
   const pacingInstruction = buildPacingInstruction(tension, currentMode, isDowntime);
-  const characterBlock = buildCharacterBlock(character);
+  // v1.26: identity (static, cached) vs state (volatile, per-turn)
+  const characterIdentityBlock = buildCharacterIdentityBlock(character);
+  const characterStateBlock = buildCharacterStateBlock(character);
 
   // v1.19: Section reminders removed from here — they are now appended as a
   // trailing suffix on the user message in useGeminiClient.ts → sendMessage()
@@ -797,6 +843,11 @@ This world is fundamentally: ${gameWorld.worldTags.join(', ')}.
   ));
 
   // 8. Assembly
+  // v1.26: STRICT INPUT RULES removed — every rule was already covered by
+  // the cached system instructions (§3 world_tick, §6 rolls, §12 condition
+  // dedup, §13 intent/time analysis). They were pure duplication, paid fresh
+  // every turn. Character identity, world tags, and world rules moved to
+  // `staticContext` (cached prefix) — see PromptResult.
   const promptString = `
 ${summaryBlock}
 ${sanitise(situationRecap)}
@@ -819,7 +870,7 @@ ${sanitise(bioStatus)}
 [HIDDEN_REGISTRY]
 ${sanitise(suppressionContext ? suppressionContext : '')}${sanitise(dormantHooksContext ? dormantHooksContext + '\n\n' : '')}${sanitise(gameWorld.hiddenRegistry)}
 
-${sanitise(characterBlock)}
+${sanitise(characterStateBlock)}
 
 ${sanitise(pacingInstruction)}
 
@@ -827,26 +878,38 @@ ${sanitise(traumaBlock)}
 
 ${sanitise(factionBlock)}
 
-${sanitise(worldTagsBlock ? `\n${worldTagsBlock}\n` : '')}
-
-${sanitise(worldRulesBlock ? `\n${worldRulesBlock}\n` : '')}
-
 ${sanitise(worldPressure ? `\n${worldPressure}\n` : '')}
 ${sanitise(encounterScopeLock ? `\n${encounterScopeLock}\n` : '')}
 ${sanitise(conditionLock ? `\n${conditionLock}\n` : '')}
-
-[STRICT INPUT RULES]
-1. If the user input is mundane ("I look around"), do NOT ask for a roll. Just describe.
-2. If the user input is social ("I talk to him"), do NOT ask for a Charisma roll. Write the dialogue.
-3. Analyze the user's intent in your 'thought_process' first.
-4. Estimate \`time_passed_minutes\` accurately.
-5. Check the current Conditions list before adding new ones. Do NOT add conditions that semantically duplicate existing ones (e.g., do not add "Broken Left Arm" if "Left Arm Fractured" already exists). If a condition worsens, REMOVE the old one and ADD the new severity.
-6. Populate \`world_tick\` with at least one NPC action. The world does not pause.
-
 `;
+
+  // v1.26: Campaign-static context → cached prefix (see geminiClient).
+  const staticContext = [
+      sanitise(characterIdentityBlock),
+      worldTagsBlock ? sanitise(worldTagsBlock) : '',
+      worldRulesBlock ? sanitise(worldRulesBlock) : '',
+  ].filter(Boolean).join('\n\n');
+
+  // v1.26: Per-block char counts — find the fat before cutting it.
+  const blockSizes: Record<string, number> = {
+      summary: summaryBlock.length,
+      recap: situationRecap.length,
+      memory: memoryContext.length,
+      lore: loreContext.length,
+      entities: knownEntitiesContext.length,
+      bio: bioStatus.length,
+      registry: (gameWorld.hiddenRegistry ?? '').length + suppressionContext.length + dormantHooksContext.length,
+      charState: characterStateBlock.length,
+      pressure: worldPressure.length,
+      trauma: traumaBlock.length,
+      faction: factionBlock.length,
+      static: staticContext.length,
+  };
 
   return {
       prompt: promptString,
+      staticContext,
+      blockSizes,
       ragDebug: debugInfo
   };
 };
