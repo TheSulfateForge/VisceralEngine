@@ -185,6 +185,19 @@ export interface KnownEntity {
      */
     voice_sample?: string;
 
+    /**
+     * v1.27: True for NPCs born from the WorldSeed (and anything else the
+     * engine should treat as protected canon). Canonical entities:
+     *   - can only die via an EXPLICIT death signal (full-name death phrase
+     *     in an entity update or narrative) — never via loose first-name/
+     *     death-keyword co-occurrence in lore;
+     *   - are always listed in the cache-stable WORLD ROSTER so the model
+     *     knows they exist even when fully dormant (zero per-turn cost);
+     *   - decay to 'missing' is harmless for them — the roster + mention
+     *     sentinel rehydrate them the moment they're referenced again.
+     */
+    canonical?: boolean;
+
     // --- v1.14: Entity Status Lifecycle ---
     status?: EntityStatus;
     lastSeenTurn?: number;

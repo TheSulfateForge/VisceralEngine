@@ -34,8 +34,12 @@ export function repairSeedPersonalities(
     );
     if (npc?.personality?.trim()) {
       repairedNames.push(e.name);
-      return { ...e, personality: npc.personality.trim() };
+      // v1.27: retrofit the canonical flag while we're here — pre-v1.27
+      // saves have seed NPCs without it, leaving them unprotected.
+      return { ...e, personality: npc.personality.trim(), canonical: true };
     }
+    // v1.27: even when personality is intact, backfill canonical for seed NPCs.
+    if (npc && !e.canonical) return { ...e, canonical: true };
     return e;
   });
   return { entities: out, repairedNames };
@@ -94,6 +98,7 @@ export function hydrateWorldSeed(seed: WorldSeed): Partial<GameWorld> {
     ledger: [],
     status: 'distant' as const,
     firstSeenTurn: 0,
+    canonical: true,  // v1.27: seed NPCs are protected canon (see KnownEntity.canonical)
   }));
 
   // Convert factions (uses Stream 6 types)

@@ -15,7 +15,14 @@ import {
     DOWNTIME_KEYWORDS, DENIAL_SUPPRESSION_THRESHOLD, getContextProfile,
     SLEEP_KEYWORDS,
     PINNED_MEMORY_TAGS, PINNED_MEMORY_SALIENCE_THRESHOLD, DEFAULT_MEMORY_SALIENCE,
+    SENTINEL_ENTITY_HYDRATION_LIMIT, SENTINEL_LORE_FORCE_LIMIT,
 } from '../config/engineConfig';
+import {
+    findNarrativeMentionedEntities,
+    findExactKeywordLore,
+    buildWorldRoster,
+    buildLoreTopicIndex,
+} from './mentionSentinel';
 import { getTuning } from '../config/tuning';
 import { buildTraumaPromptBlock } from './traumaSystem';
 import { buildSkillPromptBlock } from './skillSystem';
@@ -248,9 +255,16 @@ const buildEntityContext = (entities: KnownEntity[], forceActiveIds: Set<string>
     const isActive = (e: KnownEntity) =>
         forceActiveIds.has(e.id) || !e.status || e.status === 'present' || e.status === 'nearby';
 
-    // Only inject full context for present/nearby/just-named entities
-    const active = entities.filter(e => e.status !== 'dead' && isActive(e));
-    const distant = entities.filter(e => e.status === 'distant' && !forceActiveIds.has(e.id));
+    // Only inject full context for present/nearby/just-named entities.
+    // v1.27: 'missing' entities join the not-present bucket — previously they
+    // fell through EVERY bucket and vanished from the prompt even when RAG
+    // retrieved them as relevant (the "missing black hole" that got premade
+    // NPCs silently written out and then killed).
+    const active = entities.filter(e => e.status !== 'dead' && e.status !== 'retired' && isActive(e));
+    const notPresent = entities.filter(e =>
+        (e.status === 'distant' || e.status === 'missing' || e.status === 'retired') &&
+        !forceActiveIds.has(e.id)
+    );
     const dead = entities.filter(e => e.status === 'dead');
 
     let context = '';
@@ -282,12 +296,14 @@ const buildEntityContext = (entities: KnownEntity[], forceActiveIds: Set<string>
         context += `\n[ACTIVE ENTITIES — In Scene / Nearby]\n${activeStrings}`;
     }
 
-    // Distant entities get a compressed one-liner to save tokens
-    if (distant.length > 0) {
-        const distantSummary = distant.map(e =>
-            `${e.name} (${e.role}) — ${e.location} [${e.relationship_level}]`
+    // v1.27: RAG-relevant but not-present entities get a compressed one-liner.
+    // (These are only the handful retrieved as relevant this turn — the full
+    // living cast is carried by the cache-stable WORLD ROSTER instead.)
+    if (notPresent.length > 0) {
+        const summary = notPresent.map(e =>
+            `${e.name} (${e.role}) — ${e.status === 'missing' ? 'whereabouts unknown' : e.status === 'retired' ? 'retired from the story' : e.location} [${e.relationship_level}]`
         ).join('\n');
-        context += `\n\n[DISTANT ENTITIES — Known but not present]\n${distantSummary}`;
+        context += `\n\n[KNOWN — Relevant but not present]\n${summary}`;
     }
 
     // Dead entities get a single line so the AI knows not to reference them
@@ -711,14 +727,45 @@ export const constructGeminiPrompt = async (
     profile.memoryLimit,
     hybridCtx,
   );
-  const loreContext = buildLoreContext(relevantLore);
+  // ── v1.27: MENTION SENTINEL (zero AI tokens — pure code) ──────────────────
+  // The previous model turn may have name-dropped a dormant NPC (world_tick,
+  // rumor, offhand line). Hydrate them to full blocks THIS turn so the model
+  // sees canonical personality/voice before writing them again.
+  const lastModelTurnText = [...gameHistory.history]
+    .filter(m => m.role === Role.MODEL)
+    .slice(-1)[0]?.text ?? '';
+  const sentinelEntities = findNarrativeMentionedEntities(
+    lastModelTurnText,
+    gameWorld.knownEntities || [],
+    new Set(relevantEntities.map(e => e.id)),
+    SENTINEL_ENTITY_HYDRATION_LIMIT,
+  );
+  const allRelevantEntities = [...relevantEntities, ...sentinelEntities];
+
+  // Exact lore keyword hits (player input or last exchange) force-inject
+  // their entries past the RAG similarity threshold and limit.
+  const lastUserTurnText = [...gameHistory.history]
+    .filter(m => m.role === Role.USER)
+    .slice(-1)[0]?.text ?? '';
+  const forcedLore = findExactKeywordLore(
+    `${userInput} ${lastUserTurnText} ${lastModelTurnText}`,
+    gameWorld.lore || [],
+    new Set(relevantLore.map(l => l.id)),
+    SENTINEL_LORE_FORCE_LIMIT,
+  );
+  const allRelevantLore = [...relevantLore, ...forcedLore];
+  // ──────────────────────────────────────────────────────────────────────────
+
+  const loreContext = buildLoreContext(allRelevantLore);
   // v1.23: Entities the player just named must render with full personality even
   // if still 'distant' (first interaction with a seed NPC). Force them active.
+  // v1.27: sentinel-detected narrative mentions are forced active too.
   const forceActiveEntityIds = new Set(
     findAliasMatchedEntities(userInput, gameHistory.history, gameWorld.knownEntities || [])
       .map(e => e.id)
   );
-  const knownEntitiesContext = buildEntityContext(relevantEntities, forceActiveEntityIds);
+  for (const e of sentinelEntities) forceActiveEntityIds.add(e.id);
+  const knownEntitiesContext = buildEntityContext(allRelevantEntities, forceActiveEntityIds);
 
   // 3. Narrative Intent & State
   const lowerInput = userInput.toLowerCase();
@@ -883,11 +930,23 @@ ${sanitise(encounterScopeLock ? `\n${encounterScopeLock}\n` : '')}
 ${sanitise(conditionLock ? `\n${conditionLock}\n` : '')}
 `;
 
+  // v1.27: Cache-stable world knowledge index (Tier 1 of the entity/lore
+  // tiering). Names+roles of EVERY living NPC and every lore keyword, sorted
+  // and free of per-turn state, so the block is byte-identical between
+  // membership changes and rides the implicit prefix cache. This is what
+  // lets the world hold an unbounded cast: the model always knows who
+  // exists (and is told not to kill or replace them) at ~4 tokens a head,
+  // while full records surface on demand via RAG + the mention sentinel.
+  const worldRosterBlock = buildWorldRoster(gameWorld.knownEntities || []);
+  const loreIndexBlock = buildLoreTopicIndex(gameWorld.lore || []);
+
   // v1.26: Campaign-static context → cached prefix (see geminiClient).
   const staticContext = [
       sanitise(characterIdentityBlock),
       worldTagsBlock ? sanitise(worldTagsBlock) : '',
       worldRulesBlock ? sanitise(worldRulesBlock) : '',
+      worldRosterBlock ? sanitise(worldRosterBlock) : '',
+      loreIndexBlock ? sanitise(loreIndexBlock) : '',
   ].filter(Boolean).join('\n\n');
 
   // v1.26: Per-block char counts — find the fat before cutting it.
@@ -904,6 +963,8 @@ ${sanitise(conditionLock ? `\n${conditionLock}\n` : '')}
       trauma: traumaBlock.length,
       faction: factionBlock.length,
       static: staticContext.length,
+      roster: worldRosterBlock.length,     // v1.27 (inside static, cached)
+      loreIndex: loreIndexBlock.length,    // v1.27 (inside static, cached)
   };
 
   return {

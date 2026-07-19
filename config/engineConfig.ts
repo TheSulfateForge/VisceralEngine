@@ -233,6 +233,18 @@ export const RAG_LORE_LIMIT = 8;
 export const RAG_ENTITY_LIMIT = 6;
 
 // ---------------------------------------------------------------------------
+// v1.27: Mention Sentinel + World Roster (dormant-tier NPC/lore recall)
+// ---------------------------------------------------------------------------
+
+/** Max dormant entities the sentinel may hydrate to full blocks per turn.
+ *  Caps token blowup when the model name-drops half the cast in one scene. */
+export const SENTINEL_ENTITY_HYDRATION_LIMIT = 4;
+
+/** Max lore entries an exact keyword hit may force-inject per turn,
+ *  over and above the RAG-selected set. */
+export const SENTINEL_LORE_FORCE_LIMIT = 3;
+
+// ---------------------------------------------------------------------------
 // Summarization
 // ---------------------------------------------------------------------------
 

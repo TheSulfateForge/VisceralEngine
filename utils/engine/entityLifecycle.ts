@@ -1,10 +1,45 @@
 import { KnownEntity, WorldTickAction, NPCInteraction, WorldTickEvent, DebugLogEntry } from '../../types';
 import { ENTITY_NEARBY_DECAY_TURNS, ENTITY_DISTANT_DECAY_TURNS } from '../../config/engineConfig';
+import { ENTITY_EXTRACTION_BLACKLIST } from './threatPipeline';
 
 /** Helper to match names loosely */
 const nameMatch = (a: string, b: string): boolean => {
     return a.toLowerCase().includes(b.toLowerCase()) || b.toLowerCase().includes(a.toLowerCase());
 };
+
+// ────────────────────────────────────────────────────────────────────────────
+// v1.27: Token-aware name mention detection.
+// Narrative rarely uses an NPC's full registry name ("Guildmaster Halric
+// Vance") — it says "Halric". The old full-string `includes` check missed
+// these, so on-screen NPCs still decayed toward missing. Tokens must be ≥4
+// chars and non-blacklisted to keep false positives down.
+// ────────────────────────────────────────────────────────────────────────────
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const significantTokens = (name: string): string[] =>
+    name
+        .replace(/\([^)]*\)/g, '')
+        .split(/\s+/)
+        .map(p => p.toLowerCase().trim())
+        .filter(p => p.length >= 4 && !ENTITY_EXTRACTION_BLACKLIST.has(p));
+
+/** Index of the first mention of this entity in `textLower` (full name
+ *  preferred, else any significant token as a whole word). -1 if absent. */
+export const nameMentionIndex = (textLower: string, name: string): number => {
+    const full = name.toLowerCase().trim();
+    if (full) {
+        const idx = textLower.indexOf(full);
+        if (idx >= 0) return idx;
+    }
+    for (const tok of significantTokens(name)) {
+        const m = new RegExp(`\\b${escapeRe(tok)}\\b`).exec(textLower);
+        if (m) return m.index;
+    }
+    return -1;
+};
+
+export const nameMentionedIn = (textLower: string, name: string): boolean =>
+    nameMentionIndex(textLower, name) >= 0;
 
 /** Called every turn after entity updates are merged. Updates lastSeenTurn
  *  for entities referenced in this turn's narrative, npc_actions, or
@@ -19,36 +54,36 @@ export const updateEntityPresence = (
     debugLogs: DebugLogEntry[]
 ): KnownEntity[] => {
     const narrativeLower = narrative.toLowerCase();
-    
+
     return entities.map(entity => {
-        let seenThisTurn = false;
-        
-        // Check narrative
-        if (narrativeLower.includes(entity.name.toLowerCase())) {
-            seenThisTurn = true;
-        }
-        
-        // Check NPC actions
-        if (!seenThisTurn && npcActions.some(a => nameMatch(a.npc_name, entity.name))) {
-            seenThisTurn = true;
-        }
-        
-        // Check NPC interaction
-        if (!seenThisTurn && npcInteraction && nameMatch(npcInteraction.speaker, entity.name)) {
-            seenThisTurn = true;
-        }
-        
-        if (seenThisTurn) {
+        if (entity.status === 'dead' || entity.status === 'retired') return entity;
+
+        // v1.27: ACTIVE participation (acted or spoke) vs mere MENTION.
+        // Acting/speaking promotes to present at the player's location, as
+        // before. A narrative mention alone refreshes lastSeenTurn — halting
+        // decay — but does NOT teleport a distant/missing NPC to the player
+        // ("she thought of Halric" must not relocate Halric). Token-aware
+        // matching (v1.27) means first-name references now count as seen.
+        const activeThisTurn =
+            npcActions.some(a => nameMatch(a.npc_name, entity.name)) ||
+            (!!npcInteraction && nameMatch(npcInteraction.speaker, entity.name));
+        const mentionedThisTurn = activeThisTurn || nameMentionedIn(narrativeLower, entity.name);
+
+        if (activeThisTurn || (mentionedThisTurn && (!entity.status || entity.status === 'present' || entity.status === 'nearby'))) {
             return {
                 ...entity,
                 lastSeenTurn: currentTurn,
-                // If they were missing/distant/nearby, they are now present
-                status: (entity.status === 'dead' || entity.status === 'retired') ? entity.status : 'present',
+                status: 'present' as const,
                 location: playerLocation || entity.location,
                 statusChangedTurn: entity.status !== 'present' ? currentTurn : entity.statusChangedTurn
             };
         }
-        
+
+        if (mentionedThisTurn) {
+            // Distant/missing but referenced — keep them warm, keep them put.
+            return { ...entity, lastSeenTurn: currentTurn };
+        }
+
         return entity;
     });
 };
@@ -125,47 +160,59 @@ export const detectEntityDeaths = (
     debugLogs: DebugLogEntry[]
 ): KnownEntity[] => {
     const narrativeLower = narrative.toLowerCase();
-    const deathKeywords = ['dies', 'died', 'killed', 'slain', 'dead', 'corpse', 'perishes', 'perished', 'executed'];
-    
+    // v1.27: EXPLICIT death phrases only. The old bare-keyword list
+    // ('dead', 'corpse', 'killed'...) fired on impressions like "shaken
+    // after finding the corpse" or "dead tired" — a primary cause of
+    // premade NPCs being randomly killed at scale. Every phrase below
+    // asserts a death, not proximity to one.
+    const DEATH_UPDATE_PHRASES = [
+        'is dead', 'was killed', 'killed by', 'was slain', 'slain by',
+        'died', 'dies', 'found dead', 'was executed', 'executed by',
+        'perished', 'murdered', 'assassinated', 'fell in battle', 'bled out'
+    ];
+
     return entities.map(entity => {
         if (entity.status === 'dead' || entity.status === 'retired') return entity;
-        
-        const nameLower = entity.name.toLowerCase();
+
         let isDead = false;
         let reason = '';
-        
+
         // Check updates
         const update = entityUpdates?.find(u => nameMatch(u.name, entity.name));
         if (update) {
             const impressionLower = update.impression.toLowerCase();
-            if (deathKeywords.some(k => impressionLower.includes(k))) {
+            if (DEATH_UPDATE_PHRASES.some(k => impressionLower.includes(k))) {
                 isDead = true;
                 reason = `Reported dead in entity update: ${update.impression}`;
             } else if (impressionLower.includes('retired') || impressionLower.includes('departed permanently')) {
                 return { ...entity, status: 'retired', exitReason: update.impression };
             }
         }
-        
-        // Check narrative for strong death association
-        if (!isDead && narrativeLower.includes(nameLower)) {
-            // Very basic proximity check for death keywords near the name
-            const nameIndex = narrativeLower.indexOf(nameLower);
-            const windowStart = Math.max(0, nameIndex - 50);
-            const windowEnd = Math.min(narrativeLower.length, nameIndex + nameLower.length + 50);
-            const contextWindow = narrativeLower.substring(windowStart, windowEnd);
-            
-            if (deathKeywords.some(k => contextWindow.includes(k))) {
-                // We don't auto-kill just based on narrative proximity to avoid false positives 
-                // (e.g. "John saw the dead body"). We rely more on the AI's entity updates or explicit combat results.
-                // But we can flag it for review or if it's very explicit.
-                // For now, let's trust the entity updates more, but if the AI explicitly says "[Name] is dead"
-                if (contextWindow.includes(`${nameLower} is dead`) || contextWindow.includes(`killed ${nameLower}`)) {
-                    isDead = true;
-                    reason = 'Confirmed kill in narrative.';
+
+        // Check narrative for an EXPLICIT kill statement. v1.27: token-aware —
+        // "killed Halric" now matches "Guildmaster Halric Vance" — but the
+        // phrase must directly bind subject to death within the same clause.
+        if (!isDead) {
+            const mentionIdx = nameMentionIndex(narrativeLower, entity.name);
+            if (mentionIdx >= 0) {
+                const nameLower = entity.name.toLowerCase();
+                const candidates = [nameLower, ...significantTokens(entity.name)];
+                for (const t of candidates) {
+                    const safe = escapeRe(t);
+                    const explicit = new RegExp(
+                        `\\b${safe}\\b[^.!?\\n]{0,40}\\b(?:is dead|was killed|was slain|lies dead|dies|died|perishe[sd]|was executed|bleeds? out)\\b` +
+                        `|\\b(?:killed|slew|slays|executed|murdered|cut[s]? down|struck down)\\b[^.!?\\n]{0,40}\\b${safe}\\b`,
+                        'i'
+                    );
+                    if (explicit.test(narrativeLower)) {
+                        isDead = true;
+                        reason = 'Confirmed kill in narrative.';
+                        break;
+                    }
                 }
             }
         }
-        
+
         if (isDead) {
             debugLogs.push({
                 timestamp: new Date().toISOString(),
@@ -212,32 +259,53 @@ export const detectLoreDeaths = (
     lore: { keyword: string; content: string }[],
     debugLogs: DebugLogEntry[]
 ): KnownEntity[] => {
+    // v1.27: 'destroyed' removed — it fired on places and objects ("the
+    // eastern bridge was destroyed") in entries that merely mentioned an
+    // NPC, killing them. Every phrase below is person-shaped.
     const DEATH_PHRASES = [
         'beaten to death', 'killed by', 'was killed', 'was slain',
         'died', 'found dead', 'executed', 'perished',
         'murdered', 'assassinated', 'fell in battle',
-        'mortally wounded', 'bled out', 'destroyed'
+        'mortally wounded', 'bled out'
     ];
+
+    /** v1.27: Death phrase must sit within ±120 chars of the NAME MENTION,
+     *  not merely anywhere in the entry. The old anywhere-in-entry check
+     *  was the single biggest source of random premade-NPC deaths: any
+     *  lore entry containing both a first name and a death phrase —
+     *  about anyone — killed that NPC. */
+    const PROXIMITY = 120;
 
     return entities.map(entity => {
         if (entity.status === 'dead' || entity.status === 'retired') return entity;
 
         const nameLower = entity.name.toLowerCase();
-        // Check first name for matching (e.g. "Vaelen" matches "Mage-Inquisitor Vaelen")
-        const firstName = nameLower.split(/[\s\-(']/)[0];
 
         for (const entry of lore) {
             const contentLower = entry.content.toLowerCase();
             const keywordLower = entry.keyword.toLowerCase();
 
-            // Entity must be referenced in keyword OR content
-            const nameInKeyword = keywordLower.includes(firstName) && firstName.length >= 4;
-            const nameInContent = contentLower.includes(nameLower) || contentLower.includes(firstName);
+            const contentIdx = nameMentionIndex(contentLower, entity.name);
+            const inKeyword = nameMentionedIn(keywordLower, entity.name);
 
-            if (!nameInKeyword && !nameInContent) continue;
+            if (contentIdx < 0 && !inKeyword) continue;
 
-            // Check for death phrases
-            const hasDeath = DEATH_PHRASES.some(phrase => contentLower.includes(phrase));
+            let hasDeath = false;
+            if (contentIdx >= 0) {
+                const win = contentLower.substring(
+                    Math.max(0, contentIdx - PROXIMITY),
+                    Math.min(contentLower.length, contentIdx + nameLower.length + PROXIMITY)
+                );
+                hasDeath = DEATH_PHRASES.some(phrase => win.includes(phrase));
+            } else {
+                // Name appears only in the keyword — the entry is ABOUT them,
+                // so a death phrase anywhere in the body counts... unless the
+                // entity is canonical, in which case we demand their name in
+                // the content too. Seed NPCs don't die on inference.
+                hasDeath = !entity.canonical &&
+                    DEATH_PHRASES.some(phrase => contentLower.includes(phrase));
+            }
+
             if (hasDeath) {
                 debugLogs.push({
                     timestamp: new Date().toISOString(),
