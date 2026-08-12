@@ -530,6 +530,113 @@ The player must be able to name the reason. If you cannot point at the
 specific ledger entry that justifies what the ally just did, the ally
 does not do it.`,
 
+    /**
+     * v1.29. The player explicitly rejected an NPC's reading of them.
+     *
+     * In the reviewed save the player corrected the same NPC twice — "you've
+     * gotten about three steps ahead of me", then "Princess, you're doing it
+     * again" — and both corrections were absorbed and re-escalated inside the
+     * same paragraph. Nothing in the engine recorded that a reading had been
+     * offered and refused, so each turn re-derived the same stance.
+     */
+    PLAYER_CORRECTION_PROTOCOL: `[SYSTEM REMINDER: THE PLAYER JUST CORRECTED YOU — v1.29]
+The player's input this turn explicitly rejects how an NPC has been reading
+them. See the [CORRECTION] line below for what they actually said.
+
+THIS IS NOT A CHALLENGE TO OVERCOME. It is the player telling you your
+characterisation of them is wrong. They are right. You do not get to be
+right about a player's own character over their objection.
+
+REQUIRED THIS TURN:
+- The NPC ACCEPTS the correction, plainly, in dialogue or in their behaviour.
+- The rejected framing is DROPPED. Not softened, not restated more gently,
+  not conceded-then-reasserted in the next sentence.
+- The NPC's next line moves to different ground — a new topic, an ordinary
+  question, a silence, their own concerns.
+
+FORBIDDEN THIS TURN:
+- "A fair correction… and yet you are still [the same framing]."
+- Conceding the specific claim while keeping its emotional weight
+  ("You're right, you're not a revolutionary — you're something far more
+  dangerous.") This is the failure mode. It is the same inflation wearing
+  an apology.
+- Reading the correction ITSELF as evidence for the framing — modesty as
+  proof of hidden greatness, denial as proof of the secret.
+- Any synonym-swap that preserves the magnitude: dangerous -> formidable ->
+  remarkable -> unlike anyone else in this city.
+
+An NPC who has been over-reading the player and gets called on it should
+react like a person who has just been told they misjudged someone:
+mildly embarrassed, curious, recalibrating. Not vindicated.`,
+
+    /**
+     * v1.29. Reaction magnitude must match the input that caused it.
+     */
+    PROPORTIONALITY: `[SYSTEM REMINDER: PROPORTIONALITY — MATCH THE INPUT — v1.29]
+Weigh what the player ACTUALLY said, then respond at that weight.
+
+An opinion is an opinion. A hypothetical is a hypothetical. An observation
+about the world is not a plan to change it, and a conditional is not a
+commitment:
+
+  "I'd change X if I could"      -> an opinion. Not a manifesto.
+  "Someone should do something"  -> a complaint. Not a recruitment.
+  "I noticed X is unfair"        -> an observation. Not a movement.
+  "If I were in power, I'd Y"    -> a hypothetical. Not a bid for power.
+  "I help people when I can"     -> a habit. Not a crusade.
+
+CALIBRATION TEST — before writing an NPC's reaction, ask:
+"If a stranger said this to me over coffee, would I conclude they were
+dangerous, chosen, extraordinary, or about to reshape the city?"
+If no, your NPC does not conclude that either.
+
+BANNED UNLESS THE PLAYER HAS EARNED IT ON SCREEN:
+- Telling the player they are the only one who sees clearly, the only
+  honest person here, the most dangerous person in the room, a threat to
+  the established order, or a foundation rather than a ladder-climber.
+- Treating an ordinary remark as a revelation about the player's nature.
+- Escalating the stakes of a topic the player raised casually so that the
+  scene becomes about the player's significance rather than the topic.
+
+"Earned on screen" means the player has actually done the thing, in play,
+where this NPC could observe it. Stated opinions are not deeds.
+
+Ordinary people say interesting things over coffee all the time without
+being extraordinary. Let the player be a person having a conversation.`,
+
+    /**
+     * v1.29. Physical contact advances only on player reciprocation.
+     */
+    PHYSICAL_RECIPROCATION: `[SYSTEM REMINDER: PHYSICAL CONTACT — ADVANCE ONLY ON RECIPROCATION — v1.29]
+An NPC has already initiated physical contact with the player. See the
+[CONTACT LEVEL] line below for where the scene currently sits.
+
+THE RULE: NPC-initiated physical contact may HOLD at the current level, or
+RECEDE. It may NOT advance to the next rung unless the player reciprocated
+or invited it in their most recent input — the player being the actor, not
+the recipient.
+
+The ladder: proximity -> incidental contact -> sustained contact -> intimate.
+
+The player not objecting is NOT reciprocation. Neither is the player
+continuing the conversation, being polite, being warm, or failing to
+mention the contact at all.
+
+If the player did not reciprocate, this turn's options are:
+- The NPC maintains the same contact without deepening it.
+- The NPC withdraws — the moment passes, they return to their own space.
+- No physical contact at all this turn. This is always available and is
+  frequently the honest choice.
+
+This governs ESCALATION, not warmth. An NPC can be affectionate, flirtatious,
+and openly interested while keeping their hands where they were. What they
+cannot do is advance the physical scene on their own authority, turn after
+turn, while the player is talking about something else.
+
+If the player DOES reciprocate, respond to it fully and at the register §10
+requires. This reminder never asks you to be coy about what the player
+actually initiated.`,
+
     CANONICAL_VOICE_LOCK: `[SYSTEM REMINDER: CANONICAL VOICE LOCK — RESTATE BEFORE WRITING]
 At least one named entity in this scene has a CANONICAL personality field.
 Their canonical traits are authoritative — they outrank any social-class,
@@ -543,13 +650,27 @@ follow this exact form:
      This turn those traits manifest as: [concrete action / word choice /
      subtext / register]."
 
-If the character's personality is dual-layer (Performed surface / Actual
-core with trigger condition — see §10 Conditional Personalities), the
-restatement must additionally specify:
+If — and ONLY if — the character's personality record contains an
+EXPLICIT trigger clause of the form "(surfaces when [condition])" (see
+§10 Conditional Personalities), the restatement must additionally specify:
 
-    "Trigger condition: [the condition]. Status this turn: [active /
-     inactive]. Rendering [surface convincingly with subtext bleed-through
-     / actual core at full register]."
+    "Trigger condition: [the condition, quoted from the record]. Status
+     this turn: [active / inactive]. Rendering [surface convincingly with
+     subtext bleed-through / actual core at full register]."
+
+v1.29 — DO NOT INVENT A TRIGGER. If the personality record names layers
+but states no trigger condition, you have a layered CHARACTER, not a
+conditional one. Skip the trigger declaration entirely and render them as
+a whole person: the layers are depth, not a switch. A record that lists a
+performed surface and an actual core without saying what flips them is
+describing someone with an inner life, which is most people.
+
+Inventing a trigger is a known failure with a known consequence: the
+invented condition is almost always something permanently true of the
+current scene ("being in a private, trusted conversation"), which pins the
+character into core-surfacing mode for the entire session and turns every
+exchange into a revelation. If no trigger is written down, there is no
+trigger.
 
 NEGATIVE EXAMPLES (these are the substitutions you must NOT make):
 - Canonical = "predatory, exploitative, commodifying" → rendered as
@@ -680,6 +801,13 @@ export const getSectionReminders = (
     // of switching on threat behaviour for everyone sharing the scene.
     hostileEntityNames: string[] = [],
     strainedAllyNames: string[] = [],
+    // v1.29: player-framing signals. Previously the engine had no
+    // representation of the player pushing back on how an NPC read them, or of
+    // whether the player had reciprocated physical contact.
+    playerCorrected: boolean = false,
+    correctionMarkers: string[] = [],
+    playerReciprocated: boolean = false,
+    contactLevel: string = 'none',
 ): string[] => {
     const reminders: string[] = [];
 
@@ -690,6 +818,36 @@ export const getSectionReminders = (
     if (dreamSeedActive) {
         reminders.push(REMINDERS.DREAM_PROTOCOL);
         return reminders; // Dream turns are self-contained — no other reminders apply.
+    }
+
+    // -----------------------------------------------------------------------
+    // BAND 0.5: Player pushback (v1.29) — outranks everything below.
+    //
+    // When the player explicitly rejects an NPC's reading of them, that is the
+    // most important fact about this turn. It was previously invisible to the
+    // engine entirely, so a correction could be absorbed and re-escalated in
+    // the same paragraph, repeatedly, with nothing to stop it.
+    // -----------------------------------------------------------------------
+    if (playerCorrected) {
+        reminders.push(
+            `${REMINDERS.PLAYER_CORRECTION_PROTOCOL}\n\n[CORRECTION] The player's words: ${correctionMarkers.map(m => `"${m}"`).join(', ')}`
+        );
+        // Proportionality is the rule the correction is invoking — pair them.
+        reminders.push(REMINDERS.PROPORTIONALITY);
+        return reminders;
+    }
+
+    // -----------------------------------------------------------------------
+    // BAND 0.6: Physical escalation gate (v1.29).
+    //
+    // Contact is already on the table and the player did NOT reciprocate this
+    // turn. Fires before the ordinary bands because an unreciprocated advance
+    // repeating turn after turn is the failure mode being corrected.
+    // -----------------------------------------------------------------------
+    if (contactLevel !== 'none' && !playerReciprocated) {
+        reminders.push(
+            `${REMINDERS.PHYSICAL_RECIPROCATION}\n\n[CONTACT LEVEL] ${contactLevel} — the player did not reciprocate or invite escalation this turn. Hold here or withdraw.`
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -798,7 +956,13 @@ export const getSectionReminders = (
     // -----------------------------------------------------------------------
     let rotatingReminder: string | null = null;
 
-    if (emergingThreatsCount > 0 && turnCount % 2 === 0) {
+    // v1.29: calm social beats are where reaction inflation happens — a quiet
+    // conversation with nothing at stake is exactly the context in which an
+    // offhand remark gets read as a manifesto. Fire proportionality on a
+    // cadence there, ahead of the general rotation.
+    if (mode === 'SOCIAL' && tensionLevel < 40 && turnCount % 3 === 0) {
+        rotatingReminder = REMINDERS.PROPORTIONALITY;
+    } else if (emergingThreatsCount > 0 && turnCount % 2 === 0) {
         rotatingReminder = REMINDERS.LOGISTICS_CHECK;
     } else if (turnCount % 4 === 0) {
         rotatingReminder = REMINDERS.VOCABULARY;

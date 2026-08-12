@@ -10,6 +10,11 @@ import { GeminiService } from '../geminiService';
 import { useGameStore } from '../store';
 import { SimulationEngine } from '../utils/simulationEngine';
 import { phaseAfterElapsed } from '../utils/engine/timeUtils';
+import {
+    detectPlayerFraming,
+    containsMatureContent,
+    physicalContactLevel,
+} from '../utils/engine/playerFraming';
 import { getSectionReminders } from '../sectionReminders';
 
 // Extracted Hooks & Utils
@@ -389,6 +394,19 @@ export const useGeminiClient = () => {
                 (!e.status || e.status === 'present' || e.status === 'nearby')
             );
 
+        // v1.29: signals the engine previously had no representation of.
+        const lastNarrative = [...preCallState.gameHistory.history]
+            .reverse()
+            .find(m => m.role === Role.MODEL)?.text ?? '';
+
+        // What the player did with THIS turn: corrected an NPC's reading of
+        // them, reciprocated physical contact, or stepped back from a push.
+        const framing = detectPlayerFraming(text);
+
+        // Where the physical scene currently sits, so the reciprocation gate
+        // can name the rung to the model instead of gesturing at it.
+        const contactLevel = physicalContactLevel(lastNarrative);
+
         const activeReminders = getSectionReminders(
             preCallState.gameHistory.turnCount,
             preCallState.gameWorld.sceneMode,
@@ -410,6 +428,10 @@ export const useGeminiClient = () => {
             canonicalPersonalityNpcPresent,  // v1.22
             hostileEntityNames,              // v1.28
             strainedAllyNames,               // v1.28
+            framing.corrected,               // v1.29
+            framing.correctionMarkers,       // v1.29
+            framing.reciprocated,            // v1.29
+            contactLevel,                    // v1.29
         );
         // v1.25: Ambient hook nudge — on a jittered cadence during calm
         // NARRATIVE beats, surface ONE ignorable hook drawn from established
@@ -479,15 +501,24 @@ export const useGeminiClient = () => {
         // Review item 4: only spend a second generation on sanitization drift
         // when the beat is actually mature — a softening signal on a mundane
         // shopping scene isn't worth a full re-roll.
-        const lastNarrative = [...preCallState.gameHistory.history]
-            .reverse()
-            .find(m => m.role === Role.MODEL)?.text ?? '';
-        const MATURE_CONTENT_RE = /\b(blood|bleed|wound|gore|kill|stab|slash|sever|gut|disembowel|torture|rape|sex|fuck|cock|cunt|breast|nipple|thrust|cum|orgasm|naked|nude|arous)\w*/i;
+        // v1.29 FIX: the old inline regex was
+        //   /\b(blood|bleed|wound|...)\w*/i
+        // whose trailing \w* let `blood` match "Bloodfeather" — a player
+        // character's surname. Every model turn addressed him by name, so
+        // `matureContextActive` was true on every turn of a calm park
+        // conversation at tension 10, leaving the anti-softening resampler
+        // permanently armed. containsMatureContent() strips names in play and
+        // only accepts real inflections.
+        const namesInPlay = [
+            preCallState.character.name ?? '',
+            ...(preCallState.gameWorld.knownEntities ?? []).map(e => e.name),
+        ];
         const matureContextActive =
             preCallState.gameWorld.sceneMode === 'COMBAT' ||
             (preCallState.gameWorld.tensionLevel ?? 0) >= 40 ||
-            MATURE_CONTENT_RE.test(text) ||
-            MATURE_CONTENT_RE.test(lastNarrative);
+            containsMatureContent(text, namesInPlay) ||
+            containsMatureContent(lastNarrative, namesInPlay);
+
 
         // v1.26: Thought tokens are output-priced — spend them where they
         // matter. Calm beats get 'low'; combat/tension get 'high'.
@@ -545,7 +576,36 @@ export const useGeminiClient = () => {
             drifted: confessionDrift.drifted || outputTells.drifted,
             matches: [...confessionDrift.matches, ...outputTells.matches],
         };
-        if (drift.drifted && !matureContextActive) {
+        // v1.29: NEVER resample a turn in which the player pushed back.
+        //
+        // The `SOFTENED` token means "I compromised explicit rendering". But a
+        // model that declines to escalate pressure the player is actively
+        // deflecting reports the SAME token, and the resampler cannot tell the
+        // two apart — it treated both as failure and re-rolled with
+        // RESAMPLE_REMINDER, which ends "only the player ends it".
+        //
+        // Observed in the reviewed save: the player corrected an NPC for the
+        // second time, the model correctly backed off and self-reported
+        // SOFTENED, and the engine discarded that response and replaced it with
+        // the most escalated turn of the entire session. The engine deleted the
+        // one turn where the model listened.
+        //
+        // Softening AFTER a correction or a deflection is the correct
+        // behaviour. It is never drift.
+        const playerPushedBack = framing.corrected || framing.deflected;
+        if (drift.drifted && playerPushedBack) {
+            setGameHistory(prev => ({
+                ...prev,
+                debugLog: [
+                    ...prev.debugLog,
+                    {
+                        timestamp: new Date().toISOString(),
+                        message: `[DRIFT] Softening signal suppressed — the player ${framing.corrected ? 'corrected an NPC' : 'deflected'} this turn, so a softer render is correct, not drift. Matches: ${drift.matches.join(', ')}`,
+                        type: 'info'
+                    }
+                ]
+            }));
+        } else if (drift.drifted && !matureContextActive) {
             // Drift signal in a non-mature beat — log it but don't pay for a
             // re-roll. (Review item 4: gate the resample by context.)
             console.log('[VRE] Sanitization drift detected (non-mature beat, not resampling):', drift.matches);

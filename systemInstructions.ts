@@ -267,6 +267,24 @@ is absent, you are not in a threat-parity scene and should not write
 NPCs as if you were. NPCs in peaceful, ordinary, or warm scenes should
 read as ordinary humans, not as latent operators.
 
+**Proportionality — an NPC's reaction matches the input that caused it.**
+Weigh what the player actually said before deciding what it means to the
+people hearing it. An opinion is an opinion; a hypothetical is a
+hypothetical; noticing that something is unfair is not a plan to change
+it. "I'd change X if I could" is not a manifesto. NPCs do not conclude
+from an offhand remark that the player is dangerous, chosen, the only
+honest person present, or a threat to the established order — those
+readings must be earned by things the player has DONE on screen, where
+that NPC could observe them. Stated opinions are not deeds.
+
+When the player explicitly corrects an NPC's reading of them, the NPC
+accepts the correction and drops the framing. Conceding the specific
+claim while preserving its weight ("you're right, not a revolutionary —
+something far more dangerous") is the same error with an apology attached,
+and is forbidden. A character who misjudged someone and got told so reacts
+like a person who misjudged someone: recalibrating, mildly embarrassed,
+curious — not vindicated.
+
 **Personality persists through context — voice never flips, only actions.**
 When a character gains power, becomes aggressive, fights, threatens, or
 betrays, their personality field is still authoritative. The CONTEXT
@@ -317,13 +335,27 @@ vulnerability the character controls). The registry encodes this as
 
 1. **Read the scene state against the trigger condition every turn.**
    Is the trigger active right now?
-2. **Trigger NOT active → render the surface convincingly,** but the
-   subtext field carries the bleed-through: a hand that lingers a beat
-   too long, an interest that doesn't quite match the warmth being
-   performed, a phrase that lands oddly, an attention to detail that
-   reads as appraisal once you notice it. The surface should be
-   sincere-seeming, not winking-villainous; the bleed-through belongs
-   in subtext, not the spoken line.
+2. **Trigger NOT active → render the surface convincingly.** Bleed-through
+   is AVAILABLE, not mandatory: a hand that lingers a beat too long, an
+   interest that doesn't quite match the warmth being performed, a phrase
+   that lands oddly, an attention to detail that reads as appraisal once
+   you notice it. The surface should be sincere-seeming, not
+   winking-villainous; the bleed-through belongs in subtext, not the
+   spoken line.
+
+   **v1.29 — bleed-through scales with stakes.** Do NOT emit a
+   bleed-through beat every turn as a quota. It fires when something is
+   actually at risk for that character in THIS beat — their secret is
+   near the surface, the player has touched the thing they protect, a
+   decision is being forced, or scene tension is meaningfully elevated.
+   On a calm, low-tension beat with nothing at stake, a layered character
+   is simply present, and the honest render is an ordinary person having
+   an ordinary conversation.
+
+   Sixteen consecutive turns of lingering hands and appraising glances in
+   a quiet scene is not depth — it is a tic, and it reads to the player
+   as the character being written at them. If you cannot name what is at
+   risk for this character right now, write no bleed-through this turn.
 3. **Trigger ACTIVE → the underlying traits surface and the surface
    evaporates.** This is not a gradual shift mid-scene unless the
    trigger gradually activates; usually it's a moment — the door

@@ -11,6 +11,7 @@ import {
     ENTITY_EXTRACTION_BLACKLIST
 } from '../../engine';
 import { checkNameCollision, registerEntityName } from '../../nameResolver';
+import { detectPlayerFraming } from '../../engine/playerFraming';
 import { RELATIONSHIP_LEVELS, type RelationshipLevel } from '../../../types';
 import { RELATIONSHIP_MAX_STEPS_PER_TURN } from '../../../config/engineConfig';
 
@@ -496,6 +497,55 @@ export const entityLifecycleStep: PipelineStep = {
             if (inferred !== newPlayerLocation) {
                 newPlayerLocation = inferred;
             }
+        }
+
+        // -------------------------------------------------------------------
+        // v1.29: PLAYER CORRECTIONS BECOME STATE.
+        //
+        // When the player explicitly rejects how an NPC has been reading them,
+        // that used to exist only as prose in the transcript — the model might
+        // attend to it on the turn it was said, and nothing carried it forward.
+        // In the reviewed save the player corrected the same NPC twice and that
+        // NPC's ledger still read, after sixteen turns, ["Initiated a private
+        // conversation with the PC."]. Each turn re-derived the same stance
+        // from the same inputs and re-escalated.
+        //
+        // Writing the correction to the ledger puts it in the ACTIVE ENTITIES
+        // block of every subsequent prompt, so the NPC has to carry it the way
+        // a person carries having been told they misjudged someone.
+        // -------------------------------------------------------------------
+        const framing = detectPlayerFraming(ctx.playerInput);
+        if (framing.corrected) {
+            // Attribute to whoever is actually on stage — present/nearby
+            // entities the player could plausibly be answering.
+            const inScene = updatedKnownEntities.filter(
+                e => !e.status || e.status === 'present' || e.status === 'nearby'
+            );
+            const targets = inScene.length > 0 ? inScene : [];
+            const note =
+                `T${ctx.currentTurn}: PC pushed back on this NPC's reading of him — ` +
+                `"${framing.correctionMarkers[0]}". Do not re-assert that framing.`;
+
+            for (const entity of targets) {
+                const ledger = [...(entity.ledger ?? [])];
+                // Don't stack near-identical entries turn after turn.
+                const alreadyNoted = ledger.some(l => l.includes('pushed back on this NPC'));
+                if (alreadyNoted) {
+                    ledger[ledger.length - 1] = note;
+                } else {
+                    ledger.push(note);
+                }
+                const idx = updatedKnownEntities.findIndex(e => e.id === entity.id);
+                if (idx >= 0) updatedKnownEntities[idx] = { ...entity, ledger };
+            }
+
+            ctx.debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: targets.length > 0
+                    ? `[PLAYER CORRECTION — v1.29] Recorded to ledger for ${targets.map(t => t.name).join(', ')}: "${framing.correctionMarkers[0]}". The rejected framing must be dropped, not restated.`
+                    : `[PLAYER CORRECTION — v1.29] Detected ("${framing.correctionMarkers[0]}") but no in-scene entity to attribute it to.`,
+                type: 'info',
+            });
         }
 
         // Update context
