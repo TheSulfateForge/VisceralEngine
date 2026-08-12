@@ -49,8 +49,14 @@ const buildPulseBrief = (world: GameWorld, turn: number): string => {
     const lines: string[] = [];
     lines.push(`Turn: ${turn} | Time: ${world.time?.display ?? 'unknown'} | Player location: ${world.location ?? 'unknown'}`);
 
+    // v1.28: the old filter demanded relationship_level !== 'NEUTRAL' OR a
+    // ledger longer than 2. Because relationship_level had no engine anchor and
+    // drifted to NEUTRAL for most of the cast, this routinely starved the brief
+    // down to one or two entities — so the offscreen world had almost nobody to
+    // move, and the pulse produced nothing worth surfacing. Any entity with a
+    // ledger at all has established business worth advancing offscreen.
     const npcs = (world.knownEntities ?? [])
-        .filter(e => e.status !== 'dead' && (e.relationship_level !== 'NEUTRAL' || (e.ledger?.length ?? 0) > 2))
+        .filter(e => e.status !== 'dead' && (e.relationship_level !== 'NEUTRAL' || (e.ledger?.length ?? 0) > 0))
         .slice(0, 8)
         .map(e => `- ${e.name} (${e.role}) [${e.relationship_level}] @ ${e.location} — recent: ${(e.ledger ?? []).slice(-2).join('; ') || 'none'}`);
     if (npcs.length) lines.push(`\nNAMED NPCs WITH AGENDAS:\n${npcs.join('\n')}`);

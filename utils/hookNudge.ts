@@ -55,7 +55,13 @@ export const shouldNudgeHook = (turnCount: number, world: GameWorld): boolean =>
     if (turnCount - lastNudgeTurn < currentInterval) return false;
     if ((world.sceneMode ?? 'NARRATIVE') !== 'NARRATIVE') return false;
     if ((world.tensionLevel ?? 0) >= TENSION_CEILING) return false;
-    if ((world.emergingThreats ?? []).some(t => (t.turns_until_impact ?? 99) <= IMMINENT_THREAT_ETA)) {
+    // v1.28: only LIVE threats suppress an ambient hook. An 'unvalidated'
+    // anchor is a threat the Origin Gate rejected — letting it hold back the
+    // engine's only source of gentle, positive foreshadowing would mean a
+    // rejected threat still shaping the tone of the scene.
+    if ((world.emergingThreats ?? []).some(
+        t => t.status !== 'unvalidated' && (t.turns_until_impact ?? 99) <= IMMINENT_THREAT_ETA
+    )) {
         return false;
     }
     return true;

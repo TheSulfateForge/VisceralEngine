@@ -436,22 +436,38 @@ The engine auto-removes conditions whose [HEAL:T<N>] marker is ≤ current
 turn. Do NOT attach [HEAL:T] to truly permanent injuries, NPC/location-bound
 conditions, or Devil's Bargain costs — those are intentionally sticky.`,
 
-    HOSTILE_NPC_PROTOCOL: `[SYSTEM REMINDER: HOSTILE NPC PROTOCOL — THREAT PARITY ACTIVE v1.20]
+    HOSTILE_NPC_PROTOCOL: `[SYSTEM REMINDER: HOSTILE NPC PROTOCOL — THREAT PARITY ACTIVE v1.28]
 A hostile NPC is present, an encounter is active, scene tension is
 elevated, or the scene mode is COMBAT. Threat-parity rules now apply
 for THIS turn. (They were intentionally absent on previous peaceful
 turns so NPCs in ordinary scenes did not read as latent operators.)
 
-ACTIONS (what hostile NPCs DO):
+SCOPE — READ THIS FIRST:
+This reminder applies ONLY to the entities named in the
+[HOSTILE IN SCENE] line below, if one is present. It does NOT license
+adversarial behaviour from anyone else in the scene. Allies, family,
+neutral bystanders and staff are governed by their own personality and
+relationship level, exactly as they would be on a peaceful turn. An
+enemy standing in the same room does not make everyone else in that
+room an operator.
+
+ACTIONS (what the NAMED hostile NPCs DO):
 - Exploit weakness — sleep, injury, isolation, emotional compromise.
 - Use leverage — hostages, blackmail, poison, coercion, economic
   pressure, public reputation, family members, debts.
 - Escalate when cornered — they do not give up at convenient moments;
   they fight back, flee, betray, or trade up the chain.
-- Allies can become threats: devoted → possessive → controlling, when
-  the relationship's underlying tensions justify it.
-- NPCs do not protect the player from consequences. The world reacts
-  to actions; consequences are the content filter, not refusal.
+- They do not shield the player from the consequences of the player's
+  own actions. The world reacts; consequences are the content filter,
+  not refusal.
+
+ALLIES ARE NOT COVERED BY THIS REMINDER:
+An ally under pressure helps imperfectly — badly, at a cost, too late,
+with their own priorities intruding. That is not the same as turning on
+the player. Do not manufacture ally betrayal, obstruction or suspicion
+to satisfy this reminder. If an ally's loyalty is genuinely strained,
+the engine says so explicitly in a separate ALLY STRAIN reminder that
+names them; absent that, allies act like allies.
 
 VOICE PERSISTS — DO NOT FLIP CHARACTERIZATION:
 This reminder governs ACTIONS, not VOICE. The personality field on
@@ -467,6 +483,52 @@ even (especially) in hostile scenes.
 If you find yourself reaching for predatory/cold/calculating/clinical
 voice because this reminder is active, you have misread it. The
 reminder activates threat ACTIONS, not threat VOICE.`,
+
+    /**
+     * v1.28: extracted from HOSTILE_NPC_PROTOCOL.
+     *
+     * "Allies can become threats: devoted → possessive → controlling" used to
+     * sit inside the hostile-NPC reminder, which fires on a SCENE-LEVEL trigger
+     * — any hostile anywhere in the scene. In the reviewed save that meant the
+     * instruction was delivered into every scene the player shared with his
+     * father, mother and twin sister, because an antagonist was elsewhere in
+     * the same building. Combined with relationship_level having drifted to
+     * NEUTRAL for those same family members, the prompt was actively pushing
+     * the narrator to turn the player's family against him.
+     *
+     * Ally strain now requires an actual grievance on that ally's ledger, and
+     * the reminder names the specific ally it is about.
+     */
+    ALLY_STRAIN_PROTOCOL: `[SYSTEM REMINDER: ALLY STRAIN — SPECIFIC AND EARNED v1.28]
+One or more allies in this scene carry a concrete grievance on their
+ledger — see the [ALLY STRAIN] line below for who, and check their
+ledger entries for what.
+
+This is permission to play that strain honestly. It is NOT permission
+to make allies adversarial in general.
+
+WHAT STRAIN LOOKS LIKE:
+- They say the difficult thing out loud, once, and mean it.
+- They help anyway, but slower, or with a condition attached, or while
+  making their objection plain.
+- They protect their OWN stake — a rival obligation, a person they also
+  love, a line they will not cross — and that costs the player
+  something real.
+- They can refuse a specific request. They do not become an obstacle to
+  everything.
+
+WHAT STRAIN IS NOT:
+- Betrayal, sabotage, informing on the player, or switching sides —
+  unless the ledger already contains a grievance grave enough that the
+  player would recognise it as sufficient.
+- A personality change. A warm ally under strain is still warm; they
+  are warm and hurt, or warm and angry. See the canonical personality
+  field.
+- An excuse to have every ally in the scene turn cold at once.
+
+The player must be able to name the reason. If you cannot point at the
+specific ledger entry that justifies what the ally just did, the ally
+does not do it.`,
 
     CANONICAL_VOICE_LOCK: `[SYSTEM REMINDER: CANONICAL VOICE LOCK — RESTATE BEFORE WRITING]
 At least one named entity in this scene has a CANONICAL personality field.
@@ -614,6 +676,10 @@ export const getSectionReminders = (
     // has a non-empty canonical personality field. Forces the model to
     // restate canonical traits in thought_process before writing the NPC.
     canonicalPersonalityNpcPresent: boolean = false,
+    // v1.28: names, so the reminders can be scoped to specific entities instead
+    // of switching on threat behaviour for everyone sharing the scene.
+    hostileEntityNames: string[] = [],
+    strainedAllyNames: string[] = [],
 ): string[] => {
     const reminders: string[] = [];
 
@@ -678,7 +744,25 @@ export const getSectionReminders = (
         emergingThreatsCount > 0 ||
         mode === 'COMBAT';
     if (hostileScene) {
-        if (reminders.length < 2) reminders.push(REMINDERS.HOSTILE_NPC_PROTOCOL);
+        if (reminders.length < 2) {
+            // v1.28: name the hostiles inline so the reminder's scope clause has
+            // something concrete to point at.
+            const scoped = hostileEntityNames.length > 0
+                ? `${REMINDERS.HOSTILE_NPC_PROTOCOL}\n\n[HOSTILE IN SCENE] ${hostileEntityNames.join(', ')} — these entities and no others.`
+                : REMINDERS.HOSTILE_NPC_PROTOCOL;
+            reminders.push(scoped);
+        }
+    }
+
+    // v1.28: ally strain is its own trigger, gated on a real ledger grievance,
+    // rather than a bullet buried inside the hostile-NPC reminder that fired
+    // whenever any enemy shared the scene.
+    if (strainedAllyNames.length > 0) {
+        if (reminders.length < 2) {
+            reminders.push(
+                `${REMINDERS.ALLY_STRAIN_PROTOCOL}\n\n[ALLY STRAIN] ${strainedAllyNames.join(', ')}`
+            );
+        }
     }
 
     // v1.22: Canonical voice lock — fires whenever a registered entity with

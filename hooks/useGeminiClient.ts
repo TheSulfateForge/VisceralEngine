@@ -344,12 +344,37 @@ export const useGeminiClient = () => {
         // present/nearby (status undefined counts as in-scene for legacy
         // entities). Distant/dead/retired hostiles don't count — they
         // can't act on the player this turn.
-        const hostileEntityPresent = (preCallState.gameWorld.knownEntities ?? [])
-            .some(e =>
-                (e.relationship_level === 'HOSTILE' ||
-                 e.relationship_level === 'NEMESIS') &&
-                (!e.status || e.status === 'present' || e.status === 'nearby')
-            );
+        // v1.28: capture WHICH entities are hostile, not merely that one exists.
+        // The reminder is injected into the prompt naming them, so its rules
+        // cannot be misapplied to everyone else in the room. Previously a single
+        // hostile standing anywhere in the scene switched on threat-parity
+        // behaviour for the whole cast — including, in the reviewed save, the
+        // player's father, mother and twin sister, because an antagonist
+        // happened to be in the same building.
+        const inScene = (e: { status?: string }) =>
+            !e.status || e.status === 'present' || e.status === 'nearby';
+
+        const hostileEntityNames = (preCallState.gameWorld.knownEntities ?? [])
+            .filter(e =>
+                (e.relationship_level === 'HOSTILE' || e.relationship_level === 'NEMESIS') &&
+                inScene(e)
+            )
+            .map(e => e.name);
+        const hostileEntityPresent = hostileEntityNames.length > 0;
+
+        // v1.28: an ally only strains under load the player can see — a real
+        // grievance on the ledger, not the mere presence of an enemy elsewhere
+        // in the scene. This gates the ally-betrayal guidance that used to ride
+        // along inside the hostile-NPC reminder.
+        const STRAIN_MARKERS = /\b(betray|lied|deceiv|abandon|refus|resent|debt|owes|owed|jealous|blame|threaten|argu|broke|broken promise|failed)\w*/i;
+        const strainedAllyNames = (preCallState.gameWorld.knownEntities ?? [])
+            .filter(e =>
+                ['WARM', 'ALLIED', 'DEVOTED'].includes(e.relationship_level) &&
+                inScene(e) &&
+                (e.ledger ?? []).some(entry => STRAIN_MARKERS.test(entry))
+            )
+            .map(e => e.name);
+
         const tensionLevel = preCallState.gameWorld.tensionLevel ?? 0;
 
         // v1.22: Canonical voice lock detection. Fires the
@@ -372,7 +397,10 @@ export const useGeminiClient = () => {
             preCallState.character.conditions.length,
             (preCallState.gameWorld.knownEntities ?? []).length,
             (preCallState.character.goals ?? []).length,
-            (preCallState.gameWorld.emergingThreats ?? []).length,
+            // v1.28: 'unvalidated' anchors are engine bookkeeping. They must not
+            // count toward the threat-aware reminder triggers, or every rejected
+            // threat would keep priming the model with threat vocabulary.
+            (preCallState.gameWorld.emergingThreats ?? []).filter(t => t.status !== 'unvalidated').length,
             !!preCallState.gameWorld.passiveAlliesDetected,
             dreamSeedActive,
             foreignSpeechPending,
@@ -380,6 +408,8 @@ export const useGeminiClient = () => {
             hostileEntityPresent,
             tensionLevel,
             canonicalPersonalityNpcPresent,  // v1.22
+            hostileEntityNames,              // v1.28
+            strainedAllyNames,               // v1.28
         );
         // v1.25: Ambient hook nudge — on a jittered cadence during calm
         // NARRATIVE beats, surface ONE ignorable hook drawn from established
@@ -677,6 +707,22 @@ export const useGeminiClient = () => {
             conditions: deduplicateConditions(characterUpdate.conditions)
         };
 
+        // v1.28 FIX: the message used to carry `response.world_tick` verbatim —
+        // the model's RAW, pre-validation draft. NarrativeRenderer renders
+        // worldTick.emerging_threats directly, so the ETA and wording the player
+        // saw were the model's unchecked output, never the engine's. Every
+        // countdown rule, description lock and pivot penalty in the threat
+        // pipeline was invisible on screen; a threat the engine had rejected
+        // outright still showed up as a live countdown, re-worded and
+        // re-numbered each turn.
+        //
+        // The narrative half of the tick is still the model's to author. The
+        // threat half is now the engine's committed state, minus the
+        // 'unvalidated' anchors, which exist only for continuity and must never
+        // reach the player.
+        const engineThreats = (worldUpdate.emergingThreats ?? []).filter(
+            t => t.status !== 'unvalidated'
+        );
         const modelMsg: ChatMessage = {
             id: generateMessageId(),
             role: Role.MODEL,
@@ -686,6 +732,8 @@ export const useGeminiClient = () => {
             bargainRequest: response.bargain_request,
             npcInteraction: response.npc_interaction,
             worldTick: response.world_tick
+                ? { ...response.world_tick, emerging_threats: engineThreats }
+                : response.world_tick
         };
 
         // Commit all updates
@@ -730,12 +778,38 @@ export const useGeminiClient = () => {
                 try {
                     const pulseWorld = useGameStore.getState().gameWorld;
                     const result = await service.worldPulse(pulseWorld, nextTurn);
-                    if (!result) return;
+                    if (!result) {
+                        setGameHistory(prev => ({
+                            ...prev,
+                            debugLog: [
+                                ...prev.debugLog,
+                                {
+                                    timestamp: new Date().toISOString(),
+                                    message: `[WORLD PULSE FAILED T${nextTurn}] generation returned null (see console for the underlying error) — no offscreen developments or opportunities this cycle.`,
+                                    type: 'error',
+                                },
+                            ],
+                        }));
+                        return;
+                    }
                     const lines = [
                         ...result.developments.map(d => `[WORLD-PULSE T${nextTurn}] ${d}`),
                         ...result.opportunities.map(o => `[OPPORTUNITY T${nextTurn}] ${o}`),
                     ];
-                    if (lines.length === 0) return;
+                    if (lines.length === 0) {
+                        setGameHistory(prev => ({
+                            ...prev,
+                            debugLog: [
+                                ...prev.debugLog,
+                                {
+                                    timestamp: new Date().toISOString(),
+                                    message: `[WORLD PULSE T${nextTurn}] returned 0 developments and 0 opportunities — the offscreen world did not move this cycle.`,
+                                    type: 'warning',
+                                },
+                            ],
+                        }));
+                        return;
+                    }
                     setGameWorld(prev => {
                         const registry = (prev.hiddenRegistry ?? '').split('\n').filter(Boolean);
                         const merged = [...registry, ...lines].slice(-MAX_REGISTRY_LINES);
@@ -757,7 +831,26 @@ export const useGeminiClient = () => {
                         ],
                     }));
                 } catch (e) {
+                    // v1.28: this used to be console.warn only. The pulse is the
+                    // engine's ONLY source of neutral and positive offscreen
+                    // motion — the counterweight to a threat pipeline that
+                    // otherwise schedules nothing but harm. In a 47-turn save it
+                    // was found never to have produced a single line, and
+                    // because failures never reached debugLog there was no
+                    // trace of it anywhere. Silence on this path is not
+                    // acceptable.
                     console.warn('[WORLD PULSE] background run failed:', e);
+                    setGameHistory(prev => ({
+                        ...prev,
+                        debugLog: [
+                            ...prev.debugLog,
+                            {
+                                timestamp: new Date().toISOString(),
+                                message: `[WORLD PULSE FAILED T${nextTurn}] ${e instanceof Error ? e.message : String(e)} — no offscreen developments or opportunities were generated this cycle.`,
+                                type: 'error',
+                            },
+                        ],
+                    }));
                 } finally {
                     worldPulseInFlight = false;
                 }

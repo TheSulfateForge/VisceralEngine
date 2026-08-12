@@ -451,6 +451,11 @@ export interface ThreatRow {
   consecutive_turns_at_eta_one: number | null;
   required_lore_capability: string | null;
   pivot_penalty_applied: number | null;
+  // v1.28 — Origin Gate rejection bookkeeping. Not indexed, so no version bump
+  // is required; rows written before v1.28 simply read back as undefined.
+  gate_blocked_reason: string | null;
+  unvalidated_since_turn: number | null;
+  promoted_turn: number | null;
 }
 
 export interface ThreatEntitySourceRow {

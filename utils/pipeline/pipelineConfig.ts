@@ -71,6 +71,7 @@ export function buildTurnContext(
         newPlayerLocation: previousWorld.location ?? '',
         updatedKnownEntities: [...(previousWorld.knownEntities ?? [])],
         processedThreats: undefined,
+        validatedThreats: undefined,
         currentHooks: undefined,
         currentFactionExposure: undefined,
         currentThreatArcHistory: undefined,

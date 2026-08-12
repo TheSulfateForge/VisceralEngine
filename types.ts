@@ -257,7 +257,29 @@ export interface LocationGraph {
 // Enhanced WorldTickEvent with full state tracking to enforce ETA floors,
 // the 3-seed cap, and auto-expiry of threats stuck at ETA ~1.
 
-export type ThreatStatus = 'building' | 'imminent' | 'triggered' | 'expired';
+/**
+ * v1.28: 'unvalidated' added.
+ *
+ * Previously the Origin Gate DELETED any threat it rejected. Because rejected
+ * threats never reached `world.emergingThreats`, the next turn's
+ * processThreatSeeds() could never find an `existing` record for them — which
+ * silently disabled the three mechanisms that keep a threat coherent across
+ * turns: the monotonic ETA countdown, the description lock, and the pivot
+ * penalty. The model was then free to re-invent both the wording and the ETA
+ * of the "same" threat every single turn, which is what players experienced as
+ * a world event that mutates and re-aims on contact.
+ *
+ * An 'unvalidated' threat is one the Origin Gate rejected but that the engine
+ * still REMEMBERS. It is a continuity anchor, not a live threat:
+ *   - it is never surfaced to the player or written to the hidden registry;
+ *   - it can never reach 'triggered' — it cannot act on the player;
+ *   - it DOES anchor description + ETA, so a re-submission of the same idea is
+ *     locked to the original wording and forced to count down monotonically;
+ *   - it is re-tested by the gate every turn, so the model can legitimise it by
+ *     supplying a real cause (promotion);
+ *   - it self-expires after UNVALIDATED_THREAT_MAX_TURNS so it cannot linger.
+ */
+export type ThreatStatus = 'building' | 'imminent' | 'triggered' | 'expired' | 'unvalidated';
 
 // --- v1.6: Dormant Hook Registry ---
 // Pre-existing tension vectors extracted from character backstory at session start.
@@ -366,6 +388,13 @@ export interface WorldTickEvent {
     originalEta?: number;          // ETA at creation, for tracking progression vs retcon
     // v1.11: Track which hook sourced this threat (immutable after creation)
     originHookId?: string;         // Set once at creation; used for cooldown + re-seed detection
+    // --- v1.28: Origin Gate rejection bookkeeping (engine-managed) ---
+    /** Why the Origin Gate rejected this threat. Set only when status === 'unvalidated'. */
+    gateBlockedReason?: string;
+    /** First turn this threat entered 'unvalidated'. Drives self-expiry. */
+    unvalidatedSinceTurn?: number;
+    /** Turn an 'unvalidated' threat passed the gate and became live. Debug/telemetry only. */
+    promotedTurn?: number;
 }
 
 // --- Faction Intelligence (v1.3) ---

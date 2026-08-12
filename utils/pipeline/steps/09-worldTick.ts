@@ -13,8 +13,7 @@ import {
     detectLoreDeaths
 } from '../../engine/entityLifecycle';
 import {
-    processThreatSeeds,
-    validateThreatCausality
+    processThreatSeeds
 } from '../../engine/threatPipelineCore';
 import {
     updateFactionExposure_v112,
@@ -57,6 +56,19 @@ export const worldTickStep: PipelineStep = {
 
         const worldTick = r.world_tick;
 
+        // v1.28: everything downstream of the Origin Gate reasons about LIVE
+        // threats — NPC suppression by ETA, attrition, hook cooldowns, exposure
+        // auto-grants. 'unvalidated' anchors are continuity bookkeeping for
+        // threats the gate rejected; if they were included here a rejected
+        // threat would still suppress NPC appearances and hold hooks on
+        // cooldown, which is the gate's decision applied backwards.
+        //
+        // processThreatSeeds is the one consumer that needs the FULL list —
+        // the anchors are precisely what it looks up to lock descriptions and
+        // enforce the countdown.
+        const previousThreats = ctx.previousWorld.emergingThreats ?? [];
+        const previousLiveThreats = previousThreats.filter(t => t.status !== 'unvalidated');
+
         // =====================================================================
         // 1. NPC VALIDATION & COHERENCE CHECKING
         // =====================================================================
@@ -78,7 +90,7 @@ export const worldTickStep: PipelineStep = {
         // Apply NPC attrition layer (random removals)
         validatedNpcActions = applyNpcAttritionLayer(
             validatedNpcActions,
-            ctx.previousWorld.emergingThreats ?? [],
+            previousLiveThreats,
             worldTick.environment_changes ?? [],
             ctx.worldUpdate.knownEntities ?? [],
             ctx.debugLogs
@@ -99,7 +111,7 @@ export const worldTickStep: PipelineStep = {
         // v1.9: Scene mode context passed for COMBAT bypass
         validatedNpcActions = validateNpcActionCoherence(
             validatedNpcActions,
-            ctx.previousWorld.emergingThreats ?? [],
+            previousLiveThreats,
             ctx.currentTurn,
             ctx.debugLogs,
             ctx.effectiveSceneMode
@@ -113,7 +125,7 @@ export const worldTickStep: PipelineStep = {
         } = validateNpcEntityRegistration(
             validatedNpcActions,
             entityNames,
-            ctx.previousWorld.emergingThreats ?? [],
+            previousLiveThreats,
             new Set<string>(),
             ctx.debugLogs,
             ctx.effectiveSceneMode
@@ -140,7 +152,7 @@ export const worldTickStep: PipelineStep = {
             ctx.currentTurn,
             ctx.debugLogs,
             ctx.worldUpdate.knownEntities ?? [],
-            ctx.previousWorld.emergingThreats ?? []
+            previousLiveThreats
         );
 
         // =====================================================================
@@ -154,7 +166,7 @@ export const worldTickStep: PipelineStep = {
         // Process incoming threat seeds with full validation
         ctx.processedThreats = processThreatSeeds(
             worldTick.emerging_threats ?? [],
-            ctx.previousWorld.emergingThreats ?? [],
+            previousThreats,   // v1.28: full list — anchors included by design
             ctx.currentTurn,
             ctx.debugLogs,
             ctx.currentHooks,
@@ -171,20 +183,14 @@ export const worldTickStep: PipelineStep = {
             10
         );
 
-        // Validate each processed threat for causality/origin gate
-        const validatedThreats = ctx.processedThreats.filter(threat =>
-            validateThreatCausality(
-                threat,
-                ctx.currentHooks,
-                ctx.currentFactionExposure,
-                ctx.currentTurn,
-                ctx.debugLogs,
-                (ctx.worldUpdate.knownEntities ?? []).map(e => e.name),
-                ctx.previousCharacter.name ?? '',
-                ctx.worldUpdate.lore ?? [],
-                ctx.newPlayerLocation
-            )
-        );
+        // v1.28: processThreatSeeds already runs the full Origin Gate and now
+        // MARKS rejects as status 'unvalidated' rather than deleting them.
+        // Re-running validateThreatCausality here was a redundant second gate
+        // (it is why every accepted threat logged [ORIGIN GATE ✓] twice) and it
+        // would now double-log every anchor as well. Partition on the status
+        // the gate already assigned.
+        const validatedThreats = ctx.processedThreats.filter(t => t.status !== 'unvalidated');
+        const unvalidatedAnchors = ctx.processedThreats.filter(t => t.status === 'unvalidated');
 
         // =====================================================================
         // 4. GLOBAL THREAT COOLDOWN & FILTERING
@@ -252,7 +258,7 @@ export const worldTickStep: PipelineStep = {
 
         const { updatedHooks, updatedArcHistory } = updateHookCooldowns(
             ctx.currentHooks,
-            ctx.previousWorld.emergingThreats ?? [],
+            previousLiveThreats,
             filteredThreats,
             ctx.currentTurn,
             ctx.currentThreatArcHistory,
@@ -274,10 +280,16 @@ export const worldTickStep: PipelineStep = {
         // 7. FACTION EXPOSURE DECAY ON ARC CONCLUSION
         // =====================================================================
 
+        // v1.28: pass live threats AND retained anchors. This routine clamps a
+        // faction's exposure down to 10 — below EXPOSURE_THRESHOLD_FOR_THREAT —
+        // when all of its threats leave the active set. While gate rejects were
+        // being deleted outright, that fired on essentially every turn, so the
+        // engine was continuously demoting the player's actual antagonists out
+        // of threat eligibility.
         ctx.currentFactionExposure = decayFactionExposureOnArcConclusion(
             ctx.currentFactionExposure,
-            ctx.previousWorld.emergingThreats ?? [],
-            filteredThreats,
+            previousLiveThreats,
+            [...filteredThreats, ...unvalidatedAnchors],
             ctx.currentTurn,
             ctx.debugLogs
         );
@@ -297,12 +309,18 @@ export const worldTickStep: PipelineStep = {
         // 9. POST-PROCESSING & STATE UPDATES
         // =====================================================================
 
-        // Update world state with processed data
-        ctx.worldUpdate.emergingThreats = filteredThreats;
+        // v1.28: persist live threats AND unvalidated anchors. The anchors are
+        // the entire point of the fix — they are what processThreatSeeds looks
+        // up as `existing` next turn to enforce the monotonic ETA countdown,
+        // the description lock and the pivot penalty. Everything downstream
+        // that faces the player filters on status !== 'unvalidated'.
+        ctx.worldUpdate.emergingThreats = [...filteredThreats, ...unvalidatedAnchors];
+        ctx.validatedThreats = filteredThreats;
         ctx.worldUpdate.dormantHooks = ctx.currentHooks;
         ctx.worldUpdate.threatArcHistory = ctx.currentThreatArcHistory;
         ctx.worldUpdate.factionExposure = ctx.currentFactionExposure;
         ctx.worldUpdate.lastWorldTickTurn = ctx.currentTurn;
+        ctx.lastWorldTickTurn = ctx.currentTurn;
 
         // Update environment changes
         // NOTE: environment_changes are tracked in the world_tick event list, not as combat environment
@@ -335,7 +353,7 @@ export const worldTickStep: PipelineStep = {
         // Debug logging for all threats
         ctx.debugLogs.push({
             timestamp: new Date().toISOString(),
-            message: `[WORLD TICK] Processed ${filteredThreats.length} threats, ${validatedNpcActions.length} NPC actions, cooldown: ${ctx.globalCooldownUntil > ctx.currentTurn ? 'ACTIVE' : 'CLEAR'}`,
+            message: `[WORLD TICK] Processed ${filteredThreats.length} live threats, ${unvalidatedAnchors.length} unvalidated anchor(s), ${validatedNpcActions.length} NPC actions, cooldown: ${ctx.globalCooldownUntil > ctx.currentTurn ? 'ACTIVE' : 'CLEAR'}`,
             type: 'info'
         });
 

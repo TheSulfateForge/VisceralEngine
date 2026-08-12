@@ -729,6 +729,10 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
         consecutive_turns_at_eta_one: null,
         required_lore_capability: null,
         pivot_penalty_applied: null,
+        // v1.28 — emerging-threat-only fields; never set on an active threat.
+        gate_blocked_reason: null,
+        unvalidated_since_turn: null,
+        promoted_turn: null,
       }));
       await vdb.threats.bulkPut(rows);
     }
@@ -764,6 +768,12 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
           consecutive_turns_at_eta_one: t.consecutiveTurnsAtEtaOne ?? null,
           required_lore_capability: t.requiredLoreCapability ?? null,
           pivot_penalty_applied: t.pivotPenaltyApplied ?? null,
+          // v1.28: without these, a reloaded 'unvalidated' anchor would lose
+          // the turn it was first rejected and be granted a fresh retention
+          // lease on every save/load cycle.
+          gate_blocked_reason: t.gateBlockedReason ?? null,
+          unvalidated_since_turn: t.unvalidatedSinceTurn ?? null,
+          promoted_turn: t.promotedTurn ?? null,
         });
         for (const ename of t.entitySourceNames ?? []) {
           sourceRows.push({
@@ -1299,6 +1309,14 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
           ? { requiredLoreCapability: t.required_lore_capability }
           : {}),
         ...(t.status !== null ? { status: t.status } : {}),
+        // v1.28
+        ...(t.gate_blocked_reason != null ? { gateBlockedReason: t.gate_blocked_reason } : {}),
+        // Fall back to turn_created for rows written before v1.28: an anchor is
+        // marked unvalidated on the turn it is created, so the two coincide.
+        ...(t.status === 'unvalidated'
+          ? { unvalidatedSinceTurn: t.unvalidated_since_turn ?? t.turn_created ?? undefined }
+          : {}),
+        ...(t.promoted_turn != null ? { promotedTurn: t.promoted_turn } : {}),
         ...(t.dormant_hook_id_at_creation !== null
           ? { dormantHookId: stripStamp(campaignId, t.dormant_hook_id_at_creation) }
           : {}),

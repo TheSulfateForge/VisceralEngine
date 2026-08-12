@@ -88,7 +88,13 @@ export const assembleStateStep: PipelineStep = {
             sceneMode: finalSceneMode,
             timeMode: ctx.effectiveTimeMode,   // v1.21: runtime-only (not persisted to projection row)
             tensionLevel: finalTensionLevel,
-            lastWorldTickTurn: ctx.lastWorldTickTurn,
+            // v1.28 FIX: step 08 seeds ctx.lastWorldTickTurn from the PREVIOUS
+            // world and step 09 advanced only ctx.worldUpdate.lastWorldTickTurn,
+            // which this line then overwrote — so the field was pinned at its
+            // initial value (0) for the entire campaign. It is the marker the
+            // background world pulse reads, so the pulse could never tell how
+            // stale the offscreen world was.
+            lastWorldTickTurn: ctx.worldUpdate.lastWorldTickTurn ?? ctx.lastWorldTickTurn ?? 0,
             turnCount: newTurnCount,
             lastBargainTurn: ctx.previousWorld.lastBargainTurn ?? 0,
             factionIntelligence: ctx.previousWorld.factionIntelligence ?? {},

@@ -50,6 +50,13 @@ export interface TurnContext {
     newPlayerLocation: string;
     updatedKnownEntities: KnownEntity[];
     processedThreats: WorldTickEvent[] | undefined;
+    /**
+     * v1.28: live threats only — the subset of processedThreats that passed the
+     * Origin Gate. worldUpdate.emergingThreats additionally carries
+     * 'unvalidated' continuity anchors, which must never reach the player, the
+     * hidden registry, or the reminder selector.
+     */
+    validatedThreats: WorldTickEvent[] | undefined;
     currentHooks: DormantHook[] | undefined;
     currentFactionExposure: FactionExposure | undefined;
     currentThreatArcHistory: ThreatArcHistory | undefined;

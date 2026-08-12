@@ -95,9 +95,17 @@ export const NarrativeRenderer: React.FC<NarrativeRendererProps> = ({ message, o
                 />
             )}
             
-            {/* Render World Tick Annotations if present */}
-            {message.worldTick && message.worldTick.emerging_threats && message.worldTick.emerging_threats.length > 0 && (
-                <WorldTickAnnotations events={message.worldTick.emerging_threats} />
+            {/* Render World Tick Annotations if present.
+                v1.28: useGeminiClient now writes the ENGINE's committed threats
+                onto the message rather than the model's raw draft, so what is
+                displayed here is the state the pipeline actually enforces. The
+                'unvalidated' guard is belt-and-braces — anchors are stripped
+                upstream, and must never be shown as a live countdown. */}
+            {message.worldTick?.emerging_threats
+                && message.worldTick.emerging_threats.filter(t => t.status !== 'unvalidated').length > 0 && (
+                <WorldTickAnnotations
+                    events={message.worldTick.emerging_threats.filter(t => t.status !== 'unvalidated')}
+                />
             )}
         </div>
     );

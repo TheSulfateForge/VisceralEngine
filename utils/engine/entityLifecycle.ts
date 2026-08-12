@@ -124,8 +124,11 @@ export const applyStatusTransitions = (
             });
         } else if (entity.status === 'distant' && turnsSinceSeen >= ENTITY_DISTANT_DECAY_TURNS) {
             // Check if they are part of an active threat
-            const inActiveThreat = emergingThreats.some(t => 
-                t.status !== 'expired' && 
+            const inActiveThreat = emergingThreats.some(t =>
+                t.status !== 'expired' &&
+                // v1.28: an unvalidated anchor is not an active threat and must
+                // not keep an otherwise-forgotten entity pinned in the roster.
+                t.status !== 'unvalidated' &&
                 t.description.toLowerCase().includes(entity.name.toLowerCase())
             );
             

@@ -1,6 +1,41 @@
 import { WorldTickEvent, DebugLogEntry, DormantHook, FactionExposure, ThreatArcHistory, LoreItem, LocationGraph } from '../../types';
 import { jaccardSimilarity, significantWords } from '../contentValidation';
-import { THREAT_SEED_CAP, MAX_CONSECUTIVE_ETA_ONE, LORE_MATURATION_TURNS, EXPOSURE_THRESHOLD_FOR_THREAT } from '../../config/engineConfig';
+import {
+    THREAT_SEED_CAP, MAX_CONSECUTIVE_ETA_ONE, LORE_MATURATION_TURNS, EXPOSURE_THRESHOLD_FOR_THREAT,
+    UNVALIDATED_THREAT_CAP, UNVALIDATED_THREAT_MAX_TURNS,
+} from '../../config/engineConfig';
+import { resolveExposureEntry } from './factionExposure';
+
+/**
+ * v1.28: Origin Gate Test B floor, lowered from 0.10.
+ * Retained as a fast path only — the shared-actor check below is now the
+ * primary signal for player-caused threats.
+ */
+const PLAYER_CAUSE_JACCARD_MIN = 0.05;
+
+/**
+ * v1.28: capitalised, identity-bearing tokens in a threat description —
+ * "Blackmoor", "Drevast", "Caerveld". Sentence-initial words and common
+ * capitalised filler are excluded so the first word of a sentence does not
+ * masquerade as a name.
+ */
+const PROPER_NOUN_STOPWORDS = new Set([
+    'the', 'a', 'an', 'his', 'her', 'their', 'this', 'that', 'these', 'those',
+    'house', 'lord', 'lady', 'duke', 'duchess', 'king', 'queen', 'prince',
+    'princess', 'count', 'countess', 'baron', 'baroness', 'sir', 'dame',
+    'if', 'when', 'after', 'before', 'while', 'as', 'and', 'but', 'or',
+]);
+
+const properNouns = (description: string): Set<string> => {
+    const out = new Set<string>();
+    // Drop the first token of each sentence — it is capitalised by grammar.
+    const body = description.replace(/(^|[.!?]\s+)\S+/g, '$1');
+    for (const match of body.matchAll(/\b([A-Z][a-z]{3,})\b/g)) {
+        const word = match[1].toLowerCase();
+        if (!PROPER_NOUN_STOPWORDS.has(word)) out.add(word);
+    }
+    return out;
+};
 import {
     ETA_FLOOR_FACTION, ETA_FLOOR_INDIVIDUAL_NEUTRAL, ETA_FLOOR_INDIVIDUAL_HOME, ETA_FLOOR_ENVIRONMENTAL,
     ETA_FLOOR_COMBAT_INDIVIDUAL, ETA_FLOOR_COMBAT_FACTION, ETA_FLOOR_TENSION_INDIVIDUAL, ETA_FLOOR_TENSION_FACTION,
@@ -29,7 +64,21 @@ export const validateThreatCausality = (
         type: 'warning'
     });
 
-    if (threat.turnCreated !== undefined && threat.turnCreated < currentTurn) {
+    // A threat that ALREADY passed the gate on an earlier turn is grandfathered —
+    // re-litigating an accepted arc every turn is what the description lock and
+    // ETA countdown exist to prevent.
+    //
+    // v1.28: 'unvalidated' threats are explicitly excluded from that
+    // grandfathering. They are retained purely as continuity anchors, so
+    // without this check a rejected threat would simply auto-pass on its second
+    // turn and the Origin Gate would become decorative. Instead they are
+    // re-tested every turn, which also gives the model a legitimate path to
+    // promote one by supplying a real cause.
+    if (
+        threat.turnCreated !== undefined &&
+        threat.turnCreated < currentTurn &&
+        threat.status !== 'unvalidated'
+    ) {
         return true;
     }
 
@@ -86,10 +135,34 @@ export const validateThreatCausality = (
             if (overlapScore >= overlapMin) {
                 log(`[ORIGIN GATE ✓] "${desc}" — matched dormant hook "${hook.id}" (overlap score ${overlapScore.toFixed(1)} ≥ ${overlapMin}: [${matchedWords.join(', ')}])`);
                 return true;
-            } else {
-                log(`[ORIGIN GATE ✗ — v1.11 SCALED OVERLAP] "${desc}" — cited dormant hook "${hook.id}" but semantic overlap score ${overlapScore.toFixed(1)} is below minimum ${overlapMin} for a hook with ${hookWords.size} significant words. Matched: [${matchedWords.join(', ')}]. BLOCKED.`);
-                return false;
             }
+
+            // v1.28: bag-of-words overlap against hook PROSE is a poor test.
+            // Hooks are written as 20-30 word sentences; threat descriptions
+            // run ~15 words. Requiring 2-3 shared significant words between two
+            // independently-worded summaries of the same tension is close to
+            // mechanically impossible, and in practice Test A almost never
+            // passed. Entity identity is the far stronger signal: if the threat
+            // actually names someone the hook is about, the hook is the source.
+            const hookEntities = (hook.involvedEntities ?? []).map(e => e.toLowerCase().trim()).filter(Boolean);
+            const descLower = threat.description.toLowerCase();
+            const namedHookEntities = hookEntities.filter(entity => {
+                if (descLower.includes(entity)) return true;
+                // Match on any identity-bearing token of the entity name, so
+                // "anwen drevast" is matched by a threat naming just "Anwen".
+                return entity
+                    .split(/\s+/)
+                    .filter(tok => tok.length >= 4)
+                    .some(tok => descLower.includes(tok));
+            });
+
+            if (namedHookEntities.length > 0) {
+                log(`[ORIGIN GATE ✓ — v1.28 HOOK ENTITY MATCH] "${desc}" — matched dormant hook "${hook.id}" via named entity/entities [${namedHookEntities.join(', ')}] (prose overlap was ${overlapScore.toFixed(1)} / ${overlapMin}).`);
+                return true;
+            }
+
+            log(`[ORIGIN GATE ✗ — v1.11 SCALED OVERLAP] "${desc}" — cited dormant hook "${hook.id}" but semantic overlap score ${overlapScore.toFixed(1)} is below minimum ${overlapMin} for a hook with ${hookWords.size} significant words, and the description names none of the hook's entities [${hookEntities.join(', ') || 'none listed'}]. Matched: [${matchedWords.join(', ')}]. BLOCKED.`);
+            return false;
         } else {
             log(`[ORIGIN GATE ✗] "${desc}" — cited dormant hook "${threat.dormantHookId}" which does not exist or is resolved. BLOCKED.`);
             return false;
@@ -101,23 +174,47 @@ export const validateThreatCausality = (
         const descWords = significantWords(threat.description);
         const overlap = jaccardSimilarity(causeWords, descWords);
 
-        if (overlap >= 0.1) {
-            log(`[ORIGIN GATE ✓] "${desc}" — valid player action cause (overlap: ${overlap.toFixed(2)})`);
+        if (overlap >= PLAYER_CAUSE_JACCARD_MIN) {
+            log(`[ORIGIN GATE ✓] "${desc}" — valid player action cause (overlap: ${overlap.toFixed(2)} ≥ ${PLAYER_CAUSE_JACCARD_MIN})`);
             return true;
-        } else {
-            log(`[ORIGIN GATE ✗] "${desc}" — cited player action cause but description lacks semantic overlap. BLOCKED.`);
-            return false;
         }
+
+        // v1.28: Jaccard on two short, independently-worded strings is
+        // knife-edge — in real play this test passed at 0.13 and 0.11 and
+        // failed at everything else, which is noise, not causality. If the
+        // cause and the consequence name the same person or house, the causal
+        // link is established regardless of how the two were phrased.
+        const causeLower = threat.playerActionCause.toLowerCase();
+        const descLower = threat.description.toLowerCase();
+        const sharedActors = knownEntityNames
+            .map(n => n.toLowerCase())
+            .filter(n => n && n !== playerCharacterName.toLowerCase())
+            .flatMap(n => n.split(/\s+/).filter(tok => tok.length >= 4))
+            .filter(tok => causeLower.includes(tok) && descLower.includes(tok));
+
+        if (sharedActors.length > 0) {
+            log(`[ORIGIN GATE ✓ — v1.28 SHARED ACTOR] "${desc}" — player action cause and threat description share actor token(s) [${[...new Set(sharedActors)].join(', ')}] (prose overlap was only ${overlap.toFixed(2)}).`);
+            return true;
+        }
+
+        log(`[ORIGIN GATE ✗] "${desc}" — cited player action cause but description shares neither vocabulary (${overlap.toFixed(2)} < ${PLAYER_CAUSE_JACCARD_MIN}) nor any named actor with it. BLOCKED.`);
+        return false;
     }
 
     if (threat.factionSource) {
-        const exposureEntry = factionExposure[threat.factionSource];
-        if (exposureEntry && exposureEntry.exposureScore >= EXPOSURE_THRESHOLD_FOR_THREAT) {
-            log(`[ORIGIN GATE ✓] "${desc}" — faction "${threat.factionSource}" has sufficient exposure (${exposureEntry.exposureScore} >= ${EXPOSURE_THRESHOLD_FOR_THREAT})`);
+        // v1.28 FIX: exposure accrues keyed by NPC name ("Lord Veyric
+        // Blackmoor") while the model writes factionSource as "House
+        // Blackmoor". The old direct index lookup queried a key that could
+        // never exist, so Test C never passed for any faction in any session.
+        const resolved = resolveExposureEntry(factionExposure, threat.factionSource);
+        if (resolved && resolved.entry.exposureScore >= EXPOSURE_THRESHOLD_FOR_THREAT) {
+            const via = resolved.key === threat.factionSource ? '' : ` (resolved via "${resolved.key}")`;
+            log(`[ORIGIN GATE ✓] "${desc}" — faction "${threat.factionSource}" has sufficient exposure (${resolved.entry.exposureScore} >= ${EXPOSURE_THRESHOLD_FOR_THREAT})${via}`);
             return true;
         } else {
-            const currentScore = exposureEntry ? exposureEntry.exposureScore : 0;
-            log(`[ORIGIN GATE ✗] "${desc}" — faction "${threat.factionSource}" lacks exposure (${currentScore} < ${EXPOSURE_THRESHOLD_FOR_THREAT}). BLOCKED.`);
+            const currentScore = resolved ? resolved.entry.exposureScore : 0;
+            const via = resolved && resolved.key !== threat.factionSource ? ` (nearest registry key "${resolved.key}")` : '';
+            log(`[ORIGIN GATE ✗] "${desc}" — faction "${threat.factionSource}" lacks exposure (${currentScore} < ${EXPOSURE_THRESHOLD_FOR_THREAT})${via}. BLOCKED.`);
             return false;
         }
     }
@@ -183,6 +280,9 @@ export const processThreatSeeds = (
         debugLogs.push({ timestamp: new Date().toISOString(), message, type });
     };
 
+    /** v1.28: existing records consumed by an incoming threat this turn. */
+    const matchedExistingIds = new Set<string>();
+
     const processed: WorldTickEvent[] = incomingThreats.map(threat => {
         let existing = existingThreats.find(t => t.id && t.id === threat.id);
 
@@ -224,6 +324,44 @@ export const processThreatSeeds = (
                 }
             }
         }
+
+        // v1.28: anchor re-matching by shared proper noun.
+        //
+        // The two matchers above both fail on the most common real case. Jaccard
+        // needs 0.60 similarity, which a genuine re-wording never reaches; the
+        // entity matcher relies on extractEntityNamesFromDescription, which
+        // demotes a surname to a "setting word" once three or more registered
+        // entities share it — so in a campaign against a great house with five
+        // named members, "Blackmoor" stops counting as an identity at exactly
+        // the point the house becomes the antagonist. Anchors then never
+        // collapse: every re-wording opens a NEW anchor and the model's churn
+        // is preserved rather than suppressed.
+        //
+        // Deliberately scoped to unvalidated anchors. Two live threats sharing
+        // a proper noun can legitimately be distinct arcs ("Blackmoor sues you"
+        // vs "Blackmoor hires a knife"); nothing is live here, so collapsing to
+        // the earliest wording is exactly the intended behaviour.
+        if (!existing) {
+            const incomingNouns = properNouns(threat.description);
+            if (incomingNouns.size > 0) {
+                for (const candidate of existingThreats) {
+                    if (candidate.status !== 'unvalidated') continue;
+                    const shared = [...properNouns(candidate.description)].filter(n => incomingNouns.has(n));
+                    if (shared.length > 0) {
+                        existing = candidate;
+                        log(
+                            `[THREAT ANCHOR MATCH — v1.28] "${threat.description.substring(0, 60)}" ` +
+                            `matched unvalidated anchor "${candidate.description.substring(0, 50)}" via shared ` +
+                            `proper noun(s) [${shared.join(', ')}]. Treated as a re-wording, not a new threat.`,
+                            'info'
+                        );
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (existing?.id) matchedExistingIds.add(existing.id);
 
         const id = threat.id || existing?.id || generateThreatId();
 
@@ -268,21 +406,42 @@ export const processThreatSeeds = (
 
         if (existing && existing.turns_until_impact !== undefined && turnCreated !== currentTurn) {
             const previousEta = existing.turns_until_impact;
-            const expectedMaxEta = Math.max(0, previousEta - 1);
+            const expectedEta = Math.max(0, previousEta - 1);
 
-            if (currentEta > expectedMaxEta) {
+            // v1.28: the countdown is now EXACT, not merely capped.
+            //
+            // The old rule only blocked increases and clamped anything above
+            // previous - 1. Arbitrary DECREASES were waved through, so a threat
+            // seeded at ETA 15 could legitimately report 14 on one turn and 1 on
+            // the next — the model collapsing a slow-burning arc into an
+            // immediate one the moment the player did something it wanted to
+            // punish. Players read that, correctly, as the world reaching for
+            // them: "it can't stay at 15, so it drops by 1, then by 13."
+            //
+            // An ETA is engine state. It moves one turn per turn. Genuine
+            // acceleration belongs to explicit engine rules (the pivot penalty
+            // below, distance floors, scene-mode floors) — never to a number the
+            // model reasserts each turn.
+            if (currentEta !== expectedEta) {
                 const isIncrease = currentEta > previousEta;
-                const logLevel = isIncrease ? 'error' : 'warning';
-                const violationType = isIncrease ? 'MONOTONIC VIOLATION — ETA INCREASED' : 'ETA COUNTDOWN ENFORCED';
+                const violationType = isIncrease
+                    ? 'MONOTONIC VIOLATION — ETA INCREASED'
+                    : currentEta < expectedEta
+                        ? 'ETA ACCELERATION BLOCKED'
+                        : 'ETA COUNTDOWN ENFORCED';
 
                 log(
                     `[THREAT ${violationType}] "${threat.description.substring(0, 60)}" — ` +
                     `AI submitted ETA ${currentEta}, previous was ${previousEta}. ` +
-                    `Forced to ${expectedMaxEta}.` +
-                    (isIncrease ? ` AI attempted to BUY TIME by increasing ETA — this is always blocked.` : ''),
-                    logLevel
+                    `Forced to ${expectedEta} (a countdown advances exactly one turn per turn).` +
+                    (isIncrease
+                        ? ` AI attempted to BUY TIME by increasing ETA — this is always blocked.`
+                        : currentEta < expectedEta
+                            ? ` AI attempted to PULL THE THREAT FORWARD by ${expectedEta - currentEta} turn(s) — acceleration is an engine decision, not a narrative one.`
+                            : ''),
+                    isIncrease ? 'error' : 'warning'
                 );
-                currentEta = expectedMaxEta;
+                currentEta = expectedEta;
             }
         }
 
@@ -296,12 +455,32 @@ export const processThreatSeeds = (
             const previousEta = existing.turns_until_impact ?? 999;
             const etaDecreased = currentEta < previousEta;
 
-            if (entityMatchUsed) {
-                if (etaDecreased && descSimilarity >= 0.15) {
+            // v1.28: an unvalidated anchor NEVER evolves its wording. Its whole
+            // reason to exist is to pin the phrasing of a threat the gate
+            // rejected, so that a re-submission next turn is recognisably the
+            // same threat rather than a fresh re-aim wearing the same actors.
+            if (existing.status === 'unvalidated') {
+                lockedDescription = existing.description;
+                if (descSimilarity < 1) {
+                    log(
+                        `[ANCHOR DESCRIPTION LOCKED — v1.28] AI re-worded an unvalidated threat: ` +
+                        `"${threat.description.substring(0, 60)}" → keeping "${existing.description.substring(0, 60)}" ` +
+                        `(similarity ${descSimilarity.toFixed(2)}). An unvalidated threat may not re-aim.`,
+                        'warning'
+                    );
+                }
+            } else if (entityMatchUsed) {
+                // v1.28: the evolution bar was similarity ≥ 0.15, which is low
+                // enough that "House Blackmoor will mobilise legal assets" and
+                // "House Blackmoor will leak Callan's commoner life" counted as
+                // the same threat developing rather than the model re-aiming.
+                // Raised to the pivot threshold so evolution and pivot use one
+                // consistent line.
+                if (etaDecreased && descSimilarity >= PIVOT_JACCARD_THRESHOLD) {
                     lockedDescription = threat.description;
                     log(
                         `[DESCRIPTION EVOLVED — v1.9] "${threat.description.substring(0, 60)}" ` +
-                        `allowed (entity-matched, ETA ${previousEta}→${currentEta}, similarity ${descSimilarity.toFixed(2)} ≥ 0.15)`,
+                        `allowed (entity-matched, ETA ${previousEta}→${currentEta}, similarity ${descSimilarity.toFixed(2)} ≥ ${PIVOT_JACCARD_THRESHOLD})`,
                         'warning'
                     );
                 } else {
@@ -310,7 +489,7 @@ export const processThreatSeeds = (
                         `[DESCRIPTION LOCKED — v1.9] "${threat.description.substring(0, 60)}" → ` +
                         `keeping existing: "${existing.description.substring(0, 60)}" ` +
                         `(entity-matched, ETA ${previousEta}→${currentEta}, ` +
-                        `similarity ${descSimilarity.toFixed(2)}${!etaDecreased ? ', ETA NOT decreasing' : ', similarity < 0.15'})`,
+                        `similarity ${descSimilarity.toFixed(2)}${!etaDecreased ? ', ETA NOT decreasing' : `, similarity < ${PIVOT_JACCARD_THRESHOLD}`})`,
                         'warning'
                     );
                 }
@@ -356,6 +535,16 @@ export const processThreatSeeds = (
             status = 'expired';
         }
 
+        // v1.28: an anchor stays an anchor until the gate says otherwise.
+        // The model re-submits threats without a status field, so without this
+        // the anchor's 'unvalidated' marker would be lost here — and because it
+        // now carries an inherited (earlier) turnCreated, the gate would
+        // grandfather it straight through as a live threat. That would make the
+        // Origin Gate trivially bypassable: get rejected once, go live next turn.
+        if (existing?.status === 'unvalidated' && status !== 'expired') {
+            status = 'unvalidated';
+        }
+
         return {
             ...threat,
             description: lockedDescription,
@@ -368,16 +557,73 @@ export const processThreatSeeds = (
             turns_until_impact: currentEta,
             status,
             originHookId: existing?.originHookId ?? threat.dormantHookId,
+            gateBlockedReason: existing?.gateBlockedReason,
+            unvalidatedSinceTurn: existing?.unvalidatedSinceTurn,
+            promotedTurn: existing?.promotedTurn,
         };
     });
 
+    // v1.28: carry forward unvalidated anchors the model did not re-submit this
+    // turn. Without this, an anchor evaporates the moment the model skips the
+    // idea for one turn — and if it reintroduces the same idea two turns later
+    // with fresh wording, there is nothing left to lock it against and the
+    // wobble returns. Anchors age and count down while dormant; the retention
+    // filter below reaps them.
+    const carriedAnchors: WorldTickEvent[] = existingThreats
+        .filter(t => t.status === 'unvalidated' && t.id && !matchedExistingIds.has(t.id))
+        .map(t => ({
+            ...t,
+            turns_until_impact: Math.max(0, (t.turns_until_impact ?? 1) - 1),
+        }));
+
+    if (carriedAnchors.length > 0) {
+        log(
+            `[THREAT ANCHOR CARRY — v1.28] ${carriedAnchors.length} unvalidated anchor(s) not re-submitted this turn — ` +
+            `retained and aged so a later re-submission is still locked to the original wording.`,
+            'info'
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // v1.28: MARK, DON'T DELETE.
+    //
+    // The Origin Gate used to .filter() rejected threats out of existence.
+    // Because they never reached world.emergingThreats, the `existing` lookup
+    // at the top of this function could never match them next turn, which
+    // silently disabled the monotonic ETA countdown, the description lock and
+    // the pivot penalty — every brake this file implements. The model was left
+    // free to re-word and re-number the same threat on every single turn.
+    //
+    // The gate now decides whether a threat may ACT ON THE PLAYER, not whether
+    // it may EXIST IN ENGINE MEMORY. Rejected threats are retained as
+    // 'unvalidated' continuity anchors: never surfaced, never able to trigger,
+    // but able to hold a description and an ETA still.
+    // -----------------------------------------------------------------------
+    const markUnvalidated = (threat: WorldTickEvent, reason: string): WorldTickEvent => {
+        if (threat.status !== 'unvalidated') {
+            log(
+                `[THREAT UNVALIDATED — v1.28] "${threat.description.substring(0, 60)}" — ${reason} ` +
+                `Retained as a continuity anchor: it cannot act on the player, but its wording and ETA ` +
+                `are now locked so a re-submission next turn cannot silently re-aim.`,
+                'warning'
+            );
+        }
+        return {
+            ...threat,
+            status: 'unvalidated',
+            gateBlockedReason: reason,
+            unvalidatedSinceTurn: threat.unvalidatedSinceTurn ?? currentTurn,
+        };
+    };
+
     const gatePassed = sceneMode === 'COMBAT'
         ? processed
-        : processed.filter(threat => {
-            if (threat.turnCreated !== currentTurn) return true;
+        : processed.map(threat => {
+            // Already-live threats from earlier turns are not re-litigated.
+            if (threat.turnCreated !== currentTurn && threat.status !== 'unvalidated') return threat;
 
             if (!validateThreatCausality(threat, dormantHooks, factionExposure, currentTurn, debugLogs, knownEntityNames, playerCharacterName, lore, playerLocation)) {
-                return false;
+                return markUnvalidated(threat, 'Origin Gate found no valid cause (no matching hook, player action, exposed faction, or location lore).');
             }
 
             if (citesImmatureLore(threat.description, lore, currentTurn, 1, debugLogs)) {
@@ -387,19 +633,34 @@ export const processThreatSeeds = (
                     `Lore must mature before it can source threats.`,
                     'error'
                 );
-                return false;
-            }
-
-            if (checkBannedMechanisms(threat.description, bannedMechanisms, debugLogs)) {
-                return false;
+                return markUnvalidated(threat, `cites lore younger than ${LORE_MATURATION_TURNS} turns.`);
             }
 
             if (!validateInformationChain(threat, knownEntities, playerLocation, currentTurn, debugLogs)) {
-                return false;
+                return markUnvalidated(threat, 'no plausible information chain — the actor could not know what this threat assumes they know.');
             }
 
             if (checkEscalationBudget(threat, existingThreats, currentTurn, debugLogs)) {
-                return false;
+                return markUnvalidated(threat, 'exceeds the escalation budget for the current window.');
+            }
+
+            // Passed everything. If this was previously an unvalidated anchor,
+            // the model has now supplied a real cause — promote it, keeping its
+            // accumulated ETA and locked description.
+            if (threat.status === 'unvalidated') {
+                log(
+                    `[THREAT PROMOTED — v1.28] "${threat.description.substring(0, 60)}" — ` +
+                    `previously unvalidated since T${threat.unvalidatedSinceTurn}, now passes the Origin Gate. ` +
+                    `Going live at ETA ${threat.turns_until_impact} with its original wording intact.`,
+                    'info'
+                );
+                threat = {
+                    ...threat,
+                    status: (threat.turns_until_impact ?? 99) <= 1 ? 'imminent' : 'building',
+                    gateBlockedReason: undefined,
+                    unvalidatedSinceTurn: undefined,
+                    promotedTurn: currentTurn,
+                };
             }
 
             if (locationGraph && threat.factionSource) {
@@ -418,14 +679,23 @@ export const processThreatSeeds = (
                     debugLogs
                 );
                 if (!distanceCheck.valid) {
-                    threat.turns_until_impact = distanceCheck.minimumEtaTurns;
+                    threat = { ...threat, turns_until_impact: distanceCheck.minimumEtaTurns };
                 }
             }
 
-            return true;
+            return threat;
         });
 
-    const reseedFiltered = gatePassed.filter(threat => {
+    // Hard drops. Unlike the gate, these delete outright — a banned mechanism is
+    // player-authored content policy, and the re-seed / rate-limit windows exist
+    // precisely to stop a threat idea from persisting, so retaining an anchor
+    // for them would defeat their purpose.
+    const mechanismFiltered = gatePassed.filter(threat => {
+        if (threat.turnCreated !== currentTurn) return true;
+        return !checkBannedMechanisms(threat.description, bannedMechanisms, debugLogs);
+    });
+
+    const reseedFiltered = mechanismFiltered.filter(threat => {
         if (threat.turnCreated !== currentTurn) return true;
         const incomingNames = extractEntityNamesFromDescription(
             threat.description, knownEntityNames, playerCharacterName
@@ -480,13 +750,54 @@ export const processThreatSeeds = (
         return true;
     });
 
-    const active = causallyValid.filter(t => t.status !== 'expired' && t.status !== 'triggered');
+    const active = [...causallyValid, ...carriedAnchors]
+        .filter(t => t.status !== 'expired' && t.status !== 'triggered');
 
-    if (active.length > THREAT_SEED_CAP) {
-        log(`[THREAT CAP] ${active.length} seeds (after origin gate) — cap is ${THREAT_SEED_CAP}. Oldest seeds trimmed.`, 'warning');
-        active.sort((a, b) => (a.turnCreated ?? 0) - (b.turnCreated ?? 0));
-        active.splice(0, active.length - THREAT_SEED_CAP);
+    // -----------------------------------------------------------------------
+    // v1.28: unvalidated anchors are retained on a leash.
+    //
+    // An anchor exists only to stop the model re-wording and re-numbering the
+    // same idea. It must never quietly become a live threat by running its ETA
+    // to zero, and it must not accumulate forever.
+    // -----------------------------------------------------------------------
+    const retained = active.filter(t => {
+        if (t.status !== 'unvalidated') return true;
+
+        const age = currentTurn - (t.unvalidatedSinceTurn ?? currentTurn);
+        if (age >= UNVALIDATED_THREAT_MAX_TURNS) {
+            log(
+                `[THREAT ANCHOR EXPIRED — v1.28] "${t.description.substring(0, 60)}" — ` +
+                `held unvalidated for ${age} turns without ever passing the Origin Gate. Dropped.`,
+                'info'
+            );
+            return false;
+        }
+        if ((t.turns_until_impact ?? 99) <= 0) {
+            log(
+                `[THREAT ANCHOR EXPIRED — v1.28] "${t.description.substring(0, 60)}" — ` +
+                `countdown reached zero while still unvalidated. An unvalidated threat may never ` +
+                `trigger, so it is dropped rather than allowed to act on the player.`,
+                'info'
+            );
+            return false;
+        }
+        return true;
+    });
+
+    const live = retained.filter(t => t.status !== 'unvalidated');
+    const anchors = retained.filter(t => t.status === 'unvalidated');
+
+    if (live.length > THREAT_SEED_CAP) {
+        log(`[THREAT CAP] ${live.length} live seeds (after origin gate) — cap is ${THREAT_SEED_CAP}. Oldest seeds trimmed.`, 'warning');
+        live.sort((a, b) => (a.turnCreated ?? 0) - (b.turnCreated ?? 0));
+        live.splice(0, live.length - THREAT_SEED_CAP);
     }
 
-    return active;
+    if (anchors.length > UNVALIDATED_THREAT_CAP) {
+        log(`[THREAT ANCHOR CAP — v1.28] ${anchors.length} unvalidated anchors — cap is ${UNVALIDATED_THREAT_CAP}. Oldest trimmed.`, 'info');
+        anchors.sort((a, b) => (a.unvalidatedSinceTurn ?? 0) - (b.unvalidatedSinceTurn ?? 0));
+        anchors.splice(0, anchors.length - UNVALIDATED_THREAT_CAP);
+    }
+
+    return [...live, ...anchors];
 };

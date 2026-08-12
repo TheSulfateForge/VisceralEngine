@@ -11,6 +11,82 @@ import {
     ENTITY_EXTRACTION_BLACKLIST
 } from '../../engine';
 import { checkNameCollision, registerEntityName } from '../../nameResolver';
+import { RELATIONSHIP_LEVELS, type RelationshipLevel } from '../../../types';
+import { RELATIONSHIP_MAX_STEPS_PER_TURN } from '../../../config/engineConfig';
+
+/** v1.28: level a character-sheet-declared relationship enters the world at. */
+const DECLARED_RELATIONSHIP_FLOOR: RelationshipLevel = 'WARM';
+
+/** Declared relationships whose text reads adversarial are not auto-warmed. */
+const HOSTILE_RELATIONSHIP_HINTS = /\b(estranged|hate[sd]?|rival|enem|feud|betray|disowned|nemesis|abusive|hostile|exiled|vendetta)\w*/i;
+
+/**
+ * v1.28: match an entity name against the free-text relationships on the
+ * character sheet (e.g. "Anwen Drevast (twin sister)"). Returns the matching
+ * declaration, or null.
+ */
+const declaredRelationshipFor = (
+    entityName: string,
+    relationships: string[],
+): string | null => {
+    const tokens = significantNameParts(entityName);
+    if (tokens.length === 0) return null;
+
+    for (const declaration of relationships) {
+        if (!declaration || HOSTILE_RELATIONSHIP_HINTS.test(declaration)) continue;
+        const declaredTokens = significantNameParts(declaration.replace(/\([^)]*\)/g, ''));
+        // Require the given name plus one more token, or an exact single-token
+        // match — same standard the dedup matcher uses, so "Anwen" alone will
+        // not claim "Anwen Sarath".
+        const shared = tokens.filter(t => declaredTokens.includes(t));
+        if (shared.length >= 2 || (tokens.length === 1 && shared.length === 1)) {
+            return declaration;
+        }
+    }
+    return null;
+};
+
+/**
+ * v1.28: relationship ratchet.
+ *
+ * relationship_level was entirely model-owned. The response schema requires the
+ * field on every entity update, so the model re-declared it from scratch every
+ * turn with nothing anchoring it to what the relationship had actually become.
+ * The observed result in long campaigns was that firmly established allies —
+ * family, protectors, love interests — silently reverted to NEUTRAL, which in
+ * turn starved the world-pulse brief (it filters on relationship_level) and
+ * removed any signal telling the narrator these people were allies at all.
+ *
+ * Movement is now capped at RELATIONSHIP_MAX_STEPS_PER_TURN steps along the
+ * NEMESIS→DEVOTED ladder. A bond can still break — it just has to be walked
+ * down a rung at a time in view of the player, rather than teleporting.
+ */
+const clampRelationshipMovement = (
+    previous: RelationshipLevel | undefined,
+    proposed: RelationshipLevel | undefined,
+    entityName: string,
+    debugLogs: { timestamp: string; message: string; type: string }[],
+): RelationshipLevel | undefined => {
+    if (!previous || !proposed || previous === proposed) return proposed ?? previous;
+
+    const from = RELATIONSHIP_LEVELS.indexOf(previous);
+    const to = RELATIONSHIP_LEVELS.indexOf(proposed);
+    if (from < 0 || to < 0) return proposed;
+
+    const distance = Math.abs(to - from);
+    if (distance <= RELATIONSHIP_MAX_STEPS_PER_TURN) return proposed;
+
+    const direction = to > from ? 1 : -1;
+    const clamped = RELATIONSHIP_LEVELS[from + direction * RELATIONSHIP_MAX_STEPS_PER_TURN];
+    debugLogs.push({
+        timestamp: new Date().toISOString(),
+        message: `[RELATIONSHIP RATCHET — v1.28] ${entityName}: model proposed ${previous} → ${proposed} ` +
+            `(${distance} steps) in a single turn. Clamped to ${clamped}. Relationships move one rung per turn ` +
+            `so long-established bonds cannot silently reset.`,
+        type: 'warning',
+    });
+    return clamped;
+};
 
 /**
  * v1.23: Significant name parts — parens stripped, lowercased, short/blacklisted
@@ -177,6 +253,16 @@ export const entityLifecycleStep: PipelineStep = {
                     // Engine-owned fields: an absent/blank update never clears them.
                     if (!merged.personality?.trim()) merged.personality = existingEntity.personality;
                     if (!merged.voice_sample?.trim()) merged.voice_sample = existingEntity.voice_sample;
+                    // v1.28: relationship_level is now engine-anchored too. An
+                    // omitted value keeps the established relationship instead
+                    // of falling through to the schema default, and any value
+                    // present is clamped to one rung of movement per turn.
+                    merged.relationship_level = clampRelationshipMovement(
+                        existingEntity.relationship_level,
+                        update.relationship_level,
+                        existingEntity.name,
+                        ctx.debugLogs,
+                    ) ?? existingEntity.relationship_level;
                     merged.status = existingEntity.status;
                     merged.lastSeenTurn = existingEntity.lastSeenTurn;
                     merged.firstSeenTurn = existingEntity.firstSeenTurn;
@@ -187,6 +273,32 @@ export const entityLifecycleStep: PipelineStep = {
                     // v1.24: New entity — enforce the one-of-four archetype cap
                     // in code before the record enters the registry.
                     const newEntity = { ...update };
+
+                    // v1.28: seed declared relationships. The character sheet
+                    // already states who these people are ("Anwen Drevast (twin
+                    // sister)"), but nothing carried that into the entity
+                    // record, so the player's own family entered the world as
+                    // NEUTRAL strangers and stayed there. Only ever raises, never
+                    // lowers, and skips relationships described in hostile terms.
+                    const declared = declaredRelationshipFor(
+                        newEntity.name,
+                        ctx.previousCharacter?.relationships ?? [],
+                    );
+                    if (
+                        declared &&
+                        RELATIONSHIP_LEVELS.indexOf(newEntity.relationship_level) <
+                        RELATIONSHIP_LEVELS.indexOf(DECLARED_RELATIONSHIP_FLOOR)
+                    ) {
+                        ctx.debugLogs.push({
+                            timestamp: new Date().toISOString(),
+                            message: `[RELATIONSHIP SEEDED — v1.28] ${newEntity.name}: entered as ` +
+                                `${newEntity.relationship_level}, raised to ${DECLARED_RELATIONSHIP_FLOOR} — ` +
+                                `declared on the character sheet as "${declared}".`,
+                            type: 'info',
+                        });
+                        newEntity.relationship_level = DECLARED_RELATIONSHIP_FLOOR;
+                    }
+
                     if (newEntity.personality?.trim()) {
                         newEntity.personality = enforcePersonalityDiversity(
                             newEntity.personality,

@@ -117,6 +117,66 @@ export const EXPOSURE_PUBLIC_ACTION = 10;
 export const EXPOSURE_DECAY_PER_TURN = 2;
 
 // ---------------------------------------------------------------------------
+// v1.28: Exposure is ADVERSARIAL intelligence, not attention
+// ---------------------------------------------------------------------------
+// Exposure exists to answer one question: "has this party learned enough about
+// the player to credibly move against them?" It was previously awarded to ANY
+// NPC whose world_tick action contained a watching verb ("watches", "observes",
+// "notices"...), with no relationship check at all. The practical result was
+// inverted targeting: allies who share the most screen time with the player —
+// family, protectors, love interests — accumulated exposure fastest and became
+// the only entities in the world legally permitted to source a threat, while
+// genuine antagonists operating offscreen stayed below the threshold and were
+// gate-blocked from ever acting.
+//
+// A mother watching her son with concern is not intelligence-gathering.
+// Exposure accrual is now scaled by disposition.
+
+/** Exposure multiplier for NEMESIS / HOSTILE observers — full rate. */
+export const EXPOSURE_WEIGHT_HOSTILE = 1.0;
+
+/** Exposure multiplier for COLD observers — they may yet turn. */
+export const EXPOSURE_WEIGHT_COLD = 0.6;
+
+/** Exposure multiplier for NEUTRAL / unknown observers — ambient awareness. */
+export const EXPOSURE_WEIGHT_NEUTRAL = 0.35;
+
+/**
+ * Exposure multiplier for WARM / ALLIED / DEVOTED observers.
+ * Zero by design: an ally's attention is not surveillance, and letting it
+ * accrue is what made the player's own family the highest-scoring threat
+ * source in the world.
+ */
+export const EXPOSURE_WEIGHT_ALLIED = 0;
+
+/** Relationship levels treated as allied for exposure and reminder gating. */
+export const ALLIED_RELATIONSHIP_LEVELS = ['WARM', 'ALLIED', 'DEVOTED'] as const;
+
+/** Relationship levels treated as adversarial for reminder gating. */
+export const ADVERSARIAL_RELATIONSHIP_LEVELS = ['HOSTILE', 'NEMESIS'] as const;
+
+// ---------------------------------------------------------------------------
+// v1.28: Unvalidated threat retention
+// ---------------------------------------------------------------------------
+
+/** Maximum concurrent 'unvalidated' continuity anchors retained. */
+export const UNVALIDATED_THREAT_CAP = 3;
+
+/** Turns an 'unvalidated' threat is retained before it self-expires. */
+export const UNVALIDATED_THREAT_MAX_TURNS = 6;
+
+// ---------------------------------------------------------------------------
+// v1.28: relationship_level ratchet
+// ---------------------------------------------------------------------------
+// relationship_level was fully model-owned: re-declared from scratch every turn
+// with no engine anchor, so long-established allies silently reverted to
+// NEUTRAL whenever the model omitted or mis-guessed the field. Movement is now
+// capped so a bond has to be walked down, not teleported.
+
+/** Maximum steps along RELATIONSHIP_LEVELS a single turn may move an entity. */
+export const RELATIONSHIP_MAX_STEPS_PER_TURN = 1;
+
+// ---------------------------------------------------------------------------
 // Hidden Registry
 // ---------------------------------------------------------------------------
 

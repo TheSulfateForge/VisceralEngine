@@ -218,6 +218,11 @@ const buildSituationRecap = (
         .slice(0, 5)
         .join(', ');
     const activeThreats = (world.emergingThreats || [])
+        // v1.28: 'unvalidated' anchors are engine bookkeeping for threats the
+        // Origin Gate rejected. Surfacing one here would announce a rejected
+        // threat to the model as imminent — and invite it to write the very
+        // scene the gate refused to authorise.
+        .filter(t => t.status !== 'unvalidated')
         .filter(t => (t.turns_until_impact ?? 99) <= 3)
         .map(t => t.description.slice(0, 60))
         .slice(0, 2);
