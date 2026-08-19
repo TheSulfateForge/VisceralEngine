@@ -4,6 +4,7 @@ import { GEMINI_SAFETY_SETTINGS, THINKING_DEFAULTS } from "../constants";
 import { ChatMessage, Role, ModelResponseSchema, SCENE_MODES, SceneMode, Lighting, LIGHTING_LEVELS,
     MontageBlock, MontageType, ProposedMemory, ProposedTrauma, ProposedSkillUpdate, ProposedNpcDelta, TokenUsage } from "../types";
 import { getResponseSchema } from "../schemas/responseSchema";
+import { OOC_RESPONSE_SCHEMA, type OocResponse } from "../schemas/oocSchema";
 import { sanitiseHistory } from '../utils/nameResolver';
 import { getContextProfile } from '../config/engineConfig';
 import { systemInstructionCache } from './geminiCache';
@@ -184,7 +185,17 @@ export class GeminiClient {
         } : undefined,
 
         hidden_update: typeof safeData.hidden_update === 'string' ? safeData.hidden_update : undefined,
-        
+
+        // v1.31: scene ledger + player canon. Both are plain string arrays;
+        // caps, dedup and scope filtering live in
+        // utils/engine/sceneContinuity.ts so the transport stays a dumb parser.
+        established: Array.isArray(safeData.established)
+            ? safeData.established.filter((s: unknown): s is string => typeof s === 'string' && s.trim().length > 0)
+            : undefined,
+        player_assertions: Array.isArray(safeData.player_assertions)
+            ? safeData.player_assertions.filter((s: unknown): s is string => typeof s === 'string' && s.trim().length > 0)
+            : undefined,
+
         new_memory: isObject(safeData.new_memory) ? {
             fact: asString(safeData.new_memory.fact, "Unknown Memory")
         } : undefined,
@@ -330,7 +341,15 @@ export class GeminiClient {
     // and progressive compression of older messages to preserve attention budget.
     const profile = getContextProfile(this.modelName);
 
-    const contextHistory = history.length > 0 ? history.slice(0, -1) : [];
+    // v1.31: OOC exchanges are stripped from the history sent to the model.
+    // Two reasons. First, an OOC engine reply sitting in the history as a MODEL
+    // turn shows the model its own non-narrative output and primes it to break
+    // character. Second, the durable content of an OOC exchange is already
+    // carried by [PLAYER CANON], so nothing is lost. As a bonus this keeps the
+    // window quantization stable — an OOC exchange no longer shifts the cache
+    // prefix for the whole history behind it.
+    const narrativeHistory = history.filter(m => m.ooc !== true);
+    const contextHistory = narrativeHistory.length > 0 ? narrativeHistory.slice(0, -1) : [];
 
     // v1.24 CACHE-STABLE WINDOWING. Implicit caching is prefix-based: the
     // request must start with byte-identical content to a previous request.
@@ -380,7 +399,9 @@ export class GeminiClient {
     // param now arrives with the summary already embedded in the right position.
     const fullSystemInstruction = systemPrompt;
 
-    const currentUserMsg = history[history.length - 1];
+    // Same filtered view — an OOC turn never reaches sendMessage, but keeping
+    // both reads on `narrativeHistory` means a future caller can't desync them.
+    const currentUserMsg = narrativeHistory[narrativeHistory.length - 1] ?? history[history.length - 1];
 
     // v1.19/v1.26: Build model-appropriate thinking config, with per-turn
     // level override (calm beats think less, combat thinks more).
@@ -563,6 +584,91 @@ export class GeminiClient {
         time_passed_minutes: 0,
         world_tick: { npc_actions: [], environment_changes: [], emerging_threats: [] }
       };
+    }
+  }
+
+  /**
+   * v1.31: OUT-OF-CHARACTER TURN.
+   *
+   * Deliberately NOT a call to sendMessage. An OOC exchange produces no
+   * narrative, no world_tick, no threats and no clock advance, so sending it
+   * the full RESPONSE_SCHEMA would invite the model to generate all of them and
+   * would pay ~40 properties of request tokens for a two-sentence answer.
+   *
+   * It also skips the explicit cache: the cached prefix is the full
+   * SYSTEM_INSTRUCTIONS + CAMPAIGN CANON block, which exists to make the model
+   * write good fiction. None of it applies to answering "why did you repeat
+   * yourself". A short bespoke instruction is both cheaper and more accurate.
+   *
+   * Only the last few messages are sent, for referential context ("you repeated
+   * yourself" needs to know what "yourself" said).
+   */
+  async sendOocMessage(
+      oocBody: string,
+      recentHistory: ChatMessage[],
+      situationLine: string = '',
+  ): Promise<OocResponse> {
+    const OOC_INSTRUCTION = `You are the engine behind a text roleplaying game, speaking DIRECTLY to the player, out of character.
+
+The player has stepped outside the fiction to ask a question, correct a fact, or give you an instruction about how to narrate. You are not a character right now. Do not write prose. Do not describe a room. Do not have an NPC say anything. Do not advance the story — no time passes during this exchange.
+
+Answer plainly, in your own voice, in 1-3 sentences. If the player corrected something, state back what you now understand to be true so they can confirm you got it right. If they gave an instruction about narration, acknowledge it concretely rather than generically.
+
+Record any fact they established about THEIR OWN character in \`assertions\`. Record a standing narration instruction in \`directive\`. Both are optional.`;
+
+    // Enough history to resolve references like "you just said", no more.
+    const tail = recentHistory
+        .filter(m => m.role === Role.USER || m.role === Role.MODEL)
+        .slice(-4)
+        .map(m => `${m.role === Role.USER ? 'PLAYER' : 'ENGINE'}: ${m.text.slice(0, 900)}`)
+        .join('\n\n');
+
+    const prompt = [
+        situationLine ? `[WHERE THE FICTION STANDS]\n${situationLine}` : '',
+        tail ? `[RECENT EXCHANGE — for reference only, do not continue it]\n${tail}` : '',
+        `[PLAYER — OUT OF CHARACTER]\n${oocBody}`,
+    ].filter(Boolean).join('\n\n');
+
+    try {
+        const result = await this.withRetry(() => Promise.race([
+            this.ai.models.generateContent({
+                model: this.modelName,
+                contents: prompt,
+                config: {
+                    systemInstruction: OOC_INSTRUCTION,
+                    temperature: 0.4,   // an answer, not a performance
+                    safetySettings: GEMINI_SAFETY_SETTINGS,
+                    responseMimeType: 'application/json',
+                    responseSchema: OOC_RESPONSE_SCHEMA,
+                    ...(this.buildThinkingConfig('low') ?? {}),
+                },
+            }),
+            new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error('OOC request timed out')), REQUEST_TIMEOUT_MS)
+            ),
+        ]));
+
+        const raw = JSON.parse(this.cleanJsonOutput(result.text ?? ''));
+        const strings = (v: unknown): string[] | undefined =>
+            Array.isArray(v)
+                ? v.filter((s: unknown): s is string => typeof s === 'string' && s.trim().length > 0)
+                : undefined;
+
+        return {
+            reply: typeof raw?.reply === 'string' && raw.reply.trim()
+                ? raw.reply.trim()
+                : 'Understood.',
+            assertions: strings(raw?.assertions),
+            directive: typeof raw?.directive === 'string' && raw.directive.trim()
+                ? raw.directive.trim()
+                : undefined,
+        };
+    } catch (e: unknown) {
+        const errMsg = e instanceof Error ? e.message : String(e);
+        console.error('[VRE] OOC request failed:', errMsg);
+        // Fail soft. An OOC turn changes no state, so a failure here must never
+        // block the player or corrupt the fiction — just say so.
+        return { reply: `[OOC channel unavailable — ${errMsg}]` };
     }
   }
 }

@@ -1,6 +1,8 @@
 import { useRef, useCallback } from 'react';
 import { ChatMessage, Role, ModelResponseSchema, SummarySegment } from '../types';
-import { generateMessageId } from '../idUtils';
+import { generateMessageId, generateUUID } from '../idUtils';
+import { parseOocInput, isNarrativeMessage } from '../utils/engine/oocDetection';
+import { ingestPlayerAssertions } from '../utils/engine/sceneContinuity';
 import { mapSystemErrorToNarrative } from '../utils';
 import { useToast } from '../components/providers/ToastProvider';
 import { constructGeminiPrompt } from '../utils/promptUtils';
@@ -168,7 +170,9 @@ export const useGeminiClient = () => {
       intervalSize: number,
   ) => {
       // Slice only the new window — the messages added since the last segment.
-      const window = history.slice(-intervalSize);
+      // v1.31: OOC exchanges are excluded; a summary is a record of the
+      // fiction, and an engine answer about narration style is not part of it.
+      const window = history.filter(isNarrativeMessage).slice(-intervalSize);
       if (window.length === 0) return;
 
       // v1.24: Salvage pass — the same summarization call also extracts
@@ -234,10 +238,130 @@ export const useGeminiClient = () => {
       });
   }, [setGameHistory, setGameWorld]);
 
+  /**
+   * v1.31: OUT-OF-CHARACTER TURN.
+   *
+   * Not a turn. No clock advance, no world tick, no threat pipeline, no
+   * narrative, no turnCount increment — so it never runs the simulation
+   * pipeline at all. It does two things: answer the player directly, and
+   * promote any fact they established into player canon.
+   *
+   * This exists because the alternative was what the reviewed save shows: the
+   * player typed an OOC complaint about repetition INTO the fiction, and it
+   * burned five minutes of game time, rolled a world tick, and got RAG-indexed
+   * as [ooc, repeated, near, verbatim, ...] — while the world re-rendered from
+   * a prompt near-identical to the previous turn's.
+   */
+  const handleOocSend = useCallback(async (body: string, rawText: string) => {
+      const requestId = Date.now().toString();
+      latestRequestId.current = requestId;
+
+      const userMsg: ChatMessage = {
+          id: generateMessageId(),
+          role: Role.USER,
+          text: rawText,
+          timestamp: new Date().toISOString(),
+          ooc: true,
+      };
+
+      setGameHistory(prev => ({
+          ...prev,
+          history: [...prev.history, userMsg],
+          isThinking: true,
+          debugLog: [
+              ...prev.debugLog,
+              { timestamp: new Date().toISOString(), message: `[OOC] Out-of-character input — no clock, no world tick, no threat roll.`, type: 'info' },
+          ],
+      }));
+
+      try {
+          const service = await getService();
+          if (!service) {
+              setGameHistory(gs => ({ ...gs, isThinking: false }));
+              return;
+          }
+
+          const state = useGameStore.getState();
+          const situationLine = [
+              `${state.character.name} is at ${state.gameWorld.location || 'an unknown place'}.`,
+              `Scene: ${state.gameWorld.sceneMode ?? 'NARRATIVE'}, tension ${state.gameWorld.tensionLevel ?? 0}/100.`,
+              `Clock: ${state.gameWorld.time?.display ?? 'unknown'}.`,
+          ].join(' ');
+
+          const ooc = await service.sendOocMessage(
+              body,
+              state.gameHistory.history.filter(m => !m.ooc),
+              situationLine,
+          );
+
+          if (latestRequestId.current !== requestId) return;
+
+          // Player canon. The turn number is the CURRENT turn — an OOC exchange
+          // does not advance it, so the assertion is stamped to the turn it
+          // actually clarifies.
+          const turn = state.gameHistory.turnCount ?? 0;
+          const { canon, accepted, rejected } = ingestPlayerAssertions(
+              state.gameWorld.playerCanon,
+              ooc.assertions,
+              turn,
+              true,
+              () => generateUUID(),
+          );
+
+          if (accepted.length > 0 || rejected.length > 0) {
+              setGameWorld(prev => ({ ...prev, playerCanon: canon }));
+          }
+
+          const replyMsg: ChatMessage = {
+              id: generateMessageId(),
+              role: Role.MODEL,
+              text: ooc.reply,
+              timestamp: new Date().toISOString(),
+              ooc: true,
+          };
+
+          setGameHistory(prev => ({
+              ...prev,
+              history: [...prev.history, replyMsg],
+              isThinking: false,
+              debugLog: [
+                  ...prev.debugLog,
+                  ...accepted.map(f => ({
+                      timestamp: new Date().toISOString(),
+                      message: `[PLAYER CANON] Recorded via OOC: "${f}"`,
+                      type: 'success' as const,
+                  })),
+                  ...rejected.map(f => ({
+                      timestamp: new Date().toISOString(),
+                      message: `[PLAYER CANON] REJECTED (outside the player's own character): "${f}"`,
+                      type: 'warning' as const,
+                  })),
+                  ...(ooc.directive ? [{
+                      timestamp: new Date().toISOString(),
+                      message: `[OOC DIRECTIVE] ${ooc.directive}`,
+                      type: 'info' as const,
+                  }] : []),
+                  { timestamp: new Date().toISOString(), message: `[OOC] Complete. Turn ${turn} unchanged.`, type: 'info' as const },
+              ],
+          }));
+      } catch (e: unknown) {
+          console.error('[VRE] OOC turn failed:', e);
+          setGameHistory(prev => ({ ...prev, isThinking: false }));
+          showToast('OOC request failed.', 'error');
+      }
+  }, [getService, setGameHistory, setGameWorld, showToast]);
+
   // Main Turn Orchestrator
   const handleSend = useCallback(async (text: string) => {
     if (!text.trim()) return;
-    
+
+    // v1.31: OOC inputs branch out before ANY turn machinery runs.
+    const ooc = parseOocInput(text);
+    if (ooc.isOoc) {
+        await handleOocSend(ooc.body, text);
+        return;
+    }
+
     const requestId = Date.now().toString();
     latestRequestId.current = requestId;
 
@@ -284,9 +408,14 @@ export const useGeminiClient = () => {
         // are RAG-ranked at prompt-build time.
         const contextProfile = getContextProfile(service.modelName);
         const historyForSummarization = useGameStore.getState().gameHistory;
+        // v1.31: count NARRATIVE messages only. Counting OOC exchanges here
+        // would drift the summarisation cadence and, worse, let meta-chatter
+        // ("stop repeating yourself") land in campaign history as story.
+        const narrativeMessageCount = historyForSummarization.history
+            .filter(isNarrativeMessage).length;
         if (
-            historyForSummarization.history.length > 0 &&
-            historyForSummarization.history.length % contextProfile.summarizationInterval === 0
+            narrativeMessageCount > 0 &&
+            narrativeMessageCount % contextProfile.summarizationInterval === 0
         ) {
             performSegmentSummarization(
                 service,
@@ -425,9 +554,11 @@ export const useGeminiClient = () => {
             );
 
         // v1.29: signals the engine previously had no representation of.
+        // v1.31: `&& isNarrativeMessage` — an OOC engine reply is not the
+        // last thing that happened in the fiction.
         const lastNarrative = [...preCallState.gameHistory.history]
             .reverse()
-            .find(m => m.role === Role.MODEL)?.text ?? '';
+            .find(m => m.role === Role.MODEL && isNarrativeMessage(m))?.text ?? '';
 
         // What the player did with THIS turn: corrected an NPC's reading of
         // them, reciprocated physical contact, or stepped back from a push.
@@ -628,7 +759,7 @@ export const useGeminiClient = () => {
         //       itself (time-skip, scene-break, length collapse in a mature
         //       SOCIAL beat). Catches what (a) misses.
         const recentNarrativeLengths = preCallState.gameHistory.history
-            .filter(m => m.role === Role.MODEL)
+            .filter(m => m.role === Role.MODEL && isNarrativeMessage(m))
             .slice(-6)
             .map(m => m.text.length);
         const confessionDrift = detectSanitizationDrift(response.thought_process);
@@ -757,7 +888,7 @@ export const useGeminiClient = () => {
         // reads the new narrative against the recent ones.
         // ------------------------------------------------------------------
         const priorNarratives = preCallState.gameHistory.history
-            .filter(m => m.role === Role.MODEL)
+            .filter(m => m.role === Role.MODEL && isNarrativeMessage(m))
             .slice(-REPETITION_LOOKBACK)
             .map(m => m.text);
         const repetition = detectSelfRepetition(response.narrative, priorNarratives);

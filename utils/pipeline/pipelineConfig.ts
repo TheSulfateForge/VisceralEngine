@@ -29,6 +29,7 @@ import { traumaEffectsStep } from './steps/13-traumaEffects';
 import { factionConflictsStep } from './steps/14-factionConflicts';
 import { aiSkillUpdatesStep } from './steps/15-aiSkillUpdates';
 import { usageAdvancementStep } from './steps/16-usageAdvancement';
+import { sceneContinuityStep } from './steps/17-sceneContinuity';
 
 /**
  * Builds the initial TurnContext from inputs.
@@ -107,6 +108,10 @@ export const DEFAULT_PIPELINE: PipelineStep[] = [
     factionConflictsStep,
     aiSkillUpdatesStep,
     usageAdvancementStep,
+    // v1.31: LAST by design — it snapshots final state (location and sceneMode
+    // settle in 12, conditions in 13, skills in 15/16) for next turn's
+    // [SINCE LAST TURN] diff.
+    sceneContinuityStep,
 ];
 
 /**

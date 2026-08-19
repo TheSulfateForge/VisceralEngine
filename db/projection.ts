@@ -343,6 +343,7 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
         npc_interaction: m.npcInteraction ?? null,
         world_tick: m.worldTick ?? null,
         metadata: m.metadata ?? null,
+        ooc: m.ooc ?? null,          // v1.31
       }));
 
       // Best-effort turn_number assignment: increment on each USER message.
@@ -873,6 +874,10 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
       failed_models: world.failedModels ?? [],
       environment: world.environment ?? null,
       last_active_summary: history.lastActiveSummary ?? null,
+      // v1.31 — scene-continuity state
+      player_canon: world.playerCanon ?? null,
+      scene_ledger: world.sceneLedger ?? null,
+      last_turn_digest: world.lastTurnDigest ?? null,
     };
     await vdb.world_state.put(wsRow);
 
@@ -1016,6 +1021,7 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
       ...(m.npc_interaction ? { npcInteraction: m.npc_interaction } : {}),
       ...(m.world_tick ? { worldTick: m.world_tick } : {}),
       ...(m.metadata ? { metadata: m.metadata } : {}),
+      ...(m.ooc ? { ooc: true } : {}),   // v1.31
     }));
 
     const summarySegmentRows = await vdb.summary_segments
@@ -1442,6 +1448,10 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
       lastWorldTickTurn: ws.last_world_tick_turn,
       turnCount: ws.turn_count,
       lastBargainTurn: ws.last_bargain_turn,
+      // v1.31 — absent on pre-v1.31 saves, which simply start empty.
+      ...(ws.player_canon?.length ? { playerCanon: ws.player_canon } : {}),
+      ...(ws.scene_ledger?.length ? { sceneLedger: ws.scene_ledger } : {}),
+      ...(ws.last_turn_digest ? { lastTurnDigest: ws.last_turn_digest } : {}),
       factionIntelligence,
       legalStatus,
       dormantHooks,

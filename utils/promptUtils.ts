@@ -28,6 +28,12 @@ import { buildTraumaPromptBlock } from './traumaSystem';
 import { buildSkillPromptBlock } from './skillSystem';
 import { buildFactionPromptBlock } from './factionSystem';
 import { buildSeedBrief } from './seedBrief';
+import { isNarrativeMessage } from './engine/oocDetection';
+import {
+    buildSceneLedgerBlock,
+    buildPlayerCanonBlock,
+    buildSinceLastTurnBlock,
+} from './engine/sceneContinuity';
 import { deriveTimePhase, getAmbientCue } from './engine/timeUtils';
 import { db } from '../db';
 
@@ -241,7 +247,7 @@ const buildSituationRecap = (
     // spoke, who touched whom, whether the scene moved. Derived from the
     // turn's worldTick metadata, never from its prose.
     const lastModelMsg = recentHistory
-        .filter(m => m.role === Role.MODEL)
+        .filter(m => m.role === Role.MODEL && isNarrativeMessage(m))
         .slice(-1)[0];
     const lastActors = (lastModelMsg?.worldTick?.npc_actions ?? [])
         .filter(a => a.player_visible)
@@ -752,7 +758,7 @@ export const constructGeminiPrompt = async (
   // rumor, offhand line). Hydrate them to full blocks THIS turn so the model
   // sees canonical personality/voice before writing them again.
   const lastModelTurnText = [...gameHistory.history]
-    .filter(m => m.role === Role.MODEL)
+    .filter(m => m.role === Role.MODEL && isNarrativeMessage(m))
     .slice(-1)[0]?.text ?? '';
   const sentinelEntities = findNarrativeMentionedEntities(
     lastModelTurnText,
@@ -765,7 +771,7 @@ export const constructGeminiPrompt = async (
   // Exact lore keyword hits (player input or last exchange) force-inject
   // their entries past the RAG similarity threshold and limit.
   const lastUserTurnText = [...gameHistory.history]
-    .filter(m => m.role === Role.USER)
+    .filter(m => m.role === Role.USER && isNarrativeMessage(m))
     .slice(-1)[0]?.text ?? '';
   const forcedLore = findExactKeywordLore(
     `${userInput} ${lastUserTurnText} ${lastModelTurnText}`,
@@ -889,6 +895,24 @@ This world is fundamentally: ${gameWorld.worldTags.join(', ')}.
   // v1.21: Situation Recap — concise anchor at the top of dynamic context
   const situationRecap = buildSituationRecap(character, gameWorld, gameHistory.history);
 
+  // v1.31: The three change-carrying blocks. Everything else in this prompt
+  // describes STATE; between two consecutive turns of a static scene the state
+  // blocks are byte-identical, which is the dominant driver of near-verbatim
+  // self-repetition. These are the only blocks that say what is DIFFERENT, what
+  // is already SPENT, and what the player has RULED.
+  //
+  // Ordered deliberately: the delta sits highest (it is the smallest and the
+  // most perishable), the ledger next, canon last (it is the most stable).
+  const digest = gameWorld.lastTurnDigest;
+  const canonFromLastTurn = digest
+      ? (gameWorld.playerCanon ?? [])
+          .filter(e => e.turnAsserted === digest.turn)
+          .map(e => e.fact)
+      : [];
+  const sinceLastTurnBlock = buildSinceLastTurnBlock(digest, gameWorld, character, canonFromLastTurn);
+  const sceneLedgerBlock = buildSceneLedgerBlock(gameWorld.sceneLedger);
+  const playerCanonBlock = buildPlayerCanonBlock(gameWorld.playerCanon);
+
   // v1.19: Dream/Nightmare seed — only injected when the player is sleeping
   // and trauma ≥ DREAM_TRAUMA_THRESHOLD. Empty string otherwise.
   const dreamSeed = buildDreamSeed(character, gameWorld, userInput);
@@ -918,6 +942,9 @@ This world is fundamentally: ${gameWorld.worldTags.join(', ')}.
   const promptString = `
 ${summaryBlock}
 ${sanitise(situationRecap)}
+${sanitise(sinceLastTurnBlock ? `\n${sinceLastTurnBlock}\n` : '')}
+${sanitise(sceneLedgerBlock ? `\n${sceneLedgerBlock}\n` : '')}
+${sanitise(playerCanonBlock ? `\n${playerCanonBlock}\n` : '')}
 ${sanitise(dreamSeed ? `\n${dreamSeed}\n` : '')}
 ${sanitise(worldPrimerBlock ? `\n${worldPrimerBlock}\n` : '')}
 
@@ -985,6 +1012,12 @@ ${sanitise(conditionLock ? `\n${conditionLock}\n` : '')}
       static: staticContext.length,
       roster: worldRosterBlock.length,     // v1.27 (inside static, cached)
       loreIndex: loreIndexBlock.length,    // v1.27 (inside static, cached)
+      // v1.31 — the change-carrying blocks. Watch these: if `delta` is the
+      // "nothing changed" text several turns running, the scene has stalled and
+      // repetition is imminent.
+      delta: sinceLastTurnBlock.length,
+      ledger: sceneLedgerBlock.length,
+      canon: playerCanonBlock.length,
   };
 
   return {

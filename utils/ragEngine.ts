@@ -57,7 +57,7 @@ export function analyzeText(text: string): TokenAnalysis {
  */
 export function analyzeQuery(userInput: string, recentHistory: ChatMessage[], lookback: number = 3): TokenAnalysis {
   const recentRelevant = recentHistory
-    .filter(m => m.role === Role.MODEL || m.role === Role.USER)
+    .filter(m => (m.role === Role.MODEL || m.role === Role.USER) && m.ooc !== true)
     .slice(-lookback)
     .map(m => m.text)
     .join(' ');
@@ -147,7 +147,7 @@ export function findAliasMatchedEntities(
   const lower = (
     userInput + ' ' +
     recentUserHistory
-      .filter(m => m.role === Role.USER)
+      .filter(m => m.role === Role.USER && m.ooc !== true)
       .slice(-3)
       .map(m => m.text)
       .join(' ')

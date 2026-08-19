@@ -93,6 +93,9 @@ async function writeSentinel(): Promise<void> {
     failed_models: [],
     environment: null,
     last_active_summary: null,
+    player_canon: null,      // v1.31
+    scene_ledger: null,      // v1.31
+    last_turn_digest: null,  // v1.31
   });
 }
 

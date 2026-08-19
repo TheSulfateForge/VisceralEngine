@@ -68,7 +68,7 @@ export const InputArea: React.FC<InputAreaProps> = ({ onSend, handleVisualize, i
                         value={input}
                         onChange={e => setInput(e.target.value)}
                         onKeyDown={e => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), handleSubmit())}
-                        placeholder={isThinking ? "Processing neural response..." : "Declare intent..."}
+                        placeholder={isThinking ? "Processing neural response..." : "Declare intent...  (OOC: / // for out-of-character)"}
                         disabled={isThinking}
                         // v1.22: overflow-hidden -> overflow-y-auto so tall content can scroll internally on mobile.
                         className="w-full bg-[#080808] border border-gray-900 group-focus-within:border-red-900/60 rounded-sm px-6 md:px-10 py-6 md:py-8 pr-14 md:pr-16 text-lg md:text-xl font-light focus:outline-none resize-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed overflow-y-auto"
@@ -129,7 +129,7 @@ export const InputArea: React.FC<InputAreaProps> = ({ onSend, handleVisualize, i
                                 handleSubmit();
                             }
                         }}
-                        placeholder={isThinking ? "Processing neural response..." : "Declare intent..."}
+                        placeholder={isThinking ? "Processing neural response..." : "Declare intent...  (OOC: / // for out-of-character)"}
                         disabled={isThinking}
                         className="flex-1 w-full bg-black text-gray-100 px-4 md:px-8 py-6 text-lg md:text-xl font-light focus:outline-none resize-none overflow-y-auto disabled:opacity-50"
                         style={{ WebkitOverflowScrolling: 'touch' } as React.CSSProperties}

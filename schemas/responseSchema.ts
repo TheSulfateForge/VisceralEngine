@@ -239,6 +239,26 @@ export const RESPONSE_SCHEMA: Schema = {
       required: ["location_name"]
     },
     hidden_update: { type: Type.STRING, nullable: true },
+    // v1.31: Scene-scoped working memory. The engine already derives most of
+    // the ledger from world_tick.npc_actions; this field covers the beats that
+    // are NOT NPC actions — a fact revealed, a decision taken, an object
+    // examined. Keeps the model from re-establishing what it just established.
+    established: {
+      type: Type.ARRAY,
+      nullable: true,
+      items: { type: Type.STRING },
+      description: "SCENE LEDGER. 0-2 SHORT clauses naming what THIS turn established that is now spent and must not be re-established: a fact revealed, a decision taken, an object examined, an offer made. Not a summary of the turn — only the beats a later turn could wrongly repeat. Omit entirely on turns that established nothing new. Example: 'Codi's collar confirmed non-removable by hand'."
+    },
+    // v1.31: The player owns facts about their own character. Before this the
+    // model owned every state channel and the player owned none, so player
+    // corrections lived only in chat history and were routinely contradicted a
+    // turn later.
+    player_assertions: {
+      type: Type.ARRAY,
+      nullable: true,
+      items: { type: Type.STRING },
+      description: "PLAYER-STATED CANON. 0-2 short declarative clauses capturing facts the PLAYER asserted THIS TURN about their OWN character (body, gear, abilities, history), or corrections to something you previously narrated about them. Record the fact, not the phrasing. ONLY record what the player actually stated — never infer, never record your own inventions here. NEVER record claims about NPC thoughts/feelings, faction plans, or world events; those are not the player's to assert. Example: player says 'the armor keeps me warm even my face' → 'Armor maintains body temperature over the whole body when deployed.'"
+    },
     // v1.26: legacy new_memory singleton removed from the schema — every
     // property costs request tokens. validateResponse still accepts it from
     // any model that emits it out of habit; new_memories[] is the contract.
@@ -443,6 +463,7 @@ export const KEEP_DESCRIPTIONS: ReadonlySet<string> = new Set<string>([
   'added_relationships', 'removed_relationships', 'added_goals', 'removed_goals',
   'skill_updates',
   'new_memories', 'salience', 'tags',
+  'established', 'player_assertions',   // v1.31 — both need their scope rules kept
   'new_lore', 'keyword', 'content',
   'biological_inputs',
   'location_update', 'traveled_from', 'travel_time_minutes', 'nearby_locations',

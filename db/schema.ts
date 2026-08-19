@@ -44,6 +44,9 @@ import type {
   WorldTick,
   BioMonitor,
   MontageProposal,
+  PlayerCanonEntry,
+  SceneLedgerEntry,
+  TurnDigest,
 } from '../types';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -147,6 +150,12 @@ export interface MessageRow {
   npc_interaction: NPCInteraction | null;
   world_tick: WorldTick | null;
   metadata: Record<string, unknown> | null;
+  /**
+   * v1.31: 1 when this message is part of the out-of-character side channel
+   * rather than the fiction. Not indexed, so no Dexie version bump is needed —
+   * absent on rows written before v1.31, which read back as not-OOC.
+   */
+  ooc: boolean | null;
 }
 
 export interface SummarySegmentRow {
@@ -526,6 +535,16 @@ export interface WorldStateRow {
   failed_models: string[];
   environment: CombatEnvironment | null;
   last_active_summary: string | null;  // deprecated, kept for round-trip
+  /**
+   * v1.31: scene-continuity state. Stored as JSON payloads rather than
+   * normalized — none of these are ever queried by their inner fields, they are
+   * small and bounded (canon 20, ledger 12, digest a single object), and they
+   * are read and written as whole units every turn. None are indexed, so
+   * existing saves load with them absent and simply start empty.
+   */
+  player_canon: PlayerCanonEntry[] | null;
+  scene_ledger: SceneLedgerEntry[] | null;
+  last_turn_digest: TurnDigest | null;
 }
 
 export interface WorldRuleRow {

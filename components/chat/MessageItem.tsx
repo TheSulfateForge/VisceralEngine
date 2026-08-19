@@ -68,10 +68,35 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({ msg, executeLocalRol
         return sizeMap[size] || sizeMap['xl'];
     })();
 
+    // v1.31: OOC exchanges render as a distinct, deliberately un-literary
+    // channel — monospace, muted, tagged. The player must be able to tell at a
+    // glance that these lines are not part of the fiction and that no time
+    // passed, without having to read them.
+    if (msg.ooc) {
+        const isPlayer = msg.role === Role.USER;
+        return (
+            <div className={`flex ${isPlayer ? 'justify-end' : 'justify-start'} animate-fade-in`}>
+                <div className={`min-w-0 break-words max-w-[85%] border-l-2 px-4 py-3 rounded-sm ${isPlayer ? 'border-cyan-900/40 bg-cyan-950/5' : 'border-cyan-800/50 bg-cyan-950/10'}`}>
+                    <div className="text-[9px] font-bold uppercase tracking-widest text-cyan-600/70 mb-1.5">
+                        {isPlayer ? 'You — out of character' : 'Engine — out of character'}
+                    </div>
+                    <div className="font-mono text-xs leading-relaxed text-cyan-100/70 whitespace-pre-wrap">
+                        {msg.text}
+                    </div>
+                    {!isPlayer && (
+                        <div className="text-[9px] uppercase tracking-widest text-gray-600 mt-2">
+                            No time passed
+                        </div>
+                    )}
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div className={`flex ${msg.role === Role.USER ? 'justify-end' : 'justify-start'} animate-fade-in`}>
             <div className={`w-full min-w-0 break-words ${msg.role === Role.USER ? 'max-w-[85%]' : ''}`}>
-                
+
                 {msg.npcInteraction && (
                     <div className="mb-4 ml-2 max-w-lg">
                         <div className="flex items-center gap-2 mb-2">

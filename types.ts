@@ -862,6 +862,19 @@ export interface ModelResponseSchema {
     // gating, not tone.
     time_mode?: TimeMode;
 
+    /**
+     * v1.31: 0-2 short clauses naming what this turn established and therefore
+     * spent. Folded into world.sceneLedger so a later turn can see what is
+     * already covered instead of re-establishing it.
+     */
+    established?: string[];
+
+    /**
+     * v1.31: 0-2 short clauses capturing facts the PLAYER asserted this turn
+     * about their own character. Folded into world.playerCanon.
+     */
+    player_assertions?: string[];
+
     time_passed_minutes?: number;
     biological_inputs?: BioInputs;
 
@@ -924,6 +937,77 @@ export interface ChatMessage {
     worldTick?: WorldTick;
     isResolved?: boolean;
     metadata?: Record<string, unknown>;
+    /**
+     * v1.31: Out-of-character exchange — the player's meta-instruction or
+     * clarification, or the engine's OOC answer to one. These messages are NOT
+     * narrative: they must be excluded from anything that reads "the last thing
+     * that happened in the fiction" (situation recap, repetition detection,
+     * softening-tell length baselines, summarization windows).
+     */
+    ooc?: boolean;
+}
+
+// --- v1.31: Player-authored canon -------------------------------------------
+
+/**
+ * A fact the PLAYER asserted about their own character or about previously
+ * established world state.
+ *
+ * Before this existed the model owned every state channel — world_tick,
+ * new_memories, character_updates, location_update — while the player's input
+ * went only into raw chat history. That asymmetry is why corrections did not
+ * stick: in the reviewed save the player said the armor keeps her warm and the
+ * very next turn the model re-said "it'll keep you from freezing", because the
+ * correction was one chat message competing with ~110k chars of context while
+ * the model's own prior assumption was baked into state and prose.
+ */
+export interface PlayerCanonEntry {
+    id: string;
+    /** Short declarative clause, e.g. "Armor maintains body temperature when deployed." */
+    fact: string;
+    /** Turn on which the player asserted it. */
+    turnAsserted: number;
+    /** True when it arrived through the OOC channel rather than in-character prose. */
+    viaOoc: boolean;
+}
+
+// --- v1.31: Scene-scoped working memory -------------------------------------
+
+/**
+ * One beat already established in the CURRENT scene.
+ *
+ * The engine had memory at campaign scale (world.memory), a retrospective
+ * summary (summarySegments) and raw history at turn scale — but nothing at
+ * scene scale. Nothing told the model which offers, promises and observations
+ * this conversation had already spent, so it re-made them. In the reviewed save
+ * turn 18 re-offered the cured-goat under-shifts and re-proposed the trip to
+ * the workshop, both of which turn 17 had already done.
+ */
+export interface SceneLedgerEntry {
+    id: string;
+    /** Short clause describing what was established. */
+    beat: string;
+    turn: number;
+    /** 'npc' = derived from a player-visible npc_action; 'model' = declared via `established`. */
+    source: 'npc' | 'model';
+}
+
+/**
+ * v1.31: Compact snapshot of the volatile world state at the END of a turn,
+ * diffed on the NEXT turn to produce the [SINCE LAST TURN] block. Deliberately
+ * small — it is persisted in every save.
+ */
+export interface TurnDigest {
+    turn: number;
+    location: string;
+    totalMinutes: number;
+    sceneMode: string;
+    tensionLevel: number;
+    /** Names of entities marked present/nearby, sorted. */
+    presentEntities: string[];
+    /** Count of live (validated) threats. */
+    threatCount: number;
+    conditionCount: number;
 }
 
 export interface Character {
@@ -1112,6 +1196,21 @@ export interface GameWorld {
     lastThreatArcEndTurn?: number;
     /** v1.17: Cumulative Origin Gate denials this session (for global cooldown trigger). */
     sessionDenialCount?: number;
+
+    /**
+     * v1.31: Facts the PLAYER asserted, promoted to canon so the model reads
+     * them in the same channel it reads everything else it treats as true.
+     */
+    playerCanon?: PlayerCanonEntry[];
+
+    /**
+     * v1.31: Beats already established in the current scene. FIFO-capped and
+     * cleared when the scene changes (location or scene-mode transition).
+     */
+    sceneLedger?: SceneLedgerEntry[];
+
+    /** v1.31: End-of-turn snapshot, diffed next turn to build [SINCE LAST TURN]. */
+    lastTurnDigest?: TurnDigest;
 
     /** v1.10: Flag set by allied passivity detection for sectionReminders. */
     passiveAlliesDetected?: boolean;
