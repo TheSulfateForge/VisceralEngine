@@ -28,7 +28,14 @@ import { significantWords, checkMemoryDuplicate, evictBySalience } from '../util
 import { generateMemoryId } from '../idUtils';
 import { getContextProfile, MEMORY_CAP, DEFAULT_MEMORY_SALIENCE, MAX_REGISTRY_LINES } from '../config/engineConfig';
 import { extractDeniedMechanisms } from '../utils/mechanismDenial';
-import { detectSanitizationDrift, detectSofteningTells, RESAMPLE_REMINDER } from '../utils/driftDetector';
+import {
+    detectSanitizationDrift,
+    detectSofteningTells,
+    detectSelfRepetition,
+    buildRepetitionReminder,
+    REPETITION_LOOKBACK,
+    RESAMPLE_REMINDER,
+} from '../utils/driftDetector';
 import { repairSeedPersonalities } from '../utils/worldSeedHydration';
 import { shouldNudgeHook, selectAmbientHook, markHookNudged } from '../utils/hookNudge';
 import { getTuning } from '../config/tuning';
@@ -53,6 +60,29 @@ let worldPulseInFlight = false;
 // v1.24: One-shot personality repair per session — restores canonical seed
 // personalities that the pre-v1.24 entity-replace bug wiped from saves.
 let personalityRepairDone = false;
+
+// v1.30: Static-beat tracking for the thinking floor.
+//
+// A scene that has run several turns in one room at low tension produces a
+// prompt whose volatile blocks barely move — in the reviewed save the delta
+// between two consecutive turns was ~180 chars of new player text inside
+// ~110k chars of context. That is precisely the condition under which the
+// model copies its own previous turn, and at thinkingLevel 'low' (which the
+// v1.26 scene-mode budget assigns to every calm beat) it spends ~0 thought
+// tokens, so nothing in the loop manufactures divergence.
+//
+// Rather than pay 'medium' on every calm beat, pay it only once a scene has
+// gone static — or immediately after a turn that actually tripped the
+// repetition guard.
+const STATIC_BEAT_THINKING_FLOOR = 3;
+let staticBeatStreak = 0;
+let staticBeatLocation = '';
+let lastTurnRepeated = false;
+
+/** Bump a thinking level one notch. Used for resamples: re-rolling at the same
+ *  budget that produced the bad turn tends to reproduce the bad turn. */
+const escalateThinking = (level: string): string =>
+    level === 'high' ? 'high' : level === 'low' ? 'medium' : 'high';
 
 const THREAT_STATS_WINDOW = 20;
 const threatStats = { seeded: 0, blocked: 0, cooldownTurns: 0, windowStartTurn: -1 };
@@ -523,12 +553,49 @@ export const useGeminiClient = () => {
         // v1.26: Thought tokens are output-priced — spend them where they
         // matter. Calm beats get 'low'; combat/tension get 'high'.
         const currentSceneMode = preCallState.gameWorld.sceneMode ?? 'NARRATIVE';
-        const turnThinking =
+        const baseThinking =
             currentSceneMode === 'COMBAT' ||
             currentSceneMode === 'TENSION' ||
             (preCallState.gameWorld.tensionLevel ?? 0) >= 60
                 ? 'high'
                 : 'low';
+
+        // v1.30: Static-beat thinking floor. Track how many consecutive turns
+        // this scene has spent in one location at low tension; once past the
+        // floor, or immediately after a turn that tripped the repetition
+        // guard, buy 'medium' so the model has budget to find a new beat
+        // instead of pattern-completing the last one.
+        const beatLocation = preCallState.gameWorld.location ?? '';
+        if (beatLocation === staticBeatLocation && currentSceneMode !== 'COMBAT') {
+            staticBeatStreak++;
+        } else {
+            staticBeatStreak = 0;
+            staticBeatLocation = beatLocation;
+        }
+        const sceneIsStatic = staticBeatStreak >= STATIC_BEAT_THINKING_FLOOR;
+        const turnThinking =
+            baseThinking === 'low' && (sceneIsStatic || lastTurnRepeated)
+                ? 'medium'
+                : baseThinking;
+        if (turnThinking !== baseThinking) {
+            // NB: `requestLogs` above is already flushed to state by this point
+            // and is never flushed again — push straight to state instead.
+            const floorReason = lastTurnRepeated
+                ? 'previous turn repeated'
+                : `scene static for ${staticBeatStreak} turns at "${beatLocation}"`;
+            setGameHistory(prev => ({
+                ...prev,
+                debugLog: [
+                    ...prev.debugLog,
+                    {
+                        timestamp: new Date().toISOString(),
+                        message: `[THINKING FLOOR] ${baseThinking} → ${turnThinking} (${floorReason})`,
+                        type: 'info'
+                    }
+                ]
+            }));
+        }
+        lastTurnRepeated = false;
 
         let response: ModelResponseSchema = await service.sendMessage(
             fullSystemPrompt,
@@ -647,7 +714,11 @@ export const useGeminiClient = () => {
                 turnSchema,  // Review item 3
                 contextPrompt,  // v1.24: dynamic context → final user message
                 staticContext,  // v1.26: campaign canon → cached prefix
-                turnThinking    // v1.26: scene-mode thinking budget
+                // v1.30: escalate the budget on a resample. Re-rolling at the
+                // same thinking level that produced the rejected turn samples
+                // the same basin twice — observed in the reviewed save, where
+                // both resampled turns came back as near-verbatim repeats.
+                escalateThinking(turnThinking)
             );
 
             if (latestRequestId.current !== requestId) {
@@ -669,6 +740,85 @@ export const useGeminiClient = () => {
                             ? `[DRIFT] Resample still showing signals: ${driftAfter.matches.join(', ')} — accepting anyway`
                             : `[DRIFT] Resample cleared sanitization signals`,
                         type: driftAfter.drifted ? 'warning' : 'success'
+                    }
+                ]
+            }));
+        }
+
+        // ------------------------------------------------------------------
+        // v1.30: SELF-REPETITION GUARD
+        //
+        // Runs AFTER the drift path, on whatever narrative survived it — a
+        // resampled turn can repeat just as easily as a first roll, and in the
+        // reviewed save two of the three duplicates WERE resamples.
+        //
+        // Orthogonal to sanitization drift: a repeat can be perfectly explicit
+        // and still be a repeat. This is the only check in the engine that
+        // reads the new narrative against the recent ones.
+        // ------------------------------------------------------------------
+        const priorNarratives = preCallState.gameHistory.history
+            .filter(m => m.role === Role.MODEL)
+            .slice(-REPETITION_LOOKBACK)
+            .map(m => m.text);
+        const repetition = detectSelfRepetition(response.narrative, priorNarratives);
+
+        if (repetition.repeated) {
+            setGameHistory(prev => ({
+                ...prev,
+                debugLog: [
+                    ...prev.debugLog,
+                    {
+                        timestamp: new Date().toISOString(),
+                        message: `[REPETITION] ${repetition.matches.join('; ')} — resampling once.`,
+                        type: 'warning'
+                    }
+                ]
+            }));
+
+            // The reminder quotes the echoed text back, so this resample's
+            // prompt genuinely differs from the one that produced the repeat.
+            const antiRepeatReminder = [activeReminder, buildRepetitionReminder(repetition)]
+                .filter((s): s is string => Boolean(s))
+                .join('\n\n---\n\n');
+
+            const retry = await service.sendMessage(
+                fullSystemPrompt,
+                [...preCallState.gameHistory.history, userMsg],
+                preCallState.gameHistory.lastActiveSummary,
+                preCallState.gameWorld.bannedNameMap ?? {},
+                antiRepeatReminder,
+                turnSchema,
+                contextPrompt,
+                staticContext,
+                escalateThinking(turnThinking),
+            );
+
+            if (latestRequestId.current !== requestId) {
+                console.log("Discarding stale repetition-resample response", requestId);
+                return;
+            }
+
+            // Only accept the retry if it is actually LESS repetitive. A retry
+            // that repeats harder is worse than the turn we already had, and
+            // silently swapping it in would make the guard actively harmful.
+            const retryRepetition = detectSelfRepetition(retry.narrative, priorNarratives);
+            const improved = !retryRepetition.repeated || retryRepetition.overlap < repetition.overlap;
+            if (improved) response = retry;
+
+            // Arm the thinking floor for the NEXT turn regardless of outcome —
+            // a scene that just produced a repeat is likely to produce another.
+            lastTurnRepeated = true;
+
+            setGameHistory(prev => ({
+                ...prev,
+                debugLog: [
+                    ...prev.debugLog,
+                    {
+                        timestamp: new Date().toISOString(),
+                        message: improved
+                            ? `[REPETITION] Resample accepted — overlap ${Math.round(repetition.overlap * 100)}% → ${Math.round(retryRepetition.overlap * 100)}%`
+                            : `[REPETITION] Resample was no better (${Math.round(retryRepetition.overlap * 100)}%) — keeping the original turn`,
+                        type: improved ? 'success' : 'warning'
                     }
                 ]
             }));

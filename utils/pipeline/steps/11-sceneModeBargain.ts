@@ -70,12 +70,42 @@ export const sceneModeBargainStep: PipelineStep = {
         // 3. TURN COUNT INCREMENT
         // =====================================================================
 
-        const nextTurnCount = (ctx.previousWorld.turnCount ?? 0) + 1;
+        // v1.30: ASSIGN the authoritative turn number rather than self-increment.
+        //
+        // `gameWorld.turnCount` used to be incremented from its own previous
+        // value, independently of `gameHistory.turnCount` — which is the
+        // counter `ctx.currentTurn` is derived from. Any path that advanced one
+        // without the other desynced them permanently, and montage was exactly
+        // such a path (fixed in commitMontageProposal). The Codi Whitmore save
+        // shows the result: history.turnCount 19 vs world.turnCount 18, with
+        // every turn logging "Turn 19 → Next turn will be 18".
+        //
+        // Assigning makes gameHistory.turnCount the single source of truth and
+        // gameWorld.turnCount a mirror of it, so ANY future drift — from a path
+        // that doesn't exist yet — self-heals on the next turn instead of
+        // compounding silently. Everything else in the world state
+        // (lastWorldTickTurn, lastBargainTurn, lastNewEntityTurn,
+        // threatCooldownUntilTurn) is already stamped from ctx.currentTurn, so
+        // this puts the counter back on the same scale as its own consumers.
+        const previousWorldTurn = ctx.previousWorld.turnCount ?? 0;
+        const nextTurnCount = ctx.currentTurn;
         ctx.worldUpdate.turnCount = nextTurnCount;
+
+        // A healthy turn advances the world counter by exactly one. Anything
+        // else means a path advanced history without the world — surface it
+        // rather than absorbing it silently.
+        const drift = nextTurnCount - previousWorldTurn;
+        if (drift !== 1) {
+            ctx.debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[TURN DESYNC HEALED] World turn counter was ${previousWorldTurn}, authoritative turn is ${nextTurnCount} (drift ${drift > 0 ? '+' : ''}${drift - 1}). Realigned. A turn advanced gameHistory.turnCount without advancing gameWorld.turnCount.`,
+                type: 'warning'
+            });
+        }
 
         ctx.debugLogs.push({
             timestamp: new Date().toISOString(),
-            message: `[TURN INCREMENT] Turn ${ctx.currentTurn} → Next turn will be ${nextTurnCount}`,
+            message: `[TURN INCREMENT] World turn ${previousWorldTurn} → ${nextTurnCount}`,
             type: 'info'
         });
 

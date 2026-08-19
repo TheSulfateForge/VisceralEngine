@@ -177,6 +177,22 @@ export function commitMontageProposal(
     w = { ...w, time: updateTime(w.time.totalMinutes, proposal.durationMinutes, calendar) };
     events.push(`[MONTAGE] clock → ${w.time.display}`);
 
+    // 7. Turn advance --------------------------------------------------------
+    // v1.30: A montage IS a turn — acceptMontage appends a model message and
+    // advances gameHistory.turnCount. Before this, it did NOT advance
+    // gameWorld.turnCount, so the two counters permanently diverged by one per
+    // montage. Observed in the Codi Whitmore save: after a single montage,
+    // every subsequent turn logged "[TURN INCREMENT] Turn 19 → Next turn will
+    // be 18", and everything keyed on gameWorld.turnCount (hook rate-limit
+    // gaps, hookNudge cadence, worldPulse cadence, threat cooldowns, staleness)
+    // was computing off a counter one behind the real turn number.
+    //
+    // `currentTurn` is the turn this montage becomes — callers pass
+    // gameHistory.turnCount + 1, the same value they then write to
+    // gameHistory.turnCount. Assign rather than increment so the two counters
+    // agree by construction.
+    w = { ...w, turnCount: currentTurn };
+
     return { character: char, world: w, events };
 }
 

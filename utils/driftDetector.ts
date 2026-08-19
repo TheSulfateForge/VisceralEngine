@@ -188,6 +188,174 @@ export const detectSofteningTells = (input: SofteningTellsInput): DriftReport =>
     return { drifted: matches.length > 0, matches };
 };
 
+// ============================================================================
+// v1.30: SELF-REPETITION GUARD
+//
+// The failure this catches, from the reviewed save (Codi Whitmore, 2026-08-19):
+// turn 5 reproduced turn 4 with a 104-char exact prefix and a 592-char exact
+// suffix — 48% of the earlier turn character-for-character. Turn 18 reproduced
+// turn 17's entire middle and closing paragraph, including a line the player
+// had just contradicted ("it'll keep you from freezing" one turn after the
+// player said the armor keeps her warm).
+//
+// Mechanism: when the player's input clarifies rather than acts, the prompt
+// delta between two consecutive turns is ~200 chars of new text inside ~110k
+// chars of context. Near-identical input at topK 40 produces near-identical
+// output — copying the nearest match in context is the strongest attractor a
+// long-context model has, and at thinkingLevel 'low' nothing in the loop
+// forces divergence.
+//
+// This is orthogonal to sanitization drift: a repeat can be perfectly
+// explicit and still be a repeat. Measured on the reviewed save, the two
+// duplicate turns score 0.627 and 0.445 overlap while the highest legitimate
+// turn (genuine re-description of the same footpath) scores 0.078 — so the
+// 0.15 threshold sits with a 2x margin on both sides.
+// ============================================================================
+
+/** Shared-shingle fraction above which a narrative is judged a repeat. */
+const REPETITION_OVERLAP_THRESHOLD = 0.15;
+
+/** An exact character-run this long is a copy regardless of overall overlap. */
+const REPETITION_EXACT_PREFIX_CHARS = 80;
+const REPETITION_EXACT_SUFFIX_CHARS = 200;
+
+/** Shingle width. 8 words is long enough that shared idiom doesn't trip it. */
+const SHINGLE_SIZE = 8;
+
+/** Narratives shorter than this are exempt — too small to shingle meaningfully. */
+const MIN_NARRATIVE_CHARS = 200;
+
+/** How many prior model turns to compare against. */
+export const REPETITION_LOOKBACK = 3;
+
+const normaliseForShingles = (s: string): string[] =>
+    s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean);
+
+const shingles = (s: string, n: number = SHINGLE_SIZE): Set<string> => {
+    const words = normaliseForShingles(s);
+    const out = new Set<string>();
+    for (let i = 0; i + n <= words.length; i++) {
+        out.add(words.slice(i, i + n).join(' '));
+    }
+    return out;
+};
+
+const commonPrefixLength = (a: string, b: string): number => {
+    let i = 0;
+    const max = Math.min(a.length, b.length);
+    while (i < max && a[i] === b[i]) i++;
+    return i;
+};
+
+const commonSuffixLength = (a: string, b: string): number => {
+    let i = 0;
+    const max = Math.min(a.length, b.length);
+    while (i < max && a[a.length - 1 - i] === b[b.length - 1 - i]) i++;
+    return i;
+};
+
+export interface RepetitionReport {
+    /** True if the narrative substantially reproduces a recent model turn. */
+    repeated: boolean;
+    /** Fraction of the new narrative's shingles that already appear in a prior turn (0..1). */
+    overlap: number;
+    /** How many model turns back the strongest match sits. 1 = immediately previous. */
+    distance: number;
+    /** Human-readable reasons, for the debug log. */
+    matches: string[];
+    /** The longest verbatim run shared with the matched turn, for the resample reminder. */
+    echoedFragment: string;
+}
+
+const EMPTY_REPETITION: RepetitionReport = {
+    repeated: false, overlap: 0, distance: 0, matches: [], echoedFragment: '',
+};
+
+/**
+ * Compare a freshly generated narrative against the last few model turns.
+ *
+ * `priorNarratives` is ordered oldest-first (i.e. the natural `history` order),
+ * so the LAST element is the immediately preceding turn.
+ *
+ * Deliberately measures overlap as a fraction of the NEW narrative, not a
+ * symmetric Jaccard: a short turn that copies a long one wholesale must still
+ * score high, and Jaccard would dilute that with the long turn's unique text.
+ */
+export const detectSelfRepetition = (
+    narrative: string | undefined | null,
+    priorNarratives: string[],
+    overlapThreshold: number = REPETITION_OVERLAP_THRESHOLD,
+): RepetitionReport => {
+    if (!narrative || typeof narrative !== 'string') return EMPTY_REPETITION;
+    if (narrative.length < MIN_NARRATIVE_CHARS) return EMPTY_REPETITION;
+
+    const candidates = priorNarratives
+        .filter((t): t is string => typeof t === 'string' && t.length >= MIN_NARRATIVE_CHARS)
+        .slice(-REPETITION_LOOKBACK);
+    if (candidates.length === 0) return EMPTY_REPETITION;
+
+    const mine = shingles(narrative);
+    if (mine.size === 0) return EMPTY_REPETITION;
+
+    let best = EMPTY_REPETITION;
+
+    candidates.forEach((prior, idx) => {
+        // candidates is oldest-first, so the final element is 1 turn back.
+        const distance = candidates.length - idx;
+        const theirs = shingles(prior);
+
+        let shared = 0;
+        mine.forEach(g => { if (theirs.has(g)) shared++; });
+        const overlap = shared / mine.size;
+
+        const prefix = commonPrefixLength(narrative, prior);
+        const suffix = commonSuffixLength(narrative, prior);
+
+        const matches: string[] = [];
+        if (overlap >= overlapThreshold) {
+            matches.push(`${Math.round(overlap * 100)}% shingle overlap with the turn ${distance} back`);
+        }
+        if (prefix >= REPETITION_EXACT_PREFIX_CHARS) {
+            matches.push(`${prefix}-char verbatim opening shared with the turn ${distance} back`);
+        }
+        if (suffix >= REPETITION_EXACT_SUFFIX_CHARS) {
+            matches.push(`${suffix}-char verbatim ending shared with the turn ${distance} back`);
+        }
+        if (matches.length === 0) return;
+
+        // Keep the strongest match; prefer higher overlap, then nearer distance.
+        if (overlap > best.overlap || (overlap === best.overlap && distance < best.distance)) {
+            const echoedFragment = prefix >= suffix
+                ? narrative.slice(0, Math.max(prefix, 120)).trim()
+                : narrative.slice(-Math.max(suffix, 120)).trim();
+            best = { repeated: true, overlap, distance, matches, echoedFragment };
+        }
+    });
+
+    return best;
+};
+
+/**
+ * Trailing reminder for a resample after self-repetition. Quotes the echoed
+ * text back so the resample prompt is genuinely DIFFERENT from the one that
+ * produced the repeat — re-rolling an unchanged prompt just samples the same
+ * basin twice.
+ */
+export const buildRepetitionReminder = (report: RepetitionReport): string => {
+    const echo = report.echoedFragment.slice(0, 240);
+    return `[SYSTEM REFRESH — THIS BEAT MUST ADVANCE]
+The previous turn already contained the following text:
+
+"${echo}${report.echoedFragment.length > 240 ? '…' : ''}"
+
+Do not restate it, paraphrase it, or rebuild the same beat around it. That
+ground is covered and the characters have already said those things. Move the
+scene: change what someone is doing, where they are standing, or what is now
+true that was not true a moment ago. If the player's input corrected or
+clarified a fact, the world must visibly register the correction rather than
+repeat the assumption it replaced. Shorter and new beats longer and repeated.`;
+};
+
 /**
  * Trailing reminder to append to the user message on a resample after drift
  * was detected. Positive prescriptive — never names the drift behavior by

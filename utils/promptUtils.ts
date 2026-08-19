@@ -229,19 +229,34 @@ const buildSituationRecap = (
     const threatLine = activeThreats.length > 0
         ? `\nImminent: ${activeThreats.join('; ')}`
         : '';
-    // Grab a brief snippet of the last model output for continuity
-    const lastModelText = recentHistory
+    // v1.30: The previous `Last:` line pasted the first 120 characters of the
+    // last model turn verbatim at the TOP of dynamic context. In the reviewed
+    // save the next turn opened with a 104-character exact copy of that
+    // snippet — the block meant to anchor continuity was functioning as a
+    // "resume typing here" prompt, and the model obliged.
+    //
+    // The full previous turn is already in the history window, so a verbatim
+    // excerpt adds no information the model lacks. What it adds is a copy
+    // seed. Replace it with a NON-COPYABLE structured beat descriptor: who
+    // spoke, who touched whom, whether the scene moved. Derived from the
+    // turn's worldTick metadata, never from its prose.
+    const lastModelMsg = recentHistory
         .filter(m => m.role === Role.MODEL)
-        .slice(-1)[0]?.text || '';
-    const lastSnippet = lastModelText.length > 120
-        ? lastModelText.slice(0, 120) + '…'
-        : lastModelText;
+        .slice(-1)[0];
+    const lastActors = (lastModelMsg?.worldTick?.npc_actions ?? [])
+        .filter(a => a.player_visible)
+        .map(a => a.npc_name)
+        .slice(0, 3);
+    const lastBeatLine = lastModelMsg
+        ? `Just happened: ${lastActors.length > 0 ? `${lastActors.join(' and ')} acted toward ${character.name}` : 'no NPC acted'}`
+          + ` — that beat is CLOSED. Do not restage it, restate it, or reopen it.`
+        : `Opening beat — nothing has happened yet.`;
 
     return `[SITUATION RECAP — Read this first]
 ${character.name} is at: ${location}
 Present: ${presentEntities || 'No one nearby'}
 Scene: ${world.sceneMode || 'NARRATIVE'} | Tension: ${world.tensionLevel ?? 0}/100${threatLine}
-Last: ${lastSnippet}`;
+${lastBeatLine}`;
 };
 
 const buildLoreContext = (lore: LoreItem[]): string => {
