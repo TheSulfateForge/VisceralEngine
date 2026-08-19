@@ -60,12 +60,33 @@ export const Sidebar: React.FC = () => {
     const trauma = character.trauma || 0;
     const isHighTrauma = trauma >= 70;
 
+    // v1.32 LAYOUT FIX — do NOT re-add a conditional `relative` to the <aside>
+    // below.
+    //
+    // This element is `fixed` under the lg breakpoint (off-canvas, out of flow)
+    // and `lg:static` above it (in-flow flex item). A conditional
+    // `isHighTrauma ? 'relative' : ''` used to be appended for the high-trauma
+    // inset shadow. Tailwind emits position utilities in the order .static,
+    // .fixed, .absolute, .relative, .sticky — so `.relative` lands AFTER
+    // `.fixed` in the stylesheet, and at equal specificity the later rule wins.
+    // The class list read `fixed ... relative` but resolved to
+    // position: relative.
+    //
+    // Consequence: the moment trauma crossed 70, this off-canvas sidebar became
+    // an in-flow 20rem flex item on mobile — still painted off-screen by
+    // -translate-x-full, but reserving its width. Measured on a 430px viewport,
+    // <main> collapsed from 430px to 62px and the narrative wrapped at roughly
+    // one character per line, with an empty black band where the sidebar's
+    // reserved space sat. At 930px it went 930px -> 562px.
+    //
+    // The inset box-shadow never needed positioning: it paints on the element's
+    // own border box, and `fixed` already establishes a containing block and an
+    // ordering context for z-[102].
     return (
         <aside className={`
             fixed lg:static inset-y-0 left-0 z-[102] w-80 bg-[#0a0a0a] border-r border-red-900/10 flex flex-col p-6 space-y-8
             transition-transform duration-500 lg:translate-x-0 overflow-y-auto h-full max-h-screen
             ${ui.isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
-            ${isHighTrauma ? 'relative' : ''}
         `}
         style={isHighTrauma ? {
             boxShadow: 'inset 0 0 40px rgba(0, 0, 0, 0.8), inset 0 0 80px rgba(153, 27, 27, 0.1)'
