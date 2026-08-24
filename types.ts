@@ -1172,6 +1172,21 @@ export interface GameWorld {
     factionIntelligence: FactionIntelligence;
     legalStatus: LegalStatus;
 
+    /**
+     * v1.33 (M6) — Turn on which each section reminder was last injected, keyed
+     * by reminder key. This is the scheduler state for the least-recently-shown
+     * rotation that replaced the old `else if (turnCount % N === 0)` chain.
+     *
+     * The chain was not merely awkward, it was silently lossy: `WORLD_NORMALCY`
+     * fired on `(t - 4) % 8 === 0`, which is a strict subset of `t % 4 === 0`
+     * two branches above it, so in the entire history of the engine it was
+     * never injected once — and `GENRE_CONSISTENCY` / `FACTION_PARITY` had
+     * already died the same way before v1.26 caught them. Staleness ordering
+     * cannot shadow an entry, and `tests/reminderRotation.test.ts` asserts
+     * every registered key is reachable.
+     */
+    reminderLastShown?: Record<string, number>;
+
     // v1.6 — Dormant Hook Registry + Exposure Scoring
     dormantHooks: DormantHook[];
     factionExposure: FactionExposure;

@@ -5,7 +5,7 @@ import {
     physicalContactLevel,
     levelIndex,
 } from '../utils/engine/playerFraming';
-import { getSectionReminders } from '../sectionReminders';
+import { getSectionReminders, selectSectionReminders, makeReminderContext } from '../sectionReminders';
 
 /**
  * v1.29 regression suite.
@@ -127,8 +127,11 @@ describe('v1.29 — physical contact ladder tracks the save\'s escalation', () =
 });
 
 /**
- * getSectionReminders for a calm SOCIAL beat at tension 10, with the four
- * v1.29 player-framing arguments supplied per case.
+ * Reminders for a calm SOCIAL beat at tension 10, with the four v1.29
+ * player-framing signals supplied per case.
+ *
+ * v1.33: migrated from the positional 21-argument signature to the
+ * ReminderContext object.
  */
 const remindersFor = (
     corrected: boolean,
@@ -137,17 +140,20 @@ const remindersFor = (
     contactLevel: string,
     turnCount = 16,
     canonicalPersonality = true,
-) => getSectionReminders(
-    turnCount, 'SOCIAL', 0, turnCount,
-    9, 44, 2, 0,
-    false,
-    false, false, false,
-    false,
-    10,
-    canonicalPersonality,
-    [], [],
-    corrected, markers, reciprocated, contactLevel,
-);
+) => getSectionReminders(makeReminderContext({
+    turnCount,
+    worldTurn: turnCount,
+    mode: 'SOCIAL',
+    tensionLevel: 10,
+    conditionsCount: 9,
+    entityCount: 44,
+    goalCount: 2,
+    canonicalPersonalityNpcPresent: canonicalPersonality,
+    playerCorrected: corrected,
+    correctionMarkers: markers,
+    playerReciprocated: reciprocated,
+    contactLevel,
+}));
 
 describe('v1.29 — reminder selection responds to player pushback', () => {
     it('fires the correction protocol and proportionality when the player pushes back', () => {
@@ -175,9 +181,41 @@ describe('v1.29 — reminder selection responds to player pushback', () => {
     });
 
     it('surfaces proportionality on calm social beats even with no correction', () => {
-        // turnCount 15 is divisible by 3 → the calm-social cadence fires.
-        const out = remindersFor(false, [], false, 'none', 15, false);
-        expect(out.join('\n')).toContain('PROPORTIONALITY');
+        // v1.29 asserted a modular cadence (turnCount % 3). v1.33 replaced the
+        // arithmetic rotation with a least-recently-shown scheduler, so the
+        // guarantee is no longer "turn 15 specifically" — it is that a calm
+        // SOCIAL beat reaches PROPORTIONALITY on a bounded cadence, and keeps
+        // reaching it, with the canonical voice lock ALSO present rather than
+        // crowding it out (which is what actually went wrong: the reminder
+        // budget was consumed before the rotation was consulted at all).
+        const lastShown: Record<string, number> = {};
+        const seen: string[] = [];
+
+        for (let turn = 3; turn <= 20; turn++) {
+            const sel = selectSectionReminders(makeReminderContext({
+                turnCount: turn,
+                worldTurn: turn,
+                mode: 'SOCIAL',
+                tensionLevel: 10,
+                conditionsCount: 9,
+                entityCount: 44,
+                goalCount: 2,
+                canonicalPersonalityNpcPresent: true,
+                reminderLastShown: { ...lastShown },
+            }));
+            for (const key of sel.shown) {
+                lastShown[key] = turn;
+                seen.push(key);
+            }
+            // The standing condition never starves the rotation any more.
+            expect(sel.shown, `turn ${turn}`).toContain('CANONICAL_VOICE_LOCK');
+        }
+
+        const proportionalityTurns = seen.filter(k => k === 'PROPORTIONALITY').length;
+        expect(proportionalityTurns).toBeGreaterThanOrEqual(2);
+        // And the reminder that this whole class of bug was hiding — the one
+        // that says hostility must be EARNED — is reached too.
+        expect(seen).toContain('WORLD_NORMALCY');
     });
 });
 

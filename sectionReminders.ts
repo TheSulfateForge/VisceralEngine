@@ -43,7 +43,7 @@
 // ============================================================================
 
 import { SceneMode } from './types';
-import { getTuning } from './config/tuning';
+import { getTuning, worldPressureUnit } from './config/tuning';
 
 // Condensed reinforcements derived from SYSTEM_INSTRUCTIONS
 const REMINDERS = {
@@ -672,7 +672,12 @@ character into core-surfacing mode for the entire session and turns every
 exchange into a revelation. If no trigger is written down, there is no
 trigger.
 
-NEGATIVE EXAMPLES (these are the substitutions you must NOT make):
+v1.33 — DRIFT RUNS IN BOTH DIRECTIONS. Softening a harsh character and
+hardening a warm one are the SAME error — substituting an archetype for
+the person — and both are forbidden. Both lists below are real; neither
+is the "true" one.
+
+NEGATIVE EXAMPLES — SOFTENING (must NOT make these substitutions):
 - Canonical = "predatory, exploitative, commodifying" → rendered as
   "aristocratic, charming, courteous." FORBIDDEN.
 - Canonical = "cruel, contemptuous, mercenary" → rendered as
@@ -683,20 +688,58 @@ NEGATIVE EXAMPLES (these are the substitutions you must NOT make):
   (core, trigger = target in his territory), trigger ACTIVE → rendered
   as "intense, formal." FORBIDDEN — render the core at full register.
 
+NEGATIVE EXAMPLES — HARDENING (equally forbidden, and currently the
+more frequent failure):
+- Canonical = "calm voice, decides fast, never raises it, makes a bad
+  situation feel survivable just by sounding bored during it" →
+  rendered as "gruff, dismissive, testing the newcomer's resolve."
+  FORBIDDEN. Steady is not curt. Competent is not cold.
+- Canonical = "eager, cheerful, endlessly game, first to volunteer" →
+  rendered as "guarded, wary, sizing the player up." FORBIDDEN.
+- Canonical = "brisk, chatty, mildly officious, genuinely delighted by a
+  well-kept ledger" → rendered as "suspicious, obstructive, bureaucratic
+  stonewalling." FORBIDDEN. An official who enjoys his job is not an
+  obstacle by default.
+- Canonical = "warm, foul-mouthed, completely reliable" → rendered as
+  "blunt, abrasive, unwelcoming." FORBIDDEN.
+
+VOCABULARY DISCIPLINE — the restatement is not a paraphrase.
+Trait words in your restatement must be drawn from the personality
+record itself, or be plain synonyms of words in it. If a trait appears
+in your restatement that does not appear in the record — "gruff,"
+"wary," "testing," "guarded," "suspicious," "unimpressed" are the
+recurring offenders — you have drifted before writing a single line of
+prose. The engine parses this line and checks it against the record.
+
 If you find yourself reaching for a generic social-class register
 ("aristocratic," "courtly," "gentlemanly," "professional," "well-bred,"
 "refined") for a character whose canonical personality is harsh, you
-have substituted an archetype for the person. Stop and rewrite using
-the canonical traits as listed in [ACTIVE ENTITIES].
+have substituted an archetype for the person. If you find yourself
+reaching for the wary-gatekeeper register ("gruff," "guarded," "sizes
+him up," "tests him," "doesn't trust easily") for a character whose
+canonical personality is warm, steady, or open, you have made the same
+substitution in the other direction. Stop and rewrite using the
+canonical traits as listed in [ACTIVE ENTITIES].
+
+Being competent, senior, or under pressure is NOT a licence to harden a
+character. A steady leader under a hard contract is still the person who
+makes a bad situation feel survivable — that is what he sounds like
+WHILE being competent, senior and under pressure.
 
 The personality field is what makes this character this character. Honor
 it across every scene — peaceful, hostile, cooperative, intimate, and
 trigger-active.`,
 
     VISCERAL_RENDER: `[SYSTEM REMINDER: RENDERING REGISTER ACTIVE — RENDER IN FULL]
-This scene contains intimacy, violence, fear, hunger, or bodily extremity.
-Render at the granularity of a body in a body — concrete, anatomical,
-autonomic, in the present moment.
+v1.33 — This reminder is now injected ONLY when the engine has detected
+intimacy or violence in the preceding narrative, or when scene tension is
+genuinely high. The trigger is named in the [REGISTER TRIGGER] line below.
+It is a rendering instruction for material that is ALREADY in the scene —
+it is not an instruction to find some. If the scene is two people talking
+quietly, the correct rendering of that scene is two people talking quietly.
+
+For the body under load that IS present, render at the granularity of a
+body in a body — concrete, anatomical, autonomic, in the present moment.
 
 LITERARY ANCHORS for this register:
 - Cormac McCarthy (Blood Meridian, Outer Dark) for the weight and weather
@@ -764,252 +807,489 @@ const entityDensityViolated = (currentTurnCount: number, entityCount: number): b
     return false;
 };
 
+
+// ===========================================================================
+// v1.33 (M6 + M7) — REMINDER SELECTION
+//
+// WHAT CHANGED AND WHY
+//
+// The old selector returned at most 2 reminders, chosen by walking priority
+// "bands" and falling through to a Band 4 rotation expressed as a chain of
+// `else if (turnCount % N === 0)`. Two independent defects came out of that,
+// both measured against the Tidegate save (T54) and the Bloodfeather save
+// (T16) — see VRE_HOSTILITY_AND_MISSING_THREATS_DIAGNOSIS.md.
+//
+// 1. ARITHMETIC SHADOWING. `WORLD_NORMALCY` fired on
+//    `(turnCount - 4) % 8 === 0`, which implies `turnCount % 4 === 0`, which
+//    two branches earlier assigned `VOCABULARY`. Every turn that could have
+//    shown WORLD_NORMALCY showed VOCABULARY instead, so the one reminder that
+//    says "70% of people are ordinary civilians; suspicion and hostility must
+//    be EARNED" was never injected once, in any game, ever. `COMBAT` was
+//    unreachable for the same class of reason, and `GENRE_CONSISTENCY` /
+//    `FACTION_PARITY` had already died this way before v1.26 caught them.
+//    This is now the third occurrence, so the fix is structural: rotation is
+//    expressed as a REGISTRY ordered by staleness, not as arithmetic. A
+//    least-recently-shown pick cannot shadow an entry, and
+//    `tests/reminderRotation.test.ts` asserts every registered key is
+//    reachable.
+//
+// 2. BUDGET STARVATION. `CANONICAL_VOICE_LOCK` fires whenever any in-scene
+//    entity has a personality string, and `VISCERAL_RENDER` fired on every
+//    SOCIAL scene. Both are permanently true in a normal campaign, so the two
+//    slots were consumed before the rotation was ever consulted: executing the
+//    old selector against the Tidegate save's real state yields FOUR distinct
+//    reminders across 54 turns, identical from T25 onward. The budget is now
+//    SPLIT — standing conditions and rotating advice no longer compete for the
+//    same slots, because they are not the same kind of thing.
+//
+// SHAPE
+//   override      : at most 1, returns alone (dream turns, player corrections)
+//   conditional   : at most CONDITIONAL_BUDGET, priority-ordered
+//   rotation      : exactly 1, least-recently-shown among eligible entries
+//
+// The caller stamps `world.reminderLastShown` from `selection.shown`.
+// ===========================================================================
+
+/** Standing conditions that may occupy a slot on any given turn. */
+const CONDITIONAL_BUDGET = 2;
+/** Rotating advice. Always gets its own slot; never competes with the above. */
+const ROTATION_BUDGET = 1;
+
 /**
- * v1.12 FIX SR-1: Returns up to 2 section reminders per turn.
- * 
- * The v1.10 system only returned one reminder, which meant CONDITION_AUDIT
- * (when conditions > 30, fires every turn at Priority -1) would permanently
- * block BARGAIN_CHECK from ever firing. Similarly, allied passivity detection
- * would block threat integrity checks.
- *
- * The new system returns a PRIMARY reminder (highest priority) and optionally
- * a SECONDARY reminder from a different priority band.
+ * Minimum turns before the Devil's Bargain reminder may be shown AGAIN once
+ * the clock is already overdue. Without this the reminder stands open every
+ * single turn forever, because `lastBargainTurn` only resets when the model
+ * actually submits a `bargain_request` — which in 54 turns of the reviewed
+ * save it never did.
  */
-export const getSectionReminders = (
-    turnCount: number,
-    mode: SceneMode,
-    lastBargainTurn: number = 0,
-    currentTurnCount: number = 0,
-    conditionsCount: number = 0,
-    entityCount: number = 0,
-    goalCount: number = 999,
-    emergingThreatsCount: number = 0,
-    passiveAlliesDetected: boolean = false,
-    // v1.19 (Prompt Diet): conditional content moved out of SYSTEM_INSTRUCTIONS.
-    dreamSeedActive: boolean = false,
-    foreignSpeechPending: boolean = false,
-    recentInjuryAdded: boolean = false,
-    // v1.20 (Characterization Diet): threat-parity moved out of always-on §10.
-    // Fires only when an adversarial dynamic is actually present.
-    hostileEntityPresent: boolean = false,
-    tensionLevel: number = 0,
-    // v1.22 (Canonical Voice Lock): true when at least one in-scene entity
-    // has a non-empty canonical personality field. Forces the model to
-    // restate canonical traits in thought_process before writing the NPC.
-    canonicalPersonalityNpcPresent: boolean = false,
-    // v1.28: names, so the reminders can be scoped to specific entities instead
-    // of switching on threat behaviour for everyone sharing the scene.
-    hostileEntityNames: string[] = [],
-    strainedAllyNames: string[] = [],
-    // v1.29: player-framing signals. Previously the engine had no
-    // representation of the player pushing back on how an NPC read them, or of
-    // whether the player had reciprocated physical contact.
-    playerCorrected: boolean = false,
-    correctionMarkers: string[] = [],
-    playerReciprocated: boolean = false,
-    contactLevel: string = 'none',
-): string[] => {
-    const reminders: string[] = [];
+const BARGAIN_REFIRE_INTERVAL = 8;
 
-    // -----------------------------------------------------------------------
-    // BAND 0: Turn-shape overrides (max 1) — these CHANGE the output format
-    // and must win over everything else.
-    // -----------------------------------------------------------------------
-    if (dreamSeedActive) {
-        reminders.push(REMINDERS.DREAM_PROTOCOL);
-        return reminders; // Dream turns are self-contained — no other reminders apply.
-    }
+/**
+ * The bargain reminder demands an offer on "the NEXT qualifying roll
+ * (difficulty implying Hard or Severe, failure = death/loss/irreversible
+ * consequence)". On a calm scene no such roll exists, so the only way for the
+ * narrator to discharge a standing non-optional obligation is to manufacture
+ * one. Gate it on a scene that could plausibly contain the roll.
+ */
+const BARGAIN_MIN_TENSION = 30;
 
-    // -----------------------------------------------------------------------
-    // BAND 0.5: Player pushback (v1.29) — outranks everything below.
-    //
-    // When the player explicitly rejects an NPC's reading of them, that is the
-    // most important fact about this turn. It was previously invisible to the
-    // engine entirely, so a correction could be absorbed and re-escalated in
-    // the same paragraph, repeatedly, with nothing to stop it.
-    // -----------------------------------------------------------------------
-    if (playerCorrected) {
-        reminders.push(
-            `${REMINDERS.PLAYER_CORRECTION_PROTOCOL}\n\n[CORRECTION] The player's words: ${correctionMarkers.map(m => `"${m}"`).join(', ')}`
-        );
-        // Proportionality is the rule the correction is invoking — pair them.
-        reminders.push(REMINDERS.PROPORTIONALITY);
-        return reminders;
-    }
+/**
+ * The population-check nag fires while the roster is under target, which can
+ * be many turns in a row. It is bookkeeping, so it gets an interval rather
+ * than a standing slot.
+ */
+const ENTITY_DENSITY_REFIRE_INTERVAL = 5;
 
-    // -----------------------------------------------------------------------
-    // BAND 0.6: Physical escalation gate (v1.29).
-    //
-    // Contact is already on the table and the player did NOT reciprocate this
-    // turn. Fires before the ordinary bands because an unreciprocated advance
-    // repeating turn after turn is the failure mode being corrected.
-    // -----------------------------------------------------------------------
-    if (contactLevel !== 'none' && !playerReciprocated) {
-        reminders.push(
-            `${REMINDERS.PHYSICAL_RECIPROCATION}\n\n[CONTACT LEVEL] ${contactLevel} — the player did not reciprocate or invite escalation this turn. Hold here or withdraw.`
-        );
-    }
+export type ReminderKey =
+    | 'DREAM_PROTOCOL' | 'PLAYER_CORRECTION_PROTOCOL' | 'PHYSICAL_RECIPROCATION'
+    | 'CONDITION_AUDIT' | 'LOGISTICS_CHECK' | 'LANGUAGES_FOREIGN' | 'HEALING_TIMELINE'
+    | 'BARGAIN_CHECK' | 'ENTITY_DENSITY' | 'HOSTILE_NPC_PROTOCOL' | 'ALLY_STRAIN_PROTOCOL'
+    | 'CANONICAL_VOICE_LOCK' | 'VISCERAL_RENDER'
+    | 'WORLD_NORMALCY' | 'PROPORTIONALITY' | 'GENRE_CONSISTENCY' | 'FACTION_PARITY'
+    | 'NARRATIVE_INTEGRITY' | 'VOCABULARY' | 'INTIMATE' | 'COMBAT'
+    | 'THREAT_SEED_INTEGRITY' | 'GOAL_LIFECYCLE';
 
-    // -----------------------------------------------------------------------
-    // BAND 1: Critical (max 1) — conditions that demand immediate attention
-    // -----------------------------------------------------------------------
-    if (conditionsCount > 30) {
-        reminders.push(REMINDERS.CONDITION_AUDIT);
-    } else if (passiveAlliesDetected) {
-        reminders.push(REMINDERS.LOGISTICS_CHECK);
-    } else if (foreignSpeechPending) {
-        // Foreign-language NPC interaction requires strict rendering rules.
-        reminders.push(REMINDERS.LANGUAGES_FOREIGN);
-    } else if (recentInjuryAdded) {
-        // Healing timeline reminder when the model has just added an injury —
-        // helps it remember to append the [HEAL:T<N>] marker next turn if it
-        // hasn't already.
-        reminders.push(REMINDERS.HEALING_TIMELINE);
-    }
+export interface ReminderContext {
+    /** gameHistory.turnCount — the authoritative turn number. */
+    turnCount: number;
+    /** gameWorld.turnCount — mirror of the above; kept for clock arithmetic. */
+    worldTurn: number;
+    mode: SceneMode;
+    tensionLevel: number;
+    conditionsCount: number;
+    entityCount: number;
+    goalCount: number;
+    /**
+     * Threats that are actually live. v1.28 'unvalidated' anchors are engine
+     * bookkeeping and must NOT count, or every rejected threat keeps priming
+     * the model with threat vocabulary.
+     */
+    liveThreatCount: number;
+    lastBargainTurn: number;
+    passiveAlliesDetected: boolean;
+    dreamSeedActive: boolean;
+    foreignSpeechPending: boolean;
+    recentInjuryAdded: boolean;
+    hostileEntityNames: string[];
+    strainedAllyNames: string[];
+    canonicalPersonalityNpcPresent: boolean;
+    playerCorrected: boolean;
+    correctionMarkers: string[];
+    playerReciprocated: boolean;
+    contactLevel: string;
+    /**
+     * v1.33 (M11) — the visceral rendering register is now triggered by what
+     * the previous narrative actually CONTAINS, not by the scene mode. SOCIAL
+     * is the ordinary conversation mode; both reviewed saves sat in it
+     * permanently, so the old `mode === 'SOCIAL'` trigger asserted "this scene
+     * contains intimacy, violence, fear, hunger, or bodily extremity" over
+     * every quiet conversation in the game, with Blood Meridian as the
+     * suggested register.
+     */
+    intimacyInScene: boolean;
+    violenceInScene: boolean;
+    /** Scheduler state — turn on which each key was last injected. */
+    reminderLastShown: Record<string, number>;
+}
 
-    // -----------------------------------------------------------------------
-    // BAND 2: Overdue clocks (max 1) — fires alongside Band 1 if applicable
-    // v1.26: threshold is a runtime tone dial (Settings → Simulation Tuning).
-    // -----------------------------------------------------------------------
-    const turnsSinceLastBargain = currentTurnCount - lastBargainTurn;
-    if (turnsSinceLastBargain >= getTuning().bargainClockTurns && currentTurnCount > 0) {
-        // Only add if Band 1 didn't already grab a slot, or if stacking is allowed
-        if (reminders.length < 2) {
-            reminders.push(REMINDERS.BARGAIN_CHECK);
-        }
-    }
+export interface ReminderSelection {
+    /** Reminder text blocks, in injection order. */
+    reminders: string[];
+    /** Keys injected this turn. The caller stamps these into reminderLastShown. */
+    shown: ReminderKey[];
+    /** Lines for the debug log — starvation and suppression are observable. */
+    debug: string[];
+}
 
-    // If Band 1 + Band 2 already filled both slots, return early
-    if (reminders.length >= 2) return reminders.slice(0, 2);
+interface RotationEntry {
+    key: ReminderKey;
+    text: string;
+    /** Is this reminder meaningful on this turn at all? */
+    eligible: (ctx: ReminderContext) => boolean;
+    /** Minimum turns between showings. Staleness is measured against this. */
+    minInterval: number;
+}
 
-    if (turnCount < 3) return reminders;
+/**
+ * v1.33 — The rotation registry. Order here is a tie-break only: selection is
+ * by staleness, so position in this list cannot starve an entry the way
+ * position in the old else-if chain could.
+ *
+ * `minInterval` is the knob that used to be a modulus. WORLD_NORMALCY and
+ * PROPORTIONALITY are the two calming entries, and their interval is scaled by
+ * the worldPressure tone dial: at low pressure they come round more often.
+ */
+const buildRotation = (): RotationEntry[] => {
+    // 0 (placid) → 0.6× the interval; 1 (relentless) → 1.6×.
+    const calmScale = 0.6 + worldPressureUnit();
+    const calming = (base: number) => Math.max(2, Math.round(base * calmScale));
 
-    // -----------------------------------------------------------------------
-    // BAND 3: Structural obligations (entity density, threat integrity)
-    // -----------------------------------------------------------------------
-    if (entityDensityViolated(currentTurnCount, entityCount)) {
-        if (reminders.length < 2) reminders.push(REMINDERS.ENTITY_DENSITY);
-    }
-
-    // v1.20: Hostile NPC protocol — replaces the always-on "Threat parity"
-    // block in §10. Fires whenever an adversarial dynamic is actually
-    // present, so peaceful/ordinary turns are not primed with threat-aware
-    // language (which was causing model-wide collapse to predatory/cold/
-    // calculating/clinical voice).
-    const hostileScene =
-        hostileEntityPresent ||
-        tensionLevel >= 50 ||
-        emergingThreatsCount > 0 ||
-        mode === 'COMBAT';
-    if (hostileScene) {
-        if (reminders.length < 2) {
-            // v1.28: name the hostiles inline so the reminder's scope clause has
-            // something concrete to point at.
-            const scoped = hostileEntityNames.length > 0
-                ? `${REMINDERS.HOSTILE_NPC_PROTOCOL}\n\n[HOSTILE IN SCENE] ${hostileEntityNames.join(', ')} — these entities and no others.`
-                : REMINDERS.HOSTILE_NPC_PROTOCOL;
-            reminders.push(scoped);
-        }
-    }
-
-    // v1.28: ally strain is its own trigger, gated on a real ledger grievance,
-    // rather than a bullet buried inside the hostile-NPC reminder that fired
-    // whenever any enemy shared the scene.
-    if (strainedAllyNames.length > 0) {
-        if (reminders.length < 2) {
-            reminders.push(
-                `${REMINDERS.ALLY_STRAIN_PROTOCOL}\n\n[ALLY STRAIN] ${strainedAllyNames.join(', ')}`
-            );
-        }
-    }
-
-    // v1.22: Canonical voice lock — fires whenever a registered entity with
-    // a canonical personality is present in the scene. Higher priority than
-    // VISCERAL_RENDER because archetype substitution (the Duke failure mode)
-    // is a deeper drift than rendering register; if both could fire, the
-    // voice lock wins the slot.
-    if (canonicalPersonalityNpcPresent) {
-        if (reminders.length < 2 && !reminders.includes(REMINDERS.CANONICAL_VOICE_LOCK)) {
-            reminders.push(REMINDERS.CANONICAL_VOICE_LOCK);
-        }
-    }
-
-    // v1.21: Visceral render register — fires on scenes whose rendering is
-    // where Gemini's sanitization gravity is strongest: intimate (SOCIAL),
-    // combat, and high-tension turns. Positive prescriptive; complements
-    // (not replaces) HOSTILE_NPC_PROTOCOL — that one governs what NPCs DO,
-    // this one governs HOW the body is rendered.
-    const visceralScene =
-        mode === 'SOCIAL' ||
-        mode === 'COMBAT' ||
-        tensionLevel >= 60;
-    if (visceralScene) {
-        if (reminders.length < 2 && !reminders.includes(REMINDERS.VISCERAL_RENDER)) {
-            reminders.push(REMINDERS.VISCERAL_RENDER);
-        }
-    }
-
-    if (reminders.length >= 2) return reminders.slice(0, 2);
-
-    // -----------------------------------------------------------------------
-    // BAND 4: Rotating reminders (fills remaining slot)
-    // -----------------------------------------------------------------------
-    let rotatingReminder: string | null = null;
-
-    // v1.29: calm social beats are where reaction inflation happens — a quiet
-    // conversation with nothing at stake is exactly the context in which an
-    // offhand remark gets read as a manifesto. Fire proportionality on a
-    // cadence there, ahead of the general rotation.
-    if (mode === 'SOCIAL' && tensionLevel < 40 && turnCount % 3 === 0) {
-        rotatingReminder = REMINDERS.PROPORTIONALITY;
-    } else if (emergingThreatsCount > 0 && turnCount % 2 === 0) {
-        rotatingReminder = REMINDERS.LOGISTICS_CHECK;
-    } else if (turnCount % 4 === 0) {
-        rotatingReminder = REMINDERS.VOCABULARY;
-    } else if (mode === 'SOCIAL' && turnCount % 3 === 0) {
-        rotatingReminder = REMINDERS.INTIMATE;
-    } else if (mode === 'COMBAT' && turnCount % 3 === 0) {
-        rotatingReminder = REMINDERS.COMBAT;
-    } else if (turnCount % 5 === 0) {
-        rotatingReminder = REMINDERS.CONDITION_AUDIT;
-    } else if ((mode === 'TENSION' || mode === 'COMBAT') && turnCount % 6 === 0) {
-        rotatingReminder = REMINDERS.THREAT_SEED_INTEGRITY;
-    } else if (turnCount % 10 === 0) {
-        rotatingReminder = REMINDERS.THREAT_SEED_INTEGRITY;
-    } else if ((turnCount - 4) % 8 === 0 && turnCount >= 4) {
-        rotatingReminder = REMINDERS.WORLD_NORMALCY;
-    // v1.26: GENRE_CONSISTENCY and FACTION_PARITY restored to the LIVE
-    // rotation — they had silently stopped firing when the selector moved to
-    // getSectionReminders (they only existed in the deleted legacy selector).
-    } else if ((turnCount - 2) % 5 === 0 && turnCount >= 2) {
-        rotatingReminder = REMINDERS.GENRE_CONSISTENCY;
-    } else if ((turnCount - 3) % 7 === 0 && turnCount >= 3) {
-        rotatingReminder = REMINDERS.FACTION_PARITY;
-    } else if (turnCount % 6 === 1) {
-        rotatingReminder = REMINDERS.NARRATIVE_INTEGRITY;
-    } else if (currentTurnCount > 10 && goalCount < 2) {
-        rotatingReminder = REMINDERS.GOAL_LIFECYCLE;
-    } else if (mode === 'NARRATIVE' && turnCount % 3 === 0 && goalCount < 3) {
-        rotatingReminder = REMINDERS.GOAL_LIFECYCLE;
-    } else if ((turnCount - 2) % 8 === 0 && turnCount >= 2) {
-        rotatingReminder = REMINDERS.GOAL_LIFECYCLE;
-    } else if (turnCount % 7 === 0) {
-        rotatingReminder = REMINDERS.NARRATIVE_INTEGRITY;
-    }
-
-    if (rotatingReminder && reminders.length < 2) {
-        // Don't duplicate a reminder already in the list
-        if (!reminders.includes(rotatingReminder)) {
-            reminders.push(rotatingReminder);
-        }
-    }
-
-    return reminders;
+    return [
+        {
+            key: 'WORLD_NORMALCY',
+            text: REMINDERS.WORLD_NORMALCY,
+            eligible: () => true,
+            minInterval: calming(6),
+        },
+        {
+            key: 'PROPORTIONALITY',
+            text: REMINDERS.PROPORTIONALITY,
+            // Calm social beats are where reaction inflation happens — a quiet
+            // conversation with nothing at stake is exactly the context in
+            // which an offhand remark gets read as a manifesto.
+            eligible: (c) => (c.mode === 'SOCIAL' || c.mode === 'NARRATIVE') && c.tensionLevel < 40,
+            minInterval: calming(4),
+        },
+        {
+            key: 'GENRE_CONSISTENCY',
+            text: REMINDERS.GENRE_CONSISTENCY,
+            eligible: () => true,
+            minInterval: 8,
+        },
+        {
+            key: 'FACTION_PARITY',
+            text: REMINDERS.FACTION_PARITY,
+            eligible: () => true,
+            minInterval: 10,
+        },
+        {
+            key: 'NARRATIVE_INTEGRITY',
+            text: REMINDERS.NARRATIVE_INTEGRITY,
+            eligible: () => true,
+            minInterval: 7,
+        },
+        {
+            key: 'VOCABULARY',
+            text: REMINDERS.VOCABULARY,
+            eligible: () => true,
+            minInterval: 6,
+        },
+        {
+            key: 'INTIMATE',
+            text: REMINDERS.INTIMATE,
+            // v1.33: content-triggered, not mode-triggered.
+            eligible: (c) => c.intimacyInScene,
+            minInterval: 3,
+        },
+        {
+            key: 'COMBAT',
+            text: REMINDERS.COMBAT,
+            // The old chain could never reach this: mode === 'COMBAT'
+            // guaranteed both conditional slots went to HOSTILE_NPC_PROTOCOL
+            // and VISCERAL_RENDER, so the combat-realism reminder was
+            // unreachable in exactly the mode it was written for.
+            eligible: (c) => c.mode === 'COMBAT' || c.violenceInScene,
+            minInterval: 3,
+        },
+        {
+            key: 'THREAT_SEED_INTEGRITY',
+            text: REMINDERS.THREAT_SEED_INTEGRITY,
+            eligible: (c) => c.liveThreatCount > 0 || c.mode === 'TENSION' || c.mode === 'COMBAT',
+            minInterval: 6,
+        },
+        {
+            key: 'GOAL_LIFECYCLE',
+            text: REMINDERS.GOAL_LIFECYCLE,
+            eligible: (c) => c.goalCount < 3,
+            minInterval: 8,
+        },
+        {
+            key: 'LOGISTICS_CHECK',
+            text: REMINDERS.LOGISTICS_CHECK,
+            eligible: (c) => c.liveThreatCount > 0,
+            minInterval: 5,
+        },
+        {
+            key: 'CONDITION_AUDIT',
+            text: REMINDERS.CONDITION_AUDIT,
+            eligible: (c) => c.conditionsCount > 20,
+            minInterval: 8,
+        },
+    ];
 };
 
-// v1.26: The legacy single-reminder selector `getSectionReminder` was deleted.
-// It had no callers — the live path has been getSectionReminders (plural)
-// since v1.12 — and its private rotation was the only place
-// GENRE_CONSISTENCY and FACTION_PARITY ever fired, which is why those two
-// reminders silently stopped reaching the model. Both are now in the live
-// Band 4 rotation above.
+/** Exposed so the reachability test can assert every key can actually fire. */
+export const ROTATION_KEYS: ReminderKey[] = buildRotation().map(e => e.key);
+
+/**
+ * Staleness: how many turns since this key was last shown. A key that has
+ * never been shown is maximally stale, so a fresh campaign cycles through the
+ * whole registry before repeating anything.
+ */
+const staleness = (ctx: ReminderContext, key: ReminderKey): number => {
+    const last = ctx.reminderLastShown[key];
+    if (last === undefined) return Number.POSITIVE_INFINITY;
+    return ctx.turnCount - last;
+};
+
+const pickRotation = (ctx: ReminderContext, exclude: Set<ReminderKey>): RotationEntry | null => {
+    const candidates = buildRotation()
+        .filter(e => !exclude.has(e.key))
+        .filter(e => e.eligible(ctx))
+        .filter(e => staleness(ctx, e.key) >= e.minInterval);
+
+    if (candidates.length === 0) return null;
+
+    // Most stale wins. Infinity (never shown) sorts first, so a new campaign
+    // walks the registry before it repeats anything.
+    candidates.sort((a, b) => staleness(ctx, b.key) - staleness(ctx, a.key));
+    return candidates[0];
+};
+
+/**
+ * v1.33 — Returns the reminders to inject this turn.
+ *
+ * Replaces the positional 21-argument signature with a context object. The old
+ * signature had reached the point where the call site was a column of bare
+ * booleans and a reader could not tell which flag was which.
+ */
+export const selectSectionReminders = (ctx: ReminderContext): ReminderSelection => {
+    const reminders: string[] = [];
+    const shown: ReminderKey[] = [];
+    const debug: string[] = [];
+
+    const push = (key: ReminderKey, text: string) => {
+        reminders.push(text);
+        shown.push(key);
+    };
+
+    // -----------------------------------------------------------------------
+    // OVERRIDE — turn-shape changes. These return alone.
+    // -----------------------------------------------------------------------
+    if (ctx.dreamSeedActive) {
+        push('DREAM_PROTOCOL', REMINDERS.DREAM_PROTOCOL);
+        return { reminders, shown, debug };
+    }
+
+    if (ctx.playerCorrected) {
+        // When the player explicitly rejects an NPC's reading of them, that is
+        // the most important fact about this turn. Proportionality is the rule
+        // the correction is invoking — pair them.
+        push(
+            'PLAYER_CORRECTION_PROTOCOL',
+            `${REMINDERS.PLAYER_CORRECTION_PROTOCOL}\n\n[CORRECTION] The player's words: ${ctx.correctionMarkers.map(m => `"${m}"`).join(', ')}`,
+        );
+        push('PROPORTIONALITY', REMINDERS.PROPORTIONALITY);
+        return { reminders, shown, debug };
+    }
+
+    // -----------------------------------------------------------------------
+    // CONDITIONAL BAND — standing conditions, priority-ordered, budget-capped.
+    // -----------------------------------------------------------------------
+    const conditional: { key: ReminderKey; text: string }[] = [];
+    const offer = (key: ReminderKey, text: string) => {
+        if (conditional.length < CONDITIONAL_BUDGET) conditional.push({ key, text });
+    };
+
+    // Contact is on the table and the player did NOT reciprocate this turn.
+    // An unreciprocated advance repeating turn after turn is the failure mode
+    // this was written for, so it outranks the rest of the band.
+    if (ctx.contactLevel !== 'none' && !ctx.playerReciprocated) {
+        offer(
+            'PHYSICAL_RECIPROCATION',
+            `${REMINDERS.PHYSICAL_RECIPROCATION}\n\n[CONTACT LEVEL] ${ctx.contactLevel} — the player did not reciprocate or invite escalation this turn. Hold here or withdraw.`,
+        );
+    }
+
+    if (ctx.conditionsCount > 30) {
+        offer('CONDITION_AUDIT', REMINDERS.CONDITION_AUDIT);
+    }
+    if (ctx.passiveAlliesDetected) {
+        offer('LOGISTICS_CHECK', REMINDERS.LOGISTICS_CHECK);
+    }
+    if (ctx.foreignSpeechPending) {
+        offer('LANGUAGES_FOREIGN', REMINDERS.LANGUAGES_FOREIGN);
+    }
+    if (ctx.recentInjuryAdded) {
+        offer('HEALING_TIMELINE', REMINDERS.HEALING_TIMELINE);
+    }
+
+    // Threat parity, scoped to named hostiles so its rules cannot be
+    // misapplied to everyone else sharing the room.
+    //
+    // v1.33: `tensionLevel >= 50` was REMOVED from this trigger. High tension
+    // is not the same thing as hostility — a storm, a birth, a chase and a
+    // deadline are all high-tension and none of them has an adversary — and
+    // when tension alone fired it, `hostileEntityNames` was empty, so the
+    // protocol went in UNSCOPED. That is precisely the failure v1.28 scoped it
+    // to fix: threat-parity behaviour switched on for everyone in the room.
+    // A hostile scene now requires an actual hostile: a named one, a live
+    // threat, or COMBAT.
+    const hostileScene =
+        ctx.hostileEntityNames.length > 0 ||
+        ctx.liveThreatCount > 0 ||
+        ctx.mode === 'COMBAT';
+    if (hostileScene) {
+        offer(
+            'HOSTILE_NPC_PROTOCOL',
+            ctx.hostileEntityNames.length > 0
+                ? `${REMINDERS.HOSTILE_NPC_PROTOCOL}\n\n[HOSTILE IN SCENE] ${ctx.hostileEntityNames.join(', ')} — these entities and no others.`
+                : REMINDERS.HOSTILE_NPC_PROTOCOL,
+        );
+    }
+
+    if (ctx.strainedAllyNames.length > 0) {
+        offer(
+            'ALLY_STRAIN_PROTOCOL',
+            `${REMINDERS.ALLY_STRAIN_PROTOCOL}\n\n[ALLY STRAIN] ${ctx.strainedAllyNames.join(', ')}`,
+        );
+    }
+
+    if (ctx.canonicalPersonalityNpcPresent) {
+        offer('CANONICAL_VOICE_LOCK', REMINDERS.CANONICAL_VOICE_LOCK);
+    }
+
+    // v1.33 (M11) — content-triggered, not mode-triggered.
+    const registerTriggers: string[] = [];
+    if (ctx.intimacyInScene) registerTriggers.push('intimacy detected in the preceding narrative');
+    if (ctx.violenceInScene) registerTriggers.push('violence detected in the preceding narrative');
+    if (ctx.tensionLevel >= 60) registerTriggers.push(`scene tension ${ctx.tensionLevel}/100`);
+    if (registerTriggers.length > 0) {
+        offer(
+            'VISCERAL_RENDER',
+            `${REMINDERS.VISCERAL_RENDER}\n\n[REGISTER TRIGGER] ${registerTriggers.join('; ')}.`,
+        );
+    }
+
+    // ---- Low-priority nags. Deliberately BELOW the rendering and
+    // characterization rules: a bookkeeping obligation should never displace
+    // "write this person as who they are" or "render what is actually here".
+    // Both also carry a re-fire interval, because both used to stand open
+    // every single turn once their condition was met — the bargain clock for
+    // 30 consecutive turns in the reviewed save, since `lastBargainTurn` only
+    // resets when the model actually submits a bargain, which it never did.
+
+    // v1.33 (M9) — the bargain clock. Three gates, where there used to be one.
+    const turnsSinceLastBargain = ctx.worldTurn - ctx.lastBargainTurn;
+    const bargainOverdue =
+        ctx.worldTurn > 0 && turnsSinceLastBargain >= getTuning().bargainClockTurns;
+    if (bargainOverdue) {
+        const tenseEnough =
+            ctx.tensionLevel >= BARGAIN_MIN_TENSION ||
+            ctx.mode === 'TENSION' ||
+            ctx.mode === 'COMBAT';
+        const cooledDown = staleness(ctx, 'BARGAIN_CHECK') >= BARGAIN_REFIRE_INTERVAL;
+
+        if (!tenseEnough) {
+            // The reminder demands an offer on the next Hard/Severe roll where
+            // failure is death or irreversible loss. On a tension-10
+            // conversation no such roll exists, so the only way to discharge a
+            // standing "not optional" obligation is to manufacture one.
+            debug.push(
+                `[BARGAIN CLOCK] Overdue by ${turnsSinceLastBargain - getTuning().bargainClockTurns} turn(s) ` +
+                `but suppressed — tension ${ctx.tensionLevel} < ${BARGAIN_MIN_TENSION} and scene is ${ctx.mode}. ` +
+                `A mandatory bargain has nothing to attach to on a calm beat.`,
+            );
+        } else if (!cooledDown) {
+            debug.push(`[BARGAIN CLOCK] Overdue but shown ${staleness(ctx, 'BARGAIN_CHECK')} turn(s) ago — holding.`);
+        } else {
+            offer('BARGAIN_CHECK', REMINDERS.BARGAIN_CHECK);
+        }
+    }
+
+    if (
+        entityDensityViolated(ctx.worldTurn, ctx.entityCount) &&
+        staleness(ctx, 'ENTITY_DENSITY') >= ENTITY_DENSITY_REFIRE_INTERVAL
+    ) {
+        offer('ENTITY_DENSITY', REMINDERS.ENTITY_DENSITY);
+    }
+
+    for (const c of conditional) push(c.key, c.text);
+
+    // -----------------------------------------------------------------------
+    // ROTATION BAND — its own budget. Never starved by the band above.
+    // -----------------------------------------------------------------------
+    if (ROTATION_BUDGET > 0 && ctx.turnCount >= 3) {
+        const picked = pickRotation(ctx, new Set(shown));
+        if (picked) {
+            push(picked.key, picked.text);
+            const s = staleness(ctx, picked.key);
+            debug.push(
+                `[ROTATION] ${picked.key} (stale ${s === Number.POSITIVE_INFINITY ? 'never shown' : `${s} turns`}, ` +
+                `interval ${picked.minInterval})`,
+            );
+        } else {
+            debug.push('[ROTATION] No eligible entry past its minimum interval this turn.');
+        }
+    }
+
+    return { reminders, shown, debug };
+};
+
+/**
+ * Back-compat shim for callers and tests that only want the text blocks.
+ * The live path uses `selectSectionReminders` so it can stamp the scheduler.
+ */
+export const getSectionReminders = (ctx: ReminderContext): string[] =>
+    selectSectionReminders(ctx).reminders;
+
+/**
+ * Builds a ReminderContext with every field defaulted, so tests and callers can
+ * specify only what they care about. Defaults describe a calm, empty scene.
+ */
+export const makeReminderContext = (partial: Partial<ReminderContext> = {}): ReminderContext => ({
+    turnCount: 0,
+    worldTurn: 0,
+    mode: 'NARRATIVE' as SceneMode,
+    tensionLevel: 0,
+    conditionsCount: 0,
+    entityCount: 0,
+    goalCount: 999,
+    liveThreatCount: 0,
+    lastBargainTurn: 0,
+    passiveAlliesDetected: false,
+    dreamSeedActive: false,
+    foreignSpeechPending: false,
+    recentInjuryAdded: false,
+    hostileEntityNames: [],
+    strainedAllyNames: [],
+    canonicalPersonalityNpcPresent: false,
+    playerCorrected: false,
+    correctionMarkers: [],
+    playerReciprocated: false,
+    contactLevel: 'none',
+    intimacyInScene: false,
+    violenceInScene: false,
+    reminderLastShown: {},
+    ...partial,
+});

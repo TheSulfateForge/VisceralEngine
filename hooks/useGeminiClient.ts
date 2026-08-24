@@ -16,8 +16,10 @@ import {
     detectPlayerFraming,
     containsMatureContent,
     physicalContactLevel,
+    levelIndex,
 } from '../utils/engine/playerFraming';
-import { getSectionReminders } from '../sectionReminders';
+import { selectSectionReminders, makeReminderContext } from '../sectionReminders';
+import { narrativeContainsViolence } from '../utils/engine/npcCoherence';
 
 // Extracted Hooks & Utils
 import { useGeminiService } from './useGeminiService';
@@ -568,32 +570,61 @@ export const useGeminiClient = () => {
         // can name the rung to the model instead of gesturing at it.
         const contactLevel = physicalContactLevel(lastNarrative);
 
-        const activeReminders = getSectionReminders(
-            preCallState.gameHistory.turnCount,
-            preCallState.gameWorld.sceneMode,
-            preCallState.gameWorld.lastBargainTurn ?? 0,
-            preCallState.gameWorld.turnCount ?? 0,
-            preCallState.character.conditions.length,
-            (preCallState.gameWorld.knownEntities ?? []).length,
-            (preCallState.character.goals ?? []).length,
+        // v1.33 (M11): the visceral rendering register is triggered by what the
+        // previous narrative actually contains, not by the scene mode. SOCIAL
+        // is the ordinary conversation mode — the old `mode === 'SOCIAL'`
+        // trigger asserted "this scene contains intimacy, violence, fear,
+        // hunger, or bodily extremity" over every quiet conversation in the
+        // game and then named Blood Meridian as the register to write it in.
+        const intimacyInScene =
+            levelIndex(contactLevel) >= levelIndex('sustained');
+        const violenceInScene = narrativeContainsViolence(lastNarrative);
+
+        const reminderContext = makeReminderContext({
+            turnCount: preCallState.gameHistory.turnCount,
+            worldTurn: preCallState.gameWorld.turnCount ?? 0,
+            mode: preCallState.gameWorld.sceneMode,
+            tensionLevel,
+            conditionsCount: preCallState.character.conditions.length,
+            entityCount: (preCallState.gameWorld.knownEntities ?? []).length,
+            goalCount: (preCallState.character.goals ?? []).length,
             // v1.28: 'unvalidated' anchors are engine bookkeeping. They must not
             // count toward the threat-aware reminder triggers, or every rejected
             // threat would keep priming the model with threat vocabulary.
-            (preCallState.gameWorld.emergingThreats ?? []).filter(t => t.status !== 'unvalidated').length,
-            !!preCallState.gameWorld.passiveAlliesDetected,
+            liveThreatCount: (preCallState.gameWorld.emergingThreats ?? [])
+                .filter(t => t.status !== 'unvalidated').length,
+            lastBargainTurn: preCallState.gameWorld.lastBargainTurn ?? 0,
+            passiveAlliesDetected: !!preCallState.gameWorld.passiveAlliesDetected,
             dreamSeedActive,
             foreignSpeechPending,
             recentInjuryAdded,
-            hostileEntityPresent,
-            tensionLevel,
-            canonicalPersonalityNpcPresent,  // v1.22
             hostileEntityNames,              // v1.28
             strainedAllyNames,               // v1.28
-            framing.corrected,               // v1.29
-            framing.correctionMarkers,       // v1.29
-            framing.reciprocated,            // v1.29
-            contactLevel,                    // v1.29
-        );
+            canonicalPersonalityNpcPresent,  // v1.22
+            playerCorrected: framing.corrected,          // v1.29
+            correctionMarkers: framing.correctionMarkers, // v1.29
+            playerReciprocated: framing.reciprocated,     // v1.29
+            contactLevel,                                 // v1.29
+            intimacyInScene,                              // v1.33
+            violenceInScene,                              // v1.33
+            reminderLastShown: preCallState.gameWorld.reminderLastShown ?? {}, // v1.33
+        });
+
+        const selection = selectSectionReminders(reminderContext);
+        const activeReminders = selection.reminders;
+
+        // v1.33 (M6): stamp the scheduler so least-recently-shown ordering has
+        // something to order by. Without this every key stays maximally stale
+        // and the rotation degenerates to registry order.
+        if (selection.shown.length > 0) {
+            const stamped: Record<string, number> = {
+                ...(preCallState.gameWorld.reminderLastShown ?? {}),
+            };
+            for (const key of selection.shown) {
+                stamped[key] = preCallState.gameHistory.turnCount;
+            }
+            setGameWorld(prev => ({ ...prev, reminderLastShown: stamped }));
+        }
         // v1.25: Ambient hook nudge — on a jittered cadence during calm
         // NARRATIVE beats, surface ONE ignorable hook drawn from established
         // world state (world-pulse opportunities > dormant-hook foreshadow >
@@ -614,15 +645,23 @@ export const useGeminiClient = () => {
             ? reminderParts.join('\n\n---\n\n')
             : null;
         let requestLogs = [...preCallState.gameHistory.debugLog];
-        
-        
-        if (activeReminder) {
-            const truncatedReminder = activeReminder.split('\n')[0];
+
+        // v1.33 (M6): log EVERY key injected, not just the first line of the
+        // joined blob. The old single-line log is why the starvation went
+        // unnoticed for so long — a second reminder was invisible in the debug
+        // panel, so "which reminders is this game actually getting?" could not
+        // be answered without replaying the selector by hand.
+        if (selection.shown.length > 0) {
             requestLogs.push({
                 timestamp: new Date().toISOString(),
-                message: `[SYSTEM REFRESH] Injected: ${truncatedReminder}`,
+                message: `[SYSTEM REFRESH] Injected: ${selection.shown.join(' + ')}`,
                 type: 'info'
             });
+        }
+        for (const line of selection.debug) {
+            requestLogs.push({ timestamp: new Date().toISOString(), message: line, type: 'info' });
+        }
+        if (requestLogs.length !== preCallState.gameHistory.debugLog.length) {
             setGameHistory(prev => ({
                 ...prev,
                 debugLog: requestLogs

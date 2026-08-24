@@ -40,6 +40,22 @@ export const COMBAT_ACTION_PATTERNS = [
     /\b(?:crossbow|longbow|shortbow|ballista|catapult|trebuchet)/i,
 ];
 
+/**
+ * v1.33 (M11) — Does this narrative passage actually contain violence?
+ *
+ * Reuses the de facto combat detectors above rather than introducing a third
+ * vocabulary list. Used to trigger the visceral rendering register on what the
+ * scene CONTAINS, instead of on `sceneMode === 'SOCIAL'` — which is the
+ * ordinary conversation mode, and was therefore true on essentially every turn
+ * of both reviewed saves.
+ */
+export const narrativeContainsViolence = (narrative: string | undefined | null): boolean => {
+    if (!narrative) return false;
+    const words = narrative.toLowerCase().split(/[^a-z']+/);
+    if (words.some(w => COMBAT_ACTION_VERBS.has(w))) return true;
+    return COMBAT_ACTION_PATTERNS.some(p => p.test(narrative));
+};
+
 // v1.10: Messenger threat patterns — threats where an entity is traveling away
 // to deliver information. These require full entity suppression until ETA <= 2.
 export const MESSENGER_PATTERNS = [
