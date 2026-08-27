@@ -509,3 +509,38 @@ export const FACTION_CONFLICT_MIN_INFLUENCE = 30;
 export const FACTION_CONFLICT_RESOLUTION_THRESHOLD = 80;
 export const FACTION_MOMENTUM_SHIFT_RANGE = 15;
 export const FACTION_MAX_CONFLICTS = 3;
+
+// ---------------------------------------------------------------------------
+// v1.34: The Social Web (NPC↔NPC standing)
+// ---------------------------------------------------------------------------
+// See VRE_SOCIAL_WEB_DESIGN.md. These are structural limits; the one knob that
+// changes play-feel (`socialContention`) lives in config/tuning.ts.
+
+/**
+ * Standing toward the PLAYER at or above which two co-located NPCs start
+ * competing rather than finding common cause (force F2). Expressed on the
+ * shared RELATIONSHIP_LEVELS ladder.
+ */
+export const SOCIAL_CONTENTION_FLOOR = 'ALLIED' as const;
+
+/** Turns without contact before a tie starts drifting back toward NEUTRAL. */
+export const SOCIAL_TIE_DECAY_TURNS = 25;
+
+/**
+ * Salience at or above which a tie keeps drifting even when the pair is apart —
+ * an established relationship survives distance; an incidental one does not.
+ */
+export const SOCIAL_TIE_PERSIST_SALIENCE = 30;
+
+/**
+ * Max entities considered for pair evaluation in a turn. Pair enumeration is
+ * O(n²), so a crowded room is ranked (canonical first, then distance from
+ * NEUTRAL with the player) and truncated rather than allowed to blow the budget.
+ */
+export const MAX_SOCIAL_ACTORS = 8;
+
+/** Hard cap on retained ties; the lowest-salience ties are pruned past it. */
+export const MAX_SOCIAL_TIES = 64;
+
+/** Max ties rendered into the per-turn [SOCIAL WEB] prompt block. */
+export const SOCIAL_WEB_PROMPT_LIMIT = 6;

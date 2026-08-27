@@ -479,6 +479,58 @@ export interface Faction {
 
 export type FactionDisposition = 'allied' | 'neutral' | 'rival' | 'war';
 
+// --- v1.34: The Social Web (NPC↔NPC standing) ---
+// See VRE_SOCIAL_WEB_DESIGN.md. Before this, the engine had exactly one
+// relationship axis — NPC→player — so two NPCs who shared every scene held no
+// recorded opinion of each other, and the player had to narrate the social
+// graph by hand for any of it to persist past a single turn's prose.
+
+/** Where a tie's current standing came from. */
+export type TieOrigin = 'derived' | 'declared';
+
+/**
+ * A DIRECTED opinion one entity holds about another.
+ *
+ * Directed, not symmetric: "Mira resents Anwen" and "Anwen pities Mira" are
+ * different facts, and the asymmetry is the point — a symmetric edge cannot
+ * represent one-sided jealousy, unrequited loyalty, or a rivalry only one party
+ * is aware of.
+ *
+ * Reuses RELATIONSHIP_LEVELS so the narrator needs no second vocabulary, and
+ * inherits the v1.28 ratchet law: one rung per turn, maximum.
+ */
+export interface SocialTie {
+    /** Entity id whose opinion this is. */
+    from: string;
+    /** Entity id the opinion is about. */
+    to: string;
+    standing: RelationshipLevel;
+    /** Short why-line, surfaced to the narrator alongside the standing. */
+    basis: string;
+    origin: TieOrigin;
+    /**
+     * −1.5..1.5 accumulated pressure toward the next rung. A rung moves only at
+     * |charge| ≥ 1, so weak steady pressure eventually shifts a relationship
+     * while a single dramatic beat cannot teleport it.
+     */
+    charge: number;
+    /** 0..100 — drives prompt selection and pruning. */
+    salience: number;
+    firstSeenTurn: number;
+    lastMovedTurn: number;
+    lastContactTurn: number;
+}
+
+/** A narrator-declared shift, from the optional `social_updates` response field. */
+export interface DeclaredSocialUpdate {
+    /** Entity id or name. */
+    from: string;
+    /** Entity id or name. */
+    to: string;
+    standing: RelationshipLevel;
+    basis?: string;
+}
+
 // --- Stream 7: Persistent World Seeds ---
 export interface WorldSeedLocation {
   name: string;
@@ -882,6 +934,13 @@ export interface ModelResponseSchema {
 
     combat_context?: CombatContext;
     known_entity_updates?: KnownEntity[];
+    /**
+     * v1.34: NPC→NPC standing shifts the narrator actually staged this turn.
+     * Optional and expected to be empty on most turns — the engine derives the
+     * social graph on its own from co-location, player-standing alignment and
+     * faction disposition. This field is for shifts only the scene can know.
+     */
+    social_updates?: DeclaredSocialUpdate[];
     npc_interaction?: NPCInteraction;
     roll_request?: RollRequest;
     bargain_request?: BargainRequest;
@@ -1256,6 +1315,13 @@ export interface GameWorld {
      * anchors so the AI doesn't drift away from the seed's setting.
      */
     worldTags?: string[];
+
+    /**
+     * v1.34: The Social Web — directed NPC→NPC standing, maintained by
+     * utils/engine/socialGraph.ts. Absent on pre-v1.34 saves, which simply
+     * start empty and build a graph from their next turn.
+     */
+    socialGraph?: SocialTie[];
 }
 
 export interface CalendarConfig {

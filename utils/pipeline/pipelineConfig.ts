@@ -30,6 +30,7 @@ import { factionConflictsStep } from './steps/14-factionConflicts';
 import { aiSkillUpdatesStep } from './steps/15-aiSkillUpdates';
 import { usageAdvancementStep } from './steps/16-usageAdvancement';
 import { sceneContinuityStep } from './steps/17-sceneContinuity';
+import { socialGraphStep } from './steps/18-socialGraph';
 
 /**
  * Builds the initial TurnContext from inputs.
@@ -108,6 +109,9 @@ export const DEFAULT_PIPELINE: PipelineStep[] = [
     factionConflictsStep,
     aiSkillUpdatesStep,
     usageAdvancementStep,
+    // v1.34: after 12 (entity status/location) and 14 (faction membership and
+    // disposition) so the social pass reads final state, not a half-updated one.
+    socialGraphStep,
     // v1.31: LAST by design — it snapshots final state (location and sceneMode
     // settle in 12, conditions in 13, skills in 15/16) for next turn's
     // [SINCE LAST TURN] diff.
@@ -128,7 +132,9 @@ export const DEFAULT_PIPELINE: PipelineStep[] = [
  *   SCENE    default      — all steps run.
  */
 export const TIME_MODE_SKIP_STEPS: Record<TimeMode, ReadonlySet<string>> = {
-    TICK: new Set(['09-worldTick']),
+    // v1.34: a ~30s combat round is not long enough for anyone to change their
+    // mind about anyone; social drift is gated off with the rest of world drift.
+    TICK: new Set(['09-worldTick', '18-socialGraph']),
     SCENE: new Set(),
     ACTIVITY: new Set(['05-thoughtAndCombat']),
     REST: new Set(['05-thoughtAndCombat', 'factionConflicts']),

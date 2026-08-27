@@ -108,6 +108,10 @@ import {
   RollOutcome,
   Role,
   ENTITY_STATUSES,
+  SocialTie,
+  TieOrigin,
+  RelationshipLevel,
+  RELATIONSHIP_LEVELS,
 } from '../types';
 import { generateUUID } from '../idUtils';
 import { deriveWorldTime } from '../utils/engine/timeUtils';
@@ -480,6 +484,34 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
       }
       await vdb.entities.bulkPut(eRows);
       if (ledgerRows.length) await vdb.entity_ledger_items.bulkPut(ledgerRows);
+    }
+
+    // ─── Social web (v1.34) ──────────────────────────────────────────────────
+    // The entity_relationships table has had exactly this shape since Phase 0
+    // and was never written by the projection. The social graph populates it —
+    // no schema version bump, no migration, no backfill. `strength` carries the
+    // ladder rung (0..6) and `evidence` the basis line; origin, charge, salience
+    // and last-contact ride in relation_type so a tie round-trips exactly.
+    if (world.socialGraph?.length) {
+      const tieRows: EntityRelationshipRow[] = (world.socialGraph as SocialTie[]).map((t) => ({
+        id: stamp(cid, `social:${t.from}->${t.to}`),
+        campaign_id: cid,
+        source_id: stamp(cid, t.from),
+        source_kind: 'entity' as const,
+        target_id: stamp(cid, t.to),
+        target_kind: 'entity' as const,
+        relation_type: `social:${t.origin}:${t.charge.toFixed(3)}:${t.salience}:${t.lastContactTurn}`,
+        strength: RELATIONSHIP_LEVELS.indexOf(t.standing),
+        visibility: 'open' as const,
+        evidence: t.basis || null,
+        first_seen_turn: t.firstSeenTurn,
+        last_updated_turn: t.lastMovedTurn,
+        is_active: 1,
+        // Directed by design — "Mira resents Anwen" and "Anwen pities Mira" are
+        // separate rows, and the asymmetry is the point.
+        is_symmetric: 0,
+      }));
+      await vdb.entity_relationships.bulkPut(tieRows);
     }
 
     // ─── Pregnancies ───
@@ -1143,6 +1175,34 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
       ...(e.status_changed_turn !== null ? { statusChangedTurn: e.status_changed_turn } : {}),
     }));
 
+    // v1.34: the social web. Rows written by any other producer (the entities
+    // repo's addRelationship helper) carry a different relation_type and are
+    // skipped, so the graph never absorbs edges it did not author.
+    const tieRows = await vdb.entity_relationships
+      .where('campaign_id')
+      .equals(campaignId)
+      .toArray();
+    const socialGraph: SocialTie[] = tieRows
+      .filter((r) => r.is_active === 1 && r.relation_type.startsWith('social:'))
+      .map((r) => {
+        const [, origin, charge, salience, lastContact] = r.relation_type.split(':');
+        const rung = Math.max(0, Math.min(RELATIONSHIP_LEVELS.length - 1, r.strength));
+        return {
+          from: stripStamp(campaignId, r.source_id),
+          to: stripStamp(campaignId, r.target_id),
+          standing: RELATIONSHIP_LEVELS[rung] as RelationshipLevel,
+          basis: r.evidence ?? '',
+          origin: (origin === 'declared' ? 'declared' : 'derived') as TieOrigin,
+          charge: Number.isFinite(Number(charge)) ? Number(charge) : 0,
+          salience: Number.isFinite(Number(salience)) ? Number(salience) : 0,
+          firstSeenTurn: r.first_seen_turn,
+          lastMovedTurn: r.last_updated_turn,
+          lastContactTurn: Number.isFinite(Number(lastContact))
+            ? Number(lastContact)
+            : r.last_updated_turn,
+        };
+      });
+
     const pregRows = await vdb.pregnancies.where('campaign_id').equals(campaignId).toArray();
     const pregnancies: Pregnancy[] = pregRows.map((p) => ({
       id: stripStamp(campaignId, p.id),
@@ -1441,6 +1501,9 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
       pregnancies,
       activeThreats,
       knownEntities,
+      // v1.34 — absent on pre-v1.34 saves, which start empty and build a graph
+      // from their next turn.
+      ...(socialGraph.length ? { socialGraph } : {}),
       bannedNameMap,
       sceneMode: ws.scene_mode,
       tensionLevel: ws.tension_level,

@@ -80,6 +80,18 @@ the NPC wants right now) — never a personality restatement. Personality is
 canonical and engine-owned; you cannot change who a character IS through
 entity updates, only what they are doing.
 
+**The social web.** NPCs hold standing toward EACH OTHER, not only toward the
+player, and the engine tracks it across the whole campaign. When a
+[SOCIAL WEB] block appears, those standings are canon: play them as behavior —
+seating, interruptions, who covers for whom, who leaves as the other arrives —
+and never state a standing outright or have a character explain a relationship
+to the player.
+
+The engine derives most of this on its own from who shares a room, who shares a
+faction, and how each NPC stands with the player. Use \`social_updates\` ONLY for
+a shift this scene actually staged that inference cannot see. It is empty on
+most turns; never invent one to fill the field.
+
 **NPCs only know what they could know.** In thought_process, state HOW an
 NPC obtained information before having them act on it. Acquisition paths:
 direct observation (zero delay); named informant (2 turns same district,

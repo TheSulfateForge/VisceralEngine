@@ -28,6 +28,7 @@ import { buildTraumaPromptBlock } from './traumaSystem';
 import { buildSkillPromptBlock } from './skillSystem';
 import { buildFactionPromptBlock } from './factionSystem';
 import { buildSeedBrief } from './seedBrief';
+import { buildSocialWebBlock } from './engine/socialGraph';
 import { isNarrativeMessage } from './engine/oocDetection';
 import {
     buildSceneLedgerBlock,
@@ -848,6 +849,14 @@ export const constructGeminiPrompt = async (
   // Stream 6: Faction-Scale Conflict
   const factionBlock = buildFactionPromptBlock(gameWorld.factions ?? [], gameWorld.factionConflicts ?? []);
 
+  // v1.34: The Social Web — how the NPCs in the room stand toward EACH OTHER.
+  // Empty (zero tokens) whenever no two present NPCs hold a non-NEUTRAL opinion
+  // of one another, which is most of a campaign's early turns.
+  const socialWebBlock = buildSocialWebBlock(
+      gameWorld.socialGraph ?? [],
+      gameWorld.knownEntities ?? [],
+  );
+
   // Stream 7: World Rules Injection
   const worldRulesBlock = gameWorld.worldRules && gameWorld.worldRules.length > 0
     ? `[WORLD RULES]\n${gameWorld.worldRules.map(rule => `- ${rule}`).join('\n')}`
@@ -972,6 +981,7 @@ ${sanitise(traumaBlock)}
 
 ${sanitise(factionBlock)}
 
+${sanitise(socialWebBlock ? `\n${socialWebBlock}\n` : '')}
 ${sanitise(worldPressure ? `\n${worldPressure}\n` : '')}
 ${sanitise(encounterScopeLock ? `\n${encounterScopeLock}\n` : '')}
 ${sanitise(conditionLock ? `\n${conditionLock}\n` : '')}
@@ -1007,6 +1017,7 @@ ${sanitise(conditionLock ? `\n${conditionLock}\n` : '')}
       registry: (gameWorld.hiddenRegistry ?? '').length + suppressionContext.length + dormantHooksContext.length,
       charState: characterStateBlock.length,
       pressure: worldPressure.length,
+      socialWeb: socialWebBlock.length,   // v1.34
       trauma: traumaBlock.length,
       faction: factionBlock.length,
       static: staticContext.length,

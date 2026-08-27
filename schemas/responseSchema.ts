@@ -164,6 +164,21 @@ export const RESPONSE_SCHEMA: Schema = {
         required: ["id", "name", "role", "location", "impression", "relationship_level", "leverage", "ledger"]
       }
     },
+    social_updates: {
+      type: Type.ARRAY,
+      nullable: true,
+      description: "v1.34 — NPC-to-NPC standing shifts THIS SCENE actually staged, in view of the player or plainly implied by what happened (one NPC cut another off, covered for them, would not meet their eye). DIRECTED: `from` holds the opinion, `to` is its subject — record both directions only when both genuinely moved. Omit entirely on most turns: the engine already derives standing from co-location, shared faction, and how each NPC stands with the player. Use this ONLY for what inference cannot see. Never invent a shift to fill the field, and never move more than one rung — the engine clamps it anyway.",
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          from: { type: Type.STRING, description: "Entity id (preferred) or exact name of the NPC whose opinion this is." },
+          to: { type: Type.STRING, description: "Entity id (preferred) or exact name of the NPC the opinion is about." },
+          standing: { type: Type.STRING, enum: ['NEMESIS', 'HOSTILE', 'COLD', 'NEUTRAL', 'WARM', 'ALLIED', 'DEVOTED'] },
+          basis: { type: Type.STRING, nullable: true, description: "Short concrete why-line — what in this scene moved it. Retained and shown back to you on later turns." }
+        },
+        required: ["from", "to", "standing"]
+      }
+    },
     npc_interaction: {
       type: Type.OBJECT,
       nullable: true,

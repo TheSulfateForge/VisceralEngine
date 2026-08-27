@@ -138,6 +138,9 @@ export const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ currentModel, 
                     { key: 'worldPulseCadence' as const, label: 'World Pulse Cadence', min: 5, max: 30, lo: 'Busy (5)', hi: 'Quiet (30)', unit: 'turns' },
                     { key: 'bargainClockTurns' as const, label: "Devil's Bargain Clock", min: 10, max: 60, lo: 'Tempting (10)', hi: 'Rare (60)', unit: 'turns' },
                     { key: 'dreamTraumaThreshold' as const, label: 'Dream Trauma Threshold', min: 30, max: 90, lo: 'Haunted (30)', hi: 'Resilient (90)', unit: '/100' },
+                    // v1.34 — how the top of the relationship ladder behaves when
+                    // two NPCs are both close to the PC and in the same room.
+                    { key: 'socialContention' as const, label: 'Social Contention', min: 0, max: 100, lo: 'Comrades (0)', hi: 'Rivals (100)', unit: '/100' },
                 ]).map(dial => (
                     <div key={dial.key} className="space-y-2">
                         <label className="text-[9px] text-gray-600 font-mono uppercase tracking-widest block">{dial.label}</label>

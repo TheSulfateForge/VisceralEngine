@@ -21,6 +21,7 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 import { GameWorld } from "../types";
+import { summariseTiesForPulse } from "../utils/engine/socialGraph";
 
 export interface WorldPulseResult {
     developments: string[];
@@ -72,6 +73,14 @@ const buildPulseBrief = (world: GameWorld, turn: number): string => {
 
     const registryTail = (world.hiddenRegistry ?? '').split('\n').filter(Boolean).slice(-10);
     if (registryTail.length) lines.push(`\nRECENT HIDDEN REGISTRY (do not repeat):\n${registryTail.join('\n')}`);
+
+    // v1.34: how the cast stands toward EACH OTHER. Without this the offscreen
+    // simulator cheerfully has two NPCs who cannot stand one another collaborate
+    // on a caravan run, and the contradiction reaches the player as canon.
+    const socialLines = summariseTiesForPulse(world.socialGraph ?? [], world.knownEntities ?? []);
+    if (socialLines.length) {
+        lines.push(`\nSTANDING BETWEEN NPCs (respect this — do not have hostile pairs cooperate):\n${socialLines.join('\n')}`);
+    }
 
     if (world.worldTags?.length) lines.push(`\nWORLD TONE: ${world.worldTags.join(', ')}`);
 

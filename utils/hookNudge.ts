@@ -18,11 +18,14 @@
 //      (consumed after surfacing so it never repeats).
 //   2. A dormant hook FORESHADOW — a rumor brushing against the hook,
 //      explicitly not an activation (Origin Gate untouched).
-//   3. A trace of an offscreen NPC's recent activity (ledger tail).
+//   3. A strong NPC↔NPC standing from the social web (v1.34) — the only
+//      channel that shows the player a relationship they are not part of.
+//   4. A trace of an offscreen NPC's recent activity (ledger tail).
 // ============================================================================
 
 import { GameWorld } from '../types';
 import { getTuning } from '../config/tuning';
+import { selectSocialHookTie } from './engine/socialGraph';
 
 export interface AmbientHook {
     /** Prompt block appended to the trailing reminder. */
@@ -114,7 +117,25 @@ export const selectAmbientHook = (world: GameWorld): AmbientHook | null => {
         };
     }
 
-    // 3. Trace of an offscreen NPC's recent activity.
+    // 3. v1.34: a strong NPC↔NPC standing, surfaced as something overheard.
+    //    Placed ahead of the generic NPC trace because it is the more specific
+    //    beat, and it is the only channel that shows the player a relationship
+    //    they are not part of. Rare by construction — the tie must be two rungs
+    //    off NEUTRAL and above the persistence-salience floor.
+    const social = selectSocialHookTie(world.socialGraph ?? [], world.knownEntities ?? []);
+    if (social) {
+        const { tie, fromName, toName } = social;
+        return {
+            block: buildBlock(
+                `Something that reveals how ${fromName} stands toward ${toName}` +
+                `${tie.basis ? ` (${tie.basis})` : ''} — overheard, secondhand, or shown in passing behavior.`,
+                'Render it as BEHAVIOR or hearsay the PC happens to catch — a clipped exchange, a name left out of a toast, someone leaving as the other arrives. Do NOT state the standing, do NOT have anyone explain the relationship to the player, and do NOT stage a confrontation.',
+            ),
+            summary: `social: ${fromName} → ${toName} (${tie.standing})`,
+        };
+    }
+
+    // 4. Trace of an offscreen NPC's recent activity.
     const offscreen = (world.knownEntities ?? []).filter(e =>
         e.status !== 'dead' &&
         (e.status === 'distant' || e.status === 'nearby') &&

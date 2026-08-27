@@ -44,6 +44,26 @@ export interface TuningValues {
      * the safer place to re-baseline from. Raise it once play feels flat.
      */
     worldPressure: number;
+    /**
+     * v1.34 — SOCIAL CONTENTION (0–100). How strongly the top of the
+     * relationship ladder competes for the player.
+     *
+     * Two NPCs who both hold high standing with the PC and share a room are, by
+     * default, finding common cause (force F1 of the social graph). This dial
+     * inverts that at the top of the ladder: the player's regard becomes a
+     * scarce contested thing, and closeness breeds rivalry rather than alliance.
+     *
+     *   0   — off. Two devoted allies are simply comrades and no rivalry is ever
+     *         derived. The right setting for most campaigns.
+     *   35  — default. Present, slow, and always overridable by whatever the
+     *         narrator actually stages via `social_updates`.
+     *   100 — the top tier is a knife fight.
+     *
+     * The force reads nothing but `relationship_level`, `status` and `location`.
+     * It is a scarce-resource rule that happens to have the PC as the scarce
+     * resource — there is no genre or content vocabulary behind it.
+     */
+    socialContention: number;
 }
 
 export const TUNING_DEFAULTS: TuningValues = {
@@ -53,11 +73,16 @@ export const TUNING_DEFAULTS: TuningValues = {
     dreamTraumaThreshold: DREAM_TRAUMA_THRESHOLD,
     worldPulseCadence: 10,
     worldPressure: 40,
+    socialContention: 35,
 };
 
 /** Normalised 0..1 world-pressure, clamped. 0 = placid, 1 = relentless. */
 export const worldPressureUnit = (): number =>
     Math.min(1, Math.max(0, (getTuning().worldPressure ?? 40) / 100));
+
+/** Normalised 0..1 social contention, clamped. 0 = no rivalry is ever derived. */
+export const socialContentionUnit = (): number =>
+    Math.min(1, Math.max(0, (getTuning().socialContention ?? 35) / 100));
 
 const STORAGE_KEY = 'visceral_tuning';
 
