@@ -113,13 +113,43 @@ export const sceneContinuityStep: PipelineStep = {
         }
 
         // --- 3. Turn digest -------------------------------------------------
-        // Snapshot for next turn's [SINCE LAST TURN] diff. Stamped with the
-        // facts recorded this turn so the diff can surface them by name.
+        // Baseline for next turn's [SINCE LAST TURN] diff.
+        //
+        // v1.36 CRITICAL FIX. This used to snapshot `ctx.worldUpdate` — the
+        // world AFTER every change this turn made — and step 17 runs LAST
+        // precisely so that it would. The next turn's prompt then diffed that
+        // digest against `gameWorld`, which IS that same committed world. The
+        // digest was compared against the state it had been copied from, so
+        // every field matched and the block returned its "NOTHING IN THE WORLD
+        // STATE CHANGED" text unconditionally. Null by construction, on every
+        // turn, in every save, since v1.31.
+        //
+        // Measured in the 2026-08-31 saves: 28 of 32 prompts (Bellwether) and
+        // 16 of 18 (Elspeth) carried the null block. Save B's clock ran
+        // 09:05 -> 17:53 — nine hours, a time advance on all 32 turns — and the
+        // block reported a clock change THREE times. All three were the turn
+        // after a [MONTAGE], because `commitMontageProposal` lives outside
+        // `processTurn` and so mutates the world AFTER this snapshot: the only
+        // change path that landed after the digest was the only one it could
+        // ever see. The prompt was asserting "Same place, same clock, same
+        // people, same stakes" on turns where all three had changed.
+        //
+        // The baseline must be the state at the START of this turn. Then the
+        // next prompt compares end-of-N against start-of-N and reports what
+        // turn N actually did.
+        //
+        // `turn` stays the CURRENT turn: it is the turn the digest is a
+        // baseline FOR, and `promptUtils` uses it to select the player canon
+        // asserted during that turn. Do not change it to `turn - 1`.
+        //
+        // Montage is handled for free by this ordering. A montage commits
+        // after turn N and does not touch the digest, so turn N+1 diffs
+        // (end-of-N + montage) against start-of-N and surfaces the jump.
         ctx.worldUpdate.lastTurnDigest = buildTurnDigest(
-            ctx.worldUpdate,
-            ctx.characterUpdate,
+            ctx.previousWorld,
+            ctx.previousCharacter,
             turn,
-            ctx.validatedThreats,
+            ctx.previousWorld.emergingThreats,
         );
 
         return ctx;

@@ -272,7 +272,74 @@ const buildLoreContext = (lore: LoreItem[]): string => {
     return lore.map(l => `[${l.keyword}]: ${l.content}`).join('\n');
 };
 
-const buildEntityContext = (entities: KnownEntity[], forceActiveIds: Set<string> = new Set()): string => {
+/**
+ * v1.36: truncate at a sentence boundary, never mid-word.
+ *
+ * Returns the text unchanged when it is already within `cap`.
+ */
+const trimToSentence = (text: string, cap: number): string => {
+    const t = text.trim();
+    if (t.length <= cap) return t;
+    const window = t.slice(0, cap);
+    const lastStop = Math.max(window.lastIndexOf('. '), window.lastIndexOf('! '), window.lastIndexOf('? '));
+    const cut = lastStop > cap * 0.5 ? window.slice(0, lastStop + 1) : window.slice(0, window.lastIndexOf(' '));
+    return `${cut.trim()} […]`;
+};
+
+/**
+ * v1.36: cap a personality field WITHOUT losing its second layer.
+ *
+ * §10 encodes dual-layer characters as "Performed surface: [...]. Actual core
+ * (surfaces when [trigger]): [...]" and the whole conditional-personality
+ * machinery depends on the core half being present. A naive head-truncation
+ * would silently delete it and turn every layered NPC into their own mask,
+ * which is the exact bug v1.24 spent effort fixing. So keep the opening, and
+ * if a second-layer marker exists, keep that clause too.
+ */
+// Order matters. A layered personality often carries BOTH markers, with
+// "Subtext Bleed-through" appearing first and "Actual Core" — the half §10's
+// trigger machinery actually reads — appearing last. Matching whichever comes
+// first in the text drops the core and leaves the bleed-through, which is the
+// precise regression this function exists to prevent. Always prefer the core.
+const CORE_MARKER_RE = /Actual\s+Core\b/i;
+const BLEED_MARKER_RE = /Subtext\s+Bleed-?through\b/i;
+
+const capPersonality = (text: string, cap: number): string => {
+    const t = text.trim();
+    if (t.length <= cap) return t;
+
+    const marker = t.match(CORE_MARKER_RE) ?? t.match(BLEED_MARKER_RE);
+    if (!marker || marker.index === undefined) return trimToSentence(t, cap);
+
+    const head = trimToSentence(t.slice(0, marker.index), Math.round(cap * 0.5));
+    const tail = trimToSentence(t.slice(marker.index), Math.round(cap * 0.5));
+    return `${head} ${tail}`;
+};
+
+/** v1.36 — how much of an entity renders, by why it is in the prompt. */
+const MENTIONED_PERSONALITY_CAP = 460;
+const MENTIONED_IMPRESSION_CAP = 200;
+/**
+ * `impression` is specified as the PC's situational read THIS SCENE — mood,
+ * stance, what the NPC wants right now. Across the 2026-08-31 saves it
+ * averaged 631 characters and ran as high as 955: it is being written as an
+ * essay. Capped at render so one over-long field cannot crowd the prompt, and
+ * the schema description has been tightened to match.
+ */
+const ACTIVE_IMPRESSION_CAP = 420;
+
+/** Exported for tests — the tiering here is load-bearing on prompt size. */
+export const buildEntityContext = (
+    entities: KnownEntity[],
+    forceActiveIds: Set<string> = new Set(),
+    /**
+     * v1.36: entities force-active ONLY because the mention sentinel saw them
+     * named in the last narrative — not because the player addressed them.
+     * These render in a middle tier: enough to keep the model from
+     * contradicting who they are, without the full in-scene block.
+     */
+    mentionedOnlyIds: Set<string> = new Set(),
+): string => {
     if (entities.length === 0) return "";
 
     // v1.23: An entity the player just named (forceActiveIds) is rendered with
@@ -288,7 +355,25 @@ const buildEntityContext = (entities: KnownEntity[], forceActiveIds: Set<string>
     // fell through EVERY bucket and vanished from the prompt even when RAG
     // retrieved them as relevant (the "missing black hole" that got premade
     // NPCs silently written out and then killed).
-    const active = entities.filter(e => e.status !== 'dead' && e.status !== 'retired' && isActive(e));
+    // v1.36: an entity that is force-active ONLY because the sentinel saw it
+    // NAMED in the last narrative is not in the scene — it is being referenced.
+    // In save A of 2026-08-31 this path rendered eleven entities at full detail
+    // into an alley scene that contained two people: the whole Bellwether cast,
+    // all marked 'missing', at 2.0-3.6k characters each, because the narrative
+    // had mentioned them. `entities` peaked at 24,716 chars that way.
+    //
+    // v1.23's guarantee is preserved exactly: an entity the PLAYER named still
+    // renders in full, because alias matches are never in `mentionedOnlyIds`.
+    const isMentionedOnly = (e: KnownEntity) =>
+        mentionedOnlyIds.has(e.id) &&
+        !(e.status === 'present' || e.status === 'nearby' || !e.status);
+
+    const active = entities.filter(e =>
+        e.status !== 'dead' && e.status !== 'retired' && isActive(e) && !isMentionedOnly(e)
+    );
+    const mentioned = entities.filter(e =>
+        e.status !== 'dead' && e.status !== 'retired' && isMentionedOnly(e)
+    );
     const notPresent = entities.filter(e =>
         (e.status === 'distant' || e.status === 'missing' || e.status === 'retired') &&
         !forceActiveIds.has(e.id)
@@ -317,11 +402,39 @@ const buildEntityContext = (entities: KnownEntity[], forceActiveIds: Set<string>
                 // v1.24: labeled "situational" so the model reads impression as
                 // this-scene state, not as characterization that can override
                 // the canonical personality line above.
-                ` Situational read (this scene only — personality above is who they ARE): [${e.relationship_level}] - ${e.impression}\n` +
+                ` Situational read (this scene only — personality above is who they ARE): [${e.relationship_level}] - ${trimToSentence(String(e.impression ?? ''), ACTIVE_IMPRESSION_CAP)}\n` +
                 ` Leverage: ${e.leverage}\n Ledger: [${e.ledger.join(', ')}]`
             );
         }).join('\n----------------\n');
         context += `\n[ACTIVE ENTITIES — In Scene / Nearby]\n${activeStrings}`;
+    }
+
+    // v1.36: the middle tier. Named in the last narrative, but not in the room.
+    // Personality is kept (capped, and structure-aware so a dual-layer
+    // character never loses its "Actual core" half) because that is what stops
+    // the model improvising over a character it is referencing. Leverage and
+    // ledger are dropped: those drive how an NPC PLAYS a scene, and this one
+    // is not in it.
+    if (mentioned.length > 0) {
+        const mentionedStrings = mentioned.map(e => {
+            const personalityLine = e.personality?.trim()
+                ? ` Personality (CANONICAL — honor these traits): ${capPersonality(e.personality, MENTIONED_PERSONALITY_CAP)}\n`
+                : '';
+            const voiceLine = e.voice_sample?.trim()
+                ? ` Voice sample (write their dialogue in THIS register): "${e.voice_sample.trim()}"\n`
+                : '';
+            const impression = String(e.impression ?? '').trim();
+            const impressionLine = impression
+                ? ` Last known: [${e.relationship_level}] - ${trimToSentence(impression, MENTIONED_IMPRESSION_CAP)}\n`
+                : '';
+            return (
+                `Name: ${e.name} (${e.role}) — ${e.status === 'missing' ? 'whereabouts unknown' : e.location}\n` +
+                personalityLine + voiceLine + impressionLine
+            ).trimEnd();
+        }).join('\n----------------\n');
+        context += `\n\n[MENTIONED — referenced in the last turn, NOT in the scene]\n` +
+            `These are not present. Do not have them speak or act here; keep them consistent if referred to.\n` +
+            mentionedStrings;
     }
 
     // v1.27: RAG-relevant but not-present entities get a compressed one-liner.
@@ -792,8 +905,19 @@ export const constructGeminiPrompt = async (
     findAliasMatchedEntities(userInput, gameHistory.history, gameWorld.knownEntities || [])
       .map(e => e.id)
   );
+  // v1.36: keep the two force-active sources apart. An alias match means the
+  // PLAYER named them (v1.23 — render in full); a sentinel hit only means the
+  // last narrative mentioned them (v1.27 — render in the middle tier).
+  const aliasMatchedIds = new Set(forceActiveEntityIds);
+  const mentionedOnlyIds = new Set(
+    sentinelEntities.map(e => e.id).filter(id => !aliasMatchedIds.has(id))
+  );
   for (const e of sentinelEntities) forceActiveEntityIds.add(e.id);
-  const knownEntitiesContext = buildEntityContext(allRelevantEntities, forceActiveEntityIds);
+  const knownEntitiesContext = buildEntityContext(
+    allRelevantEntities,
+    forceActiveEntityIds,
+    mentionedOnlyIds,
+  );
 
   // 3. Narrative Intent & State
   const lowerInput = userInput.toLowerCase();

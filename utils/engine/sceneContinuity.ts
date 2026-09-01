@@ -298,7 +298,16 @@ const presentNames = (entities: KnownEntity[] | undefined): string[] =>
         .map(e => e.name)
         .sort();
 
-/** Snapshot the volatile state at the end of a turn. */
+/**
+ * Snapshot the volatile state to diff a later turn against.
+ *
+ * v1.36: this MUST be called with the state as it stood at the START of a turn
+ * (`ctx.previousWorld` / `ctx.previousCharacter`), never the post-pipeline
+ * world. Passing the outgoing world makes the next turn compare that world
+ * against itself, and the diff is then empty on every field forever — see the
+ * note in `17-sceneContinuity.ts`. `turn` is the turn the digest is a baseline
+ * FOR, not the turn whose state it holds.
+ */
 export const buildTurnDigest = (
     world: GameWorld,
     character: Character,
