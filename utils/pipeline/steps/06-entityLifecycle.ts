@@ -12,6 +12,7 @@ import {
 } from '../../engine';
 import { checkNameCollision, registerEntityName } from '../../nameResolver';
 import { detectPlayerFraming } from '../../engine/playerFraming';
+import { voiceSampleRejection } from '../../engine/npcRhetoric';
 import { RELATIONSHIP_LEVELS, type RelationshipLevel } from '../../../types';
 import { RELATIONSHIP_MAX_STEPS_PER_TURN } from '../../../config/engineConfig';
 
@@ -187,6 +188,58 @@ export const entityLifecycleStep: PipelineStep = {
         );
 
         let updatedKnownEntities = [...(ctx.previousWorld.knownEntities || [])];
+
+        // ------------------------------------------------------------------
+        // v1.35 — voice-sample hygiene.
+        //
+        // `voice_sample` is re-injected into [ACTIVE ENTITIES] every turn as
+        // "write their dialogue in THIS register", so whatever lands here
+        // becomes a standing instruction for the rest of the campaign. In the
+        // 2026-08-31 saves the engine had captured a TAUTOLOGY as Maribel's
+        // voice ("If the tools are what you need, then they are what you shall
+        // have") and a TWO-HORN ASSERTION ABOUT THE PLAYER as Elspeth's ("You
+        // don't glide. You disappear."), then dutifully told the model to keep
+        // writing that way — which is exactly what it did, for thirty-five and
+        // eighteen turns respectively.
+        //
+        // A sample captures DICTION, not argument. Reject the figure at the
+        // door; the merge below preserves whatever sample the entity already
+        // had, so a rejection costs nothing.
+        // ------------------------------------------------------------------
+        const entityNames = updatedKnownEntities.map(e => e.name).filter(Boolean);
+        if (r.known_entity_updates) {
+            for (const update of r.known_entity_updates) {
+                const reason = voiceSampleRejection(update.voice_sample, entityNames);
+                if (reason) {
+                    ctx.debugLogs.push({
+                        timestamp: new Date().toISOString(),
+                        message: `[VOICE SAMPLE — v1.35] REJECTED for ${update.name}: ${reason} — ` +
+                            `"${(update.voice_sample ?? '').slice(0, 120)}". A voice sample anchors diction ` +
+                            `and rhythm, not a rhetorical shape; capturing the shape makes the engine ` +
+                            `instruct itself to repeat it every turn.`,
+                        type: 'warning',
+                    });
+                    update.voice_sample = undefined;
+                }
+            }
+        }
+
+        // Retro-scrub: saves made before v1.35 are already carrying the figure.
+        // Maribel and Elspeth do not stop arguing in tautologies just because
+        // new captures are filtered — the bad sample is in their record and is
+        // being injected right now. Self-limiting: once cleared, there is
+        // nothing left to match, so this logs at most once per entity.
+        updatedKnownEntities = updatedKnownEntities.map(e => {
+            const reason = voiceSampleRejection(e.voice_sample, entityNames);
+            if (!reason) return e;
+            ctx.debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[VOICE SAMPLE — v1.35] SCRUBBED stored sample for ${e.name}: ${reason} — ` +
+                    `"${(e.voice_sample ?? '').slice(0, 120)}".`,
+                type: 'warning',
+            });
+            return { ...e, voice_sample: undefined };
+        });
 
         // Multi-strategy entity dedup with fuzzy name matching
         if (r.known_entity_updates) {

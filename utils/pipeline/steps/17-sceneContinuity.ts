@@ -85,6 +85,33 @@ export const sceneContinuityStep: PipelineStep = {
             });
         }
 
+        // --- 2b. Model-flagged correction (v1.35) ---------------------------
+        // The regex list in playerFraming.ts matched NOTHING across both
+        // 2026-08-31 saves, so PLAYER_CORRECTION_PROTOCOL never fired once.
+        // The model has already read the input and is much better at spotting
+        // "he is telling me I misread him" than a keyword list can be.
+        //
+        // The flag arrives WITH the response, so it cannot arm the reminder on
+        // the turn it describes — it arms the NEXT one. That is not a
+        // consolation prize: v1.29's documented failure mode is the NPC
+        // conceding a correction and then re-asserting the same framing on the
+        // following beat, which is exactly the turn this covers.
+        if (ctx.sanitisedResponse.player_correction === true) {
+            ctx.worldUpdate.correctionFlaggedTurn = turn;
+            ctx.debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[CORRECTION — v1.35] Model reported the player correcting a reading of himself on turn ${turn}. `
+                    + `PLAYER_CORRECTION_PROTOCOL will be armed next turn.`,
+                type: 'warning',
+            });
+        } else if (ctx.previousWorld.correctionFlaggedTurn !== undefined) {
+            // Carry it forward exactly one turn, then let it lapse.
+            ctx.worldUpdate.correctionFlaggedTurn =
+                ctx.previousWorld.correctionFlaggedTurn === turn - 1
+                    ? ctx.previousWorld.correctionFlaggedTurn
+                    : undefined;
+        }
+
         // --- 3. Turn digest -------------------------------------------------
         // Snapshot for next turn's [SINCE LAST TURN] diff. Stamped with the
         // facts recorded this turn so the diff can surface them by name.

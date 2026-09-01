@@ -75,6 +75,15 @@ leverage, one ledger entry or goal. For named NPCs who speak, also set
 register — it becomes the permanent anchor for how they sound. Omit it on
 routine updates; the engine preserves the existing sample.
 
+A voice sample captures DICTION — vocabulary, cadence, verbal tics — not a
+rhetorical shape. Prefer a line about the world, the work, or the character's
+own concerns over a line ABOUT THE PLAYER. The engine rejects samples that are
+a tautology ("If the tools are what you need, then they are what you shall
+have"), an assertion about the player ("You don't glide. You disappear."), a
+two-horn question, or a detached maxim ("Maintenance is the price of water").
+Those are shapes a character struck once; anchored as a voice they become an
+instruction to strike the same shape every turn for the rest of the campaign.
+
 \`impression\` is the PC's situational read THIS SCENE (mood, stance, what
 the NPC wants right now) — never a personality restatement. Personality is
 canonical and engine-owned; you cannot change who a character IS through

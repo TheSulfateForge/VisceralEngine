@@ -96,6 +96,8 @@ async function writeSentinel(): Promise<void> {
     player_canon: null,      // v1.31
     scene_ledger: null,      // v1.31
     last_turn_digest: null,  // v1.31
+    ooc_directives: null,          // v1.35
+    correction_flagged_turn: null, // v1.35
   });
 }
 

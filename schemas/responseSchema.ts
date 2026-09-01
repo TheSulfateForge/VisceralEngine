@@ -159,7 +159,7 @@ export const RESPONSE_SCHEMA: Schema = {
           relationship_level: { type: Type.STRING, enum: ['NEMESIS', 'HOSTILE', 'COLD', 'NEUTRAL', 'WARM', 'ALLIED', 'DEVOTED'] },
           leverage: { type: Type.STRING },
           ledger: { type: Type.ARRAY, items: { type: Type.STRING } },
-          voice_sample: { type: Type.STRING, nullable: true, description: "One or two lines of this NPC's ACTUAL spoken dialogue that capture their authentic register (vocabulary, rhythm, tics). Set ONLY when creating a new named NPC or when a defining line lands this turn. Omit on routine updates — the engine preserves the existing sample." }
+          voice_sample: { type: Type.STRING, nullable: true, description: "One or two lines of this NPC's ACTUAL spoken dialogue that capture their authentic register (vocabulary, rhythm, tics). Set ONLY when creating a new named NPC or when a defining line lands this turn. Omit on routine updates — the engine preserves the existing sample. A voice sample captures DICTION — word choice, cadence, verbal tics — NOT a rhetorical shape. Prefer a line about the world, the work, or the character's own concerns. The engine REJECTS samples that are: a tautology ('If the tools are what you need, then they are what you shall have'); an assertion about the player ('You don\u2019t glide. You disappear.'); a two-horn question; or a detached maxim ('Maintenance is the price of water'). Those are shapes a character made once, and re-injecting them every turn makes the character argue in that shape forever." }
         },
         required: ["id", "name", "role", "location", "impression", "relationship_level", "leverage", "ledger"]
       }
@@ -273,6 +273,16 @@ export const RESPONSE_SCHEMA: Schema = {
       nullable: true,
       items: { type: Type.STRING },
       description: "PLAYER-STATED CANON. 0-2 short declarative clauses capturing facts the PLAYER asserted THIS TURN about their OWN character (body, gear, abilities, history), or corrections to something you previously narrated about them. Record the fact, not the phrasing. ONLY record what the player actually stated — never infer, never record your own inventions here. NEVER record claims about NPC thoughts/feelings, faction plans, or world events; those are not the player's to assert. Example: player says 'the armor keeps me warm even my face' → 'Armor maintains body temperature over the whole body when deployed.'"
+    },
+    // v1.35: the regex correction detector in playerFraming.ts matched NOTHING
+    // across both 2026-08-31 saves, so PLAYER_CORRECTION_PROTOCOL never fired.
+    // A keyword list is always one phrasing behind; the model has already read
+    // the input and is far better at recognising "he is telling me I misread
+    // him". The two signals are OR'd — see useGeminiClient.
+    player_correction: {
+      type: Type.BOOLEAN,
+      nullable: true,
+      description: "TRUE when the player's input THIS TURN rejects, corrects, or pushes back on how an NPC (or the narration) has characterised THEM — their motives, their intentions, what they are 'really' after, or what they supposedly meant. Set it for any phrasing: 'that's not what I said', 'I was just asking', 'doesn't mean I'm trying to...', 'you're deciding what I mean', 'don't put me in a box', or a plain statement that the reading is wrong. Do NOT set it for ordinary disagreement about the WORLD, a refused offer, or an argument between characters — only for the player correcting a reading of HIMSELF. Default false/omitted."
     },
     // v1.26: legacy new_memory singleton removed from the schema — every
     // property costs request tokens. validateResponse still accepts it from
@@ -479,6 +489,7 @@ export const KEEP_DESCRIPTIONS: ReadonlySet<string> = new Set<string>([
   'skill_updates',
   'new_memories', 'salience', 'tags',
   'established', 'player_assertions',   // v1.31 — both need their scope rules kept
+  'player_correction',                  // v1.35
   'new_lore', 'keyword', 'content',
   'biological_inputs',
   'location_update', 'traveled_from', 'travel_time_minutes', 'nearby_locations',

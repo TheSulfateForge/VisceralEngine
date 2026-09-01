@@ -44,6 +44,7 @@ import type {
   WorldTick,
   BioMonitor,
   MontageProposal,
+  OocDirective,
   PlayerCanonEntry,
   SceneLedgerEntry,
   TurnDigest,
@@ -545,6 +546,12 @@ export interface WorldStateRow {
   player_canon: PlayerCanonEntry[] | null;
   scene_ledger: SceneLedgerEntry[] | null;
   last_turn_digest: TurnDigest | null;
+  /**
+   * v1.35. Neither is indexed, so no Dexie version bump is required and
+   * pre-v1.35 saves load with both absent.
+   */
+  ooc_directives: OocDirective[] | null;
+  correction_flagged_turn: number | null;
 }
 
 export interface WorldRuleRow {

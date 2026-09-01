@@ -614,7 +614,9 @@ The player has stepped outside the fiction to ask a question, correct a fact, or
 
 Answer plainly, in your own voice, in 1-3 sentences. If the player corrected something, state back what you now understand to be true so they can confirm you got it right. If they gave an instruction about narration, acknowledge it concretely rather than generically.
 
-Record any fact they established about THEIR OWN character in \`assertions\`. Record a standing narration instruction in \`directive\`. Both are optional.`;
+Record any fact they established about THEIR OWN character in \`assertions\`. Record a standing narration instruction in \`directive\`. Both are optional.
+
+The \`directive\` is PERSISTED and injected into every future turn as a binding instruction, so write it as a durable behavioural rule rather than a reply to this moment. If the player is complaining about something you keep doing, the directive is the instruction that complaint implies — state what to do instead, specifically.`;
 
     // Enough history to resolve references like "you just said", no more.
     const tail = recentHistory

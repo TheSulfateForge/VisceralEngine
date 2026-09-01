@@ -910,6 +910,8 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
       player_canon: world.playerCanon ?? null,
       scene_ledger: world.sceneLedger ?? null,
       last_turn_digest: world.lastTurnDigest ?? null,
+      ooc_directives: world.oocDirectives ?? null,                 // v1.35
+      correction_flagged_turn: world.correctionFlaggedTurn ?? null, // v1.35
     };
     await vdb.world_state.put(wsRow);
 
@@ -1515,6 +1517,8 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
       ...(ws.player_canon?.length ? { playerCanon: ws.player_canon } : {}),
       ...(ws.scene_ledger?.length ? { sceneLedger: ws.scene_ledger } : {}),
       ...(ws.last_turn_digest ? { lastTurnDigest: ws.last_turn_digest } : {}),
+      ...(ws.ooc_directives?.length ? { oocDirectives: ws.ooc_directives } : {}),          // v1.35
+      ...(ws.correction_flagged_turn != null ? { correctionFlaggedTurn: ws.correction_flagged_turn } : {}), // v1.35
       factionIntelligence,
       legalStatus,
       dormantHooks,

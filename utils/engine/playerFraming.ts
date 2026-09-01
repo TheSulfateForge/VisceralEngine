@@ -26,7 +26,27 @@
 // three and requires the player to be the actor.
 // ============================================================================
 
-/** Player is telling the NPC their reading of him is wrong or overblown. */
+/**
+ * Player is telling the NPC their reading of him is wrong or overblown.
+ *
+ * v1.35 — these were derived from ONE save's phrasings, and against the two
+ * saves of 2026-08-31 they matched NOTHING. Zero hits across every player turn
+ * in both; `[CORRECTION]` appears zero times in either debug log; the
+ * PLAYER_CORRECTION_PROTOCOL reminder — written precisely for this failure —
+ * had never fired once. What the player actually wrote:
+ *
+ *   "you're getting awfully fond of deciding what I mean before I've decided
+ *    it myself"
+ *   "Doesn't mean I'm trying to turn every pleasant evening into some grand
+ *    search for home, meaning, or whatever else you've decided I'm hunting for"
+ *   "You don't have to fit me into a neat little box quite yet"
+ *   "I asked because I was curious"
+ *
+ * The second one misses `\bI'?m\s+not\s+trying\b` by two words. A keyword list
+ * will always be one phrasing behind, which is why v1.35 also adds a
+ * model-authored `player_correction` flag and ORs the two signals — see
+ * `PlayerFramingSignals.corrected`.
+ */
 const CORRECTION_PATTERNS: RegExp[] = [
     /\b(?:that'?s|that is)\s+not\s+what\s+I\s+(?:said|meant|asked)\b/i,
     /\bI\s+(?:never|didn'?t|did\s+not)\s+(?:say|said|mean|claim|suggest|imply)\b/i,
@@ -41,6 +61,31 @@ const CORRECTION_PATTERNS: RegExp[] = [
     /\bno\s+(?:grand|greater|deeper|hidden)\s+(?:plan|meaning|design|scheme)\b/i,
     /\byou'?re\s+(?:over)?think(?:ing)?\s+(?:this|it)\b/i,
     /\bslow\s+down,?\s+(?:princess|my\s+lord|my\s+lady|friend)?\b/i,
+
+    // --- v1.35 additions, from the 2026-08-31 saves ---
+
+    // "Doesn't mean I'm trying to…" / "That doesn't mean I want…" — a denial
+    // framed as a consequence rather than as "I'm not". The single most
+    // common shape in the reviewed saves, and the old list missed all of it.
+    /\b(?:doesn'?t|does\s+not|don'?t)\s+mean\s+(?:that\s+)?I(?:'?m|\s+am)?\b/i,
+    // "deciding what I mean", "decided I'm hunting for", "you've decided…"
+    /\byou(?:'?ve|\s+have)?\s+(?:decid|assum|conclud|determin)\w*\s+(?:what\s+)?I\b/i,
+    /\bdeciding\s+what\s+I\s+(?:mean|meant|want|am|think)\b/i,
+    /\bbefore\s+I'?ve\s+(?:decided|said|figured)\b/i,
+    // "fit me into a box", "put me in a box", "neat little box"
+    /\b(?:fit|put|shove|force|cram|slot)\s+me\s+in(?:to)?\s+(?:a|some|your)\b/i,
+    /\bneat\s+little\s+box\b|\bin\s+a\s+box\b/i,
+    // "I was just asking", "I'm just curious", "I only asked"
+    /\bI(?:'?m|\s+(?:was|am))\s+(?:just|only|merely|simply)\s+(?:ask|curious|wonder|mak|say|talk|be|enjoy|chat)\w*/i,
+    /\bI\s+(?:just|only|merely)\s+(?:asked|wondered|wanted\s+to\s+know)\b/i,
+    /\bI\s+asked\s+because\s+I\b/i,
+    // "nothing more than that", "that's all it was"
+    /\bnothing\s+(?:more|deeper|grander)\s+than\s+that\b/i,
+    /\bthat'?s\s+(?:all|it)(?:\s+(?:it\s+)?(?:was|is))?\b\.?\s*$/i,
+    // "you're putting words in my mouth" (the old list had only the stem)
+    /\bwords\s+in\s+my\s+mouth\b/i,
+    // "stop trying to make this about", "this isn't about"
+    /\b(?:stop|quit)\s+(?:trying\s+to\s+)?(?:make|turn)\s+(?:this|it|everything)\s+(?:in)?to\b/i,
 ];
 
 /**

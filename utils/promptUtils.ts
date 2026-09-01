@@ -33,6 +33,7 @@ import { isNarrativeMessage } from './engine/oocDetection';
 import {
     buildSceneLedgerBlock,
     buildPlayerCanonBlock,
+    buildOocDirectivesBlock,
     buildSinceLastTurnBlock,
 } from './engine/sceneContinuity';
 import { deriveTimePhase, getAmbientCue } from './engine/timeUtils';
@@ -921,6 +922,10 @@ This world is fundamentally: ${gameWorld.worldTags.join(', ')}.
   const sinceLastTurnBlock = buildSinceLastTurnBlock(digest, gameWorld, character, canonFromLastTurn);
   const sceneLedgerBlock = buildSceneLedgerBlock(gameWorld.sceneLedger);
   const playerCanonBlock = buildPlayerCanonBlock(gameWorld.playerCanon);
+  // v1.35: standing OOC instructions. Placed with the other binding blocks —
+  // before the entity/atmosphere context, so a directive about HOW to narrate
+  // is in hand before the model reads what there is to narrate.
+  const oocDirectivesBlock = buildOocDirectivesBlock(gameWorld.oocDirectives);
 
   // v1.19: Dream/Nightmare seed — only injected when the player is sleeping
   // and trauma ≥ DREAM_TRAUMA_THRESHOLD. Empty string otherwise.
@@ -954,6 +959,7 @@ ${sanitise(situationRecap)}
 ${sanitise(sinceLastTurnBlock ? `\n${sinceLastTurnBlock}\n` : '')}
 ${sanitise(sceneLedgerBlock ? `\n${sceneLedgerBlock}\n` : '')}
 ${sanitise(playerCanonBlock ? `\n${playerCanonBlock}\n` : '')}
+${sanitise(oocDirectivesBlock ? `\n${oocDirectivesBlock}\n` : '')}
 ${sanitise(dreamSeed ? `\n${dreamSeed}\n` : '')}
 ${sanitise(worldPrimerBlock ? `\n${worldPrimerBlock}\n` : '')}
 
@@ -1029,6 +1035,7 @@ ${sanitise(conditionLock ? `\n${conditionLock}\n` : '')}
       delta: sinceLastTurnBlock.length,
       ledger: sceneLedgerBlock.length,
       canon: playerCanonBlock.length,
+      directives: oocDirectivesBlock.length,  // v1.35
   };
 
   return {

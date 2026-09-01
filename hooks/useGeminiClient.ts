@@ -2,7 +2,7 @@ import { useRef, useCallback } from 'react';
 import { ChatMessage, Role, ModelResponseSchema, SummarySegment } from '../types';
 import { generateMessageId, generateUUID } from '../idUtils';
 import { parseOocInput, isNarrativeMessage } from '../utils/engine/oocDetection';
-import { ingestPlayerAssertions } from '../utils/engine/sceneContinuity';
+import { ingestPlayerAssertions, ingestOocDirective } from '../utils/engine/sceneContinuity';
 import { mapSystemErrorToNarrative } from '../utils';
 import { useToast } from '../components/providers/ToastProvider';
 import { constructGeminiPrompt } from '../utils/promptUtils';
@@ -20,6 +20,7 @@ import {
 } from '../utils/engine/playerFraming';
 import { selectSectionReminders, makeReminderContext } from '../sectionReminders';
 import { narrativeContainsViolence } from '../utils/engine/npcCoherence';
+import { detectRhetoricTics } from '../utils/engine/npcRhetoric';
 
 // Extracted Hooks & Utils
 import { useGeminiService } from './useGeminiService';
@@ -310,8 +311,23 @@ export const useGeminiClient = () => {
               () => generateUUID(),
           );
 
-          if (accepted.length > 0 || rejected.length > 0) {
-              setGameWorld(prev => ({ ...prev, playerCanon: canon }));
+          // v1.35: the directive is a STANDING instruction, so it has to reach
+          // world state and the prompt. Before this it went to the debug log
+          // and nowhere else — the channel accepted the player's complaint,
+          // replied promising a change, and then had no way to deliver one.
+          const { directives, added: directiveAdded } = ingestOocDirective(
+              state.gameWorld.oocDirectives,
+              ooc.directive,
+              turn,
+              () => generateUUID(),
+          );
+
+          if (accepted.length > 0 || rejected.length > 0 || directiveAdded) {
+              setGameWorld(prev => ({
+                  ...prev,
+                  ...(accepted.length > 0 || rejected.length > 0 ? { playerCanon: canon } : {}),
+                  ...(directiveAdded ? { oocDirectives: directives } : {}),
+              }));
           }
 
           const replyMsg: ChatMessage = {
@@ -340,7 +356,9 @@ export const useGeminiClient = () => {
                   })),
                   ...(ooc.directive ? [{
                       timestamp: new Date().toISOString(),
-                      message: `[OOC DIRECTIVE] ${ooc.directive}`,
+                      message: directiveAdded
+                          ? `[OOC DIRECTIVE — v1.35] Standing from turn ${turn}, now binding on every turn: ${ooc.directive}`
+                          : `[OOC DIRECTIVE] Already standing (duplicate), not re-added: ${ooc.directive}`,
                       type: 'info' as const,
                   }] : []),
                   { timestamp: new Date().toISOString(), message: `[OOC] Complete. Turn ${turn} unchanged.`, type: 'info' as const },
@@ -580,6 +598,25 @@ export const useGeminiClient = () => {
             levelIndex(contactLevel) >= levelIndex('sustained');
         const violenceInScene = narrativeContainsViolence(lastNarrative);
 
+        // v1.35: did the model argue in a figure last turn? Self-inspection of
+        // its own previous output, the same shape the v1.30 repetition guard
+        // uses — except this warns on the NEXT prompt rather than resampling,
+        // because "you think" and "or?" occur constantly in good dialogue and a
+        // false positive must never cost a regenerate.
+        const rhetoric = detectRhetoricTics(
+            lastNarrative,
+            (preCallState.gameWorld.knownEntities ?? []).map(e => e.name).filter(Boolean),
+        );
+        // v1.35: the model reported a correction on the previous turn.
+        const modelFlaggedCorrection =
+            preCallState.gameWorld.correctionFlaggedTurn !== undefined &&
+            preCallState.gameWorld.correctionFlaggedTurn >= preCallState.gameHistory.turnCount - 1;
+
+        const rhetoricDebugLine = rhetoric.tics.length > 0
+            ? `[RHETORIC] ${rhetoric.armed ? 'ARMED' : 'noted (below threshold)'} — ${rhetoric.tics.join(', ')}` +
+              (rhetoric.samples.length > 0 ? ` | ${rhetoric.samples.join(' | ')}` : '')
+            : null;
+
         const reminderContext = makeReminderContext({
             turnCount: preCallState.gameHistory.turnCount,
             worldTurn: preCallState.gameWorld.turnCount ?? 0,
@@ -601,12 +638,26 @@ export const useGeminiClient = () => {
             hostileEntityNames,              // v1.28
             strainedAllyNames,               // v1.28
             canonicalPersonalityNpcPresent,  // v1.22
-            playerCorrected: framing.corrected,          // v1.29
-            correctionMarkers: framing.correctionMarkers, // v1.29
+            // v1.35: OR the regex signal with the model's own flag from the
+            // PREVIOUS turn. The regex fires on the turn the correction is
+            // made (fast, imperfect recall); the flag fires one turn later
+            // (perfect recall, one beat late). A correction caught by both
+            // arms the protocol twice, which is correct — v1.29's failure was
+            // the NPC conceding and then re-asserting on the next beat.
+            playerCorrected: framing.corrected || modelFlaggedCorrection,
+            correctionMarkers: framing.correctionMarkers.length > 0
+                ? framing.correctionMarkers
+                : (modelFlaggedCorrection
+                    ? ['(flagged by the engine on the previous turn — the player pushed back on how he was being read)']
+                    : []),
             playerReciprocated: framing.reciprocated,     // v1.29
             contactLevel,                                 // v1.29
             intimacyInScene,                              // v1.33
             violenceInScene,                              // v1.33
+            // v1.35: only an ARMED report reaches the reminder. A single marker
+            // is a sentence; two is a pattern.
+            rhetoricTics: rhetoric.armed ? rhetoric.tics : [],
+            rhetoricSamples: rhetoric.armed ? rhetoric.samples : [],
             reminderLastShown: preCallState.gameWorld.reminderLastShown ?? {}, // v1.33
         });
 
@@ -645,6 +696,14 @@ export const useGeminiClient = () => {
             ? reminderParts.join('\n\n---\n\n')
             : null;
         let requestLogs = [...preCallState.gameHistory.debugLog];
+
+        if (rhetoricDebugLine) {
+            requestLogs.push({
+                timestamp: new Date().toISOString(),
+                message: rhetoricDebugLine,
+                type: rhetoric.armed ? 'warning' : 'info',
+            });
+        }
 
         // v1.33 (M6): log EVERY key injected, not just the first line of the
         // joined blob. The old single-line log is why the starvation went

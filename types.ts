@@ -927,6 +927,16 @@ export interface ModelResponseSchema {
      */
     player_assertions?: string[];
 
+    /**
+     * v1.35: the model's own read on whether the player pushed back on how he
+     * was being characterised this turn. OR'd with the regex detector in
+     * playerFraming.ts, which matched nothing across both 2026-08-31 saves.
+     * Because the flag arrives with the response it cannot arm the reminder on
+     * the same turn — it arms the FOLLOWING one, which is also where v1.29's
+     * documented failure lives (concede, then re-assert on the next beat).
+     */
+    player_correction?: boolean;
+
     time_passed_minutes?: number;
     biological_inputs?: BioInputs;
 
@@ -1049,6 +1059,26 @@ export interface SceneLedgerEntry {
     turn: number;
     /** 'npc' = derived from a player-visible npc_action; 'model' = declared via `established`. */
     source: 'npc' | 'model';
+}
+
+/**
+ * v1.35: a standing narration instruction the player gave over OOC.
+ *
+ * v1.31 built the OOC channel and had the model extract a `directive` from
+ * each OOC turn. `useGeminiClient` then wrote that directive to the DEBUG LOG
+ * and nowhere else. In the 2026-08-31 save the extraction was perfect —
+ * "Ensure NPCs respond literally to the player's dialogue and cease projecting
+ * hidden meanings or intentions onto the character" — and it reached no
+ * prompt, no state, nothing. Combined with v1.31 filtering OOC replies out of
+ * the history sent to the model, the channel structurally guaranteed that
+ * every style complaint produced a promise and no change.
+ */
+export interface OocDirective {
+    id: string;
+    /** The instruction, as the model condensed it from the player's OOC turn. */
+    text: string;
+    /** Turn on which the player issued it. */
+    turn: number;
 }
 
 /**
@@ -1285,6 +1315,21 @@ export interface GameWorld {
 
     /** v1.31: End-of-turn snapshot, diffed next turn to build [SINCE LAST TURN]. */
     lastTurnDigest?: TurnDigest;
+
+    /**
+     * v1.35: turn on which the MODEL reported the player correcting a reading
+     * of himself. Arms PLAYER_CORRECTION_PROTOCOL on the next turn, catching
+     * the corrections the regex list misses.
+     */
+    correctionFlaggedTurn?: number;
+
+    /**
+     * v1.35: standing narration instructions the player issued over the OOC
+     * channel. Before this, `ooc.directive` was written to the debug log and
+     * nowhere else — the channel took the complaint, promised a change, and
+     * could not deliver one. FIFO, capped.
+     */
+    oocDirectives?: OocDirective[];
 
     /** v1.10: Flag set by allied passivity detection for sectionReminders. */
     passiveAlliesDetected?: boolean;

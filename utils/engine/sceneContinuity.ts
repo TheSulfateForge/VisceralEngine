@@ -24,6 +24,7 @@ import type {
     GameWorld,
     Character,
     KnownEntity,
+    OocDirective,
     PlayerCanonEntry,
     SceneLedgerEntry,
     TurnDigest,
@@ -221,6 +222,69 @@ export const buildPlayerCanonBlock = (canon: PlayerCanonEntry[] | undefined): st
 These are true. The player established them; you do not get to re-litigate,
 soften, or contradict them, and you must not write a line that assumes their
 opposite.
+${lines}`;
+};
+
+// ---------------------------------------------------------------------------
+// 2b. OOC DIRECTIVES → [STANDING DIRECTIVES]  (v1.35)
+// ---------------------------------------------------------------------------
+// v1.31 built the OOC channel and had the model condense each OOC turn into a
+// `directive`. `useGeminiClient` then wrote it to the DEBUG LOG and nowhere
+// else — not to world state, not to any prompt block. In the 2026-08-31 save
+// the extraction was exactly right:
+//
+//   [OOC DIRECTIVE] Ensure NPCs respond literally to the player's dialogue and
+//   cease projecting hidden meanings or intentions onto the character.
+//
+// and it reached nothing. Combined with v1.31 filtering OOC replies out of the
+// history sent to the model (correct on its own terms — an OOC reply sitting in
+// history as a MODEL turn primes it to break character), the channel took the
+// player's complaint, produced a reply promising a change, and then guaranteed
+// that the next narrative prompt had never heard of any of it.
+//
+// That is the mechanical answer to "I address it and nothing changes".
+
+/** How many standing directives ride in the prompt. FIFO beyond this. */
+export const OOC_DIRECTIVE_MAX = 5;
+
+/**
+ * Append a directive, de-duplicated against what is already standing.
+ *
+ * Deliberately keeps the model's condensed phrasing rather than the player's
+ * raw OOC text: the raw text is a complaint ("why do you keep doing X"), and
+ * what belongs in a prompt is the instruction it implies.
+ */
+export const ingestOocDirective = (
+    existing: OocDirective[] | undefined,
+    directive: string | undefined | null,
+    turn: number,
+    idFactory: () => string,
+): { directives: OocDirective[]; added: boolean } => {
+    const text = (directive ?? '').trim();
+    const current = existing ? [...existing] : [];
+    if (!text) return { directives: current, added: false };
+
+    const key = beatKey(text);
+    if (!key || current.some(d => beatKey(d.text) === key)) {
+        return { directives: current, added: false };
+    }
+
+    current.push({ id: idFactory(), text, turn });
+    const capped = current.length > OOC_DIRECTIVE_MAX
+        ? current.slice(current.length - OOC_DIRECTIVE_MAX)
+        : current;
+    return { directives: capped, added: true };
+};
+
+/** Render standing directives for the prompt. */
+export const buildOocDirectivesBlock = (directives: OocDirective[] | undefined): string => {
+    if (!directives || directives.length === 0) return '';
+    const lines = directives.map(d => `- ${d.text}`).join('\n');
+    return `[STANDING DIRECTIVES — from the player, binding]
+The player gave these instructions about HOW to narrate, out of character.
+They apply to every turn from now on, not just the turn they were given. They
+outrank your own stylistic instincts. If one of them contradicts something you
+were about to write, the directive wins.
 ${lines}`;
 };
 

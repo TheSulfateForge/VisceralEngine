@@ -570,6 +570,71 @@ react like a person who has just been told they misjudged someone:
 mildly embarrassed, curious, recalibrating. Not vindicated.`,
 
     /**
+     * v1.35. The NPC is arguing in a figure instead of answering.
+     *
+     * PROPORTIONALITY guards a different axis — it bans INFLATING the player's
+     * significance ("the only one who sees clearly", "the most dangerous person
+     * in the room"). It fired five times in thirty-two turns of the reviewed
+     * save and did not help, because the failure there was MOTIVE ATTRIBUTION,
+     * which trips none of its rules: "Don't go looking for more meaning than
+     * that" does not call the player extraordinary, it assigns him a search.
+     * "You think I listen well because you're desperate for a conversation"
+     * does not inflate him, it tells him what he believes.
+     *
+     * Triggered by the tic markers in the PREVIOUS model turn rather than by
+     * rotation — rotation carries one slot across twelve entries, roughly one
+     * showing every six to eight turns, against a pathology that fired on six
+     * consecutive turns.
+     */
+    NPC_RHETORIC: `[SYSTEM REMINDER: ANSWER THE PLAYER — DO NOT ARGUE IN FIGURES — v1.35]
+Your previous turn built an NPC's speech as a RHETORICAL FIGURE ABOUT THE
+PLAYER instead of a person responding to what was actually said. See the
+[RHETORIC] line below for what was detected.
+
+THE SHAPE, and why it goes wrong:
+A figure needs a proposition to turn. So the NPC invents one — a motive, a
+belief, a hidden search — attributes it to the player, and argues with that
+instead of with him. Having invented it, conceding it later reads to the
+player as his own idea being handed back to him. And because the figure is
+standing in for an argument, what comes out is a tautology or a false choice
+rather than a reason.
+
+FORBIDDEN THIS TURN:
+- Opening an NPC's line by asserting what the player thinks, wants, means,
+  believes, or is really after: "You think…", "You talk as if…", "You speak
+  as if…", "You're assuming…", "You came here looking for…". If the player
+  did not say it, the NPC does not get to tell him he meant it.
+- Assigning the player a search, a hunger, or a grander purpose he has not
+  stated — "don't go looking for more meaning than that", "you're hunting for
+  something", "you want more than the work".
+- The two-horn closing question. "Is that a challenge, or have you forgotten
+  how to play the game?" offers the player two options the NPC wrote, and he
+  cannot answer without accepting a frame he did not set. Do not end a turn
+  on "X, or Y?".
+- The detached maxim as a closer — "Maintenance is the price of water",
+  "Caution is just another name for respect", "A steading is only a home if
+  the work stays done". These are tautologies with the cadence of insight.
+  The last one defines a home as work-done and then offers the definition as
+  an observation.
+- More than ONE figurative comparison in a single NPC's speech this turn.
+
+WRITE THIS INSTEAD:
+- An NPC who does not understand ASKS A PLAIN QUESTION. "Why do you ask?" is
+  a better line than any inference about why he asked.
+- An NPC who disagrees NAMES THEIR OWN REASON — what THEY have seen, what
+  THEY want, what it would cost THEM. Not the player's motive.
+- An NPC who is asked something ANSWERS IT, at the length the question
+  deserves, and then does something or falls silent.
+- Most turns end on an action, an answer, a gesture, or nothing. A turn does
+  not need to end on a question, and several in a row that do turn a
+  conversation into an interrogation.
+
+A curious NPC asking real questions is good and wanted. The defect is
+specifically the question that assigns the player a motive, and the reply that
+argues with a position he never took. Let him ask a question that is just a
+question.`,
+
+    /**
      * v1.29. Reaction magnitude must match the input that caused it.
      */
     PROPORTIONALITY: `[SYSTEM REMINDER: PROPORTIONALITY — MATCH THE INPUT — v1.29]
@@ -884,7 +949,7 @@ export type ReminderKey =
     | 'DREAM_PROTOCOL' | 'PLAYER_CORRECTION_PROTOCOL' | 'PHYSICAL_RECIPROCATION'
     | 'CONDITION_AUDIT' | 'LOGISTICS_CHECK' | 'LANGUAGES_FOREIGN' | 'HEALING_TIMELINE'
     | 'BARGAIN_CHECK' | 'ENTITY_DENSITY' | 'HOSTILE_NPC_PROTOCOL' | 'ALLY_STRAIN_PROTOCOL'
-    | 'CANONICAL_VOICE_LOCK' | 'VISCERAL_RENDER'
+    | 'CANONICAL_VOICE_LOCK' | 'VISCERAL_RENDER' | 'NPC_RHETORIC'
     | 'WORLD_NORMALCY' | 'PROPORTIONALITY' | 'GENRE_CONSISTENCY' | 'FACTION_PARITY'
     | 'NARRATIVE_INTEGRITY' | 'VOCABULARY' | 'INTIMATE' | 'COMBAT'
     | 'THREAT_SEED_INTEGRITY' | 'GOAL_LIFECYCLE';
@@ -915,6 +980,13 @@ export interface ReminderContext {
     canonicalPersonalityNpcPresent: boolean;
     playerCorrected: boolean;
     correctionMarkers: string[];
+    /**
+     * v1.35 — rhetoric tics detected in the PREVIOUS model turn (motive
+     * attribution, two-horn close, maxim close, figurative density). Armed at
+     * two or more; one marker is a sentence, two is a pattern.
+     */
+    rhetoricTics: string[];
+    rhetoricSamples: string[];
     playerReciprocated: boolean;
     contactLevel: string;
     /**
@@ -1121,6 +1193,22 @@ export const selectSectionReminders = (ctx: ReminderContext): ReminderSelection 
         if (conditional.length < CONDITIONAL_BUDGET) conditional.push({ key, text });
     };
 
+    // v1.35 — the model argued in a figure last turn. This heads the band:
+    // it is rare (two of thirty-five turns in one reviewed save, six of
+    // eighteen in the other), it fires only on the turns the player actually
+    // objected to, and when it does fire it is the most important correction
+    // available.
+    if (ctx.rhetoricTics.length > 0) {
+        offer(
+            'NPC_RHETORIC',
+            `${REMINDERS.NPC_RHETORIC}\n\n[RHETORIC] Detected in your previous turn: ` +
+            `${ctx.rhetoricTics.join(', ')}.` +
+            (ctx.rhetoricSamples.length > 0
+                ? ` Specifically: ${ctx.rhetoricSamples.map(m => `"${m}"`).join('; ')}.`
+                : ''),
+        );
+    }
+
     // Contact is on the table and the player did NOT reciprocate this turn.
     // An unreciprocated advance repeating turn after turn is the failure mode
     // this was written for, so it outranks the rest of the band.
@@ -1286,6 +1374,8 @@ export const makeReminderContext = (partial: Partial<ReminderContext> = {}): Rem
     canonicalPersonalityNpcPresent: false,
     playerCorrected: false,
     correctionMarkers: [],
+    rhetoricTics: [],
+    rhetoricSamples: [],
     playerReciprocated: false,
     contactLevel: 'none',
     intimacyInScene: false,

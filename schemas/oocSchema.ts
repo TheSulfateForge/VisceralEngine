@@ -26,7 +26,7 @@ export const OOC_RESPONSE_SCHEMA: Schema = {
         directive: {
             type: Type.STRING,
             nullable: true,
-            description: "OPTIONAL. When the player gave a standing instruction about HOW to narrate (pacing, tone, how often NPCs touch them, how explicit to be), restate it here as one imperative clause the engine can carry forward. Omit when the input was a question or a fact rather than an instruction."
+            description: "OPTIONAL. When the player gave a standing instruction about HOW to narrate (pacing, tone, how NPCs speak or read them, how often NPCs touch them, how explicit to be), restate it here as ONE imperative clause. v1.35: this is now PERSISTED and injected into every subsequent turn as a binding [STANDING DIRECTIVES] block, so write it as a durable rule the engine can follow forever, not as a reaction to this one turn. A complaint ('why do you keep doing X') becomes the instruction it implies ('Do not do X'). Be specific and behavioural. Omit when the input was a question or a fact rather than an instruction."
         }
     },
     required: ["reply"]
