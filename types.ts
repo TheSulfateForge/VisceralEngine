@@ -1382,6 +1382,13 @@ export interface GameWorld {
     voiceLockFlaggedNames?: string[];
     /** 'inactive' pinned the character into the mask; 'active' into revelation. */
     voiceLockFlaggedDirection?: string;
+    /**
+     * v1.40: canonical-voice restatements that failed the record check last
+     * turn — an archetype substituted for a trait, or a layered character
+     * restated using only their Performed Surface. Rendered into the voice
+     * lock's trailer for one turn, same as the invented-trigger finding.
+     */
+    voiceLockRestatementIssues?: string[];
 
     /**
      * v1.35: standing narration instructions the player issued over the OOC

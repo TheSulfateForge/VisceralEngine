@@ -1153,6 +1153,13 @@ export interface ReminderContext {
     inventedTriggerNames: string[];
     /** 'inactive' (pinned into the mask) or 'active' (pinned into revelation). */
     inventedTriggerDirection: string;
+    /**
+     * v1.40 — canonical-voice restatements that failed the record check last
+     * turn: an archetype substituted for a canonical trait, or a layered
+     * character restated using only their Performed Surface. One string per
+     * finding, already human-readable.
+     */
+    restatementIssues: string[];
 
     /**
      * v1.37 — reminder keys countermanded by a standing player OOC directive.
@@ -1468,6 +1475,18 @@ export const selectSectionReminders = (ctx: ReminderContext): ReminderSelection 
         // v1.37: when the model invented a trigger status last turn, quote the
         // finding back at it. The reminder already forbids this in general; a
         // named instance is what makes a general prohibition land.
+        // v1.40: the restatement check's findings, quoted back. The voice lock
+        // has claimed since v1.33 that "the engine parses this line and checks
+        // it against the record"; it now does, and this is where the result
+        // lands.
+        const restatementTrailer = ctx.restatementIssues.length > 0
+            ? `\n\n[RESTATEMENT FAILED THE RECORD CHECK — LAST TURN]\n`
+              + ctx.restatementIssues.map(i => `- ${i}`).join('\n')
+              + `\nThe restatement is not a paraphrase and not a summary of the first `
+              + `paragraph. Draw the trait words from the record itself, across the WHOLE `
+              + `record — a layered character's restatement that names nothing from their `
+              + `Actual Core has already failed before a line of prose is written.`
+            : '';
         const trailer = ctx.inventedTriggerNames.length > 0
             ? `\n\n[INVENTED TRIGGER — LAST TURN] You declared a trigger `
               + `${ctx.inventedTriggerDirection || 'status'} for a personality record that `
@@ -1477,7 +1496,7 @@ export const selectSectionReminders = (ctx: ReminderContext): ReminderSelection 
               + `them this turn — restate their traits from the WHOLE record, Actual Core `
               + `included, and write what that person actually does in this beat.`
             : '';
-        offer('CANONICAL_VOICE_LOCK', `${REMINDERS.CANONICAL_VOICE_LOCK}${trailer}`);
+        offer('CANONICAL_VOICE_LOCK', `${REMINDERS.CANONICAL_VOICE_LOCK}${trailer}${restatementTrailer}`);
     }
 
     // v1.33 (M11) — content-triggered, not mode-triggered.
@@ -1596,6 +1615,7 @@ export const makeReminderContext = (partial: Partial<ReminderContext> = {}): Rem
     npcPositionsBlock: '',
     inventedTriggerNames: [],
     inventedTriggerDirection: '',
+    restatementIssues: [],
     suppressedReminders: [],
     intimacyInScene: false,
     violenceInScene: false,

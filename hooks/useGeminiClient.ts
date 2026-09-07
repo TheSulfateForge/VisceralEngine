@@ -10,7 +10,8 @@ import {
 } from '../utils/engine/sceneContinuity';
 import { mapSystemErrorToNarrative } from '../utils';
 import { useToast } from '../components/providers/ToastProvider';
-import { constructGeminiPrompt } from '../utils/promptUtils';
+import { constructGeminiPrompt, buildOocEntityRecords } from '../utils/promptUtils';
+import { findAliasMatchedEntities } from '../utils/ragEngine';
 import { getResponseSchema, SchemaMode } from '../schemas/responseSchema';
 import { SYSTEM_INSTRUCTIONS } from '../systemInstructions'; // v1.19: Wire persona into API call
 import { GeminiService } from '../geminiService';
@@ -25,6 +26,12 @@ import {
 } from '../utils/engine/playerFraming';
 import { selectSectionReminders, makeReminderContext, type ReminderKey } from '../sectionReminders';
 import { narrativeContainsViolence } from '../utils/engine/npcCoherence';
+import {
+    privateTermsForCharacter,
+    detectPrivateKnowledgeLeak,
+} from '../utils/engine/privateKnowledge';
+import { checkVoiceLock } from '../utils/engine/voiceLockCheck';
+import { classifyRecordQuery, answerRecordQuery } from '../utils/engine/recordQuery';
 import { detectRecurringRhetoric } from '../utils/engine/npcRhetoric';
 
 // Extracted Hooks & Utils
@@ -297,10 +304,69 @@ export const useGeminiClient = () => {
               `Clock: ${state.gameWorld.time?.display ?? 'unknown'}.`,
           ].join(' ');
 
+          // v1.38: resolve the NPCs the player named and attach their COMPLETE
+          // records. `findAliasMatchedEntities` matches on name tokens and
+          // unique roles; it is given the OOC body alone (not the history),
+          // because an OOC question is self-contained and pulling in the
+          // narrative tail would re-attach exactly the material the channel was
+          // previously confabulating from.
+          //
+          // Status is not filtered. Every NPC in the reviewed failure was
+          // 'missing' or 'distant' — a lookup is about the record, not the room.
+          const oocEntities = findAliasMatchedEntities(
+              body,
+              [],
+              state.gameWorld.knownEntities ?? [],
+          );
+          const oocRecords = buildOocEntityRecords(oocEntities);
+
+          // v1.41: DETERMINISTIC LOOKUP.
+          //
+          // When the question is unambiguously "what does the record say", the
+          // record IS the answer and there is nothing for a model to add. This
+          // path does not call the model at all, so the answer cannot drift,
+          // soften, summarise into three tidy items, or invent a section that
+          // does not exist. See utils/engine/recordQuery for why the gate is
+          // narrow: a correction or a complaint that happens to name a profile
+          // must still reach the model.
+          const recordQuery = classifyRecordQuery(body);
+          if (recordQuery.isLookup && oocEntities.length > 0) {
+              const answer = answerRecordQuery(oocEntities, recordQuery.section);
+              const replyMsg: ChatMessage = {
+                  id: generateMessageId(),
+                  role: Role.MODEL,
+                  text: answer,
+                  timestamp: new Date().toISOString(),
+                  ooc: true,
+              };
+              setGameHistory(prev => ({
+                  ...prev,
+                  history: [...prev.history, replyMsg],
+                  isThinking: false,
+                  debugLog: [
+                      ...prev.debugLog,
+                      {
+                          timestamp: new Date().toISOString(),
+                          message: `[OOC LOOKUP] Answered from world state with NO model call `
+                              + `(${recordQuery.reason}) for: ${oocEntities.map(e => e.name).join(', ')}. `
+                              + `The reply is the stored record verbatim.`,
+                          type: 'success' as const,
+                      },
+                      {
+                          timestamp: new Date().toISOString(),
+                          message: `[OOC] Complete. Turn ${state.gameHistory.turnCount ?? 0} unchanged.`,
+                          type: 'info' as const,
+                      },
+                  ],
+              }));
+              return;
+          }
+
           const ooc = await service.sendOocMessage(
               body,
               state.gameHistory.history.filter(m => !m.ooc),
               situationLine,
+              oocRecords,
           );
 
           if (latestRequestId.current !== requestId) return;
@@ -367,6 +433,17 @@ export const useGeminiClient = () => {
                           : `[OOC DIRECTIVE] Already standing (duplicate), not re-added: ${ooc.directive}`,
                       type: 'info' as const,
                   }] : []),
+                  // v1.38: name the records that were attached. When a lookup
+                  // comes back wrong, the first question is whether the model
+                  // had the record at all — that must be answerable from the log.
+                  {
+                      timestamp: new Date().toISOString(),
+                      message: oocEntities.length > 0
+                          ? `[OOC LOOKUP] Attached complete records for: ${oocEntities.map(e => e.name).join(', ')}. `
+                            + `Not answered deterministically (${recordQuery.reason}).`
+                          : `[OOC LOOKUP] No NPC named in the question — no records attached; the reply is not a record lookup.`,
+                      type: 'info' as const,
+                  },
                   { timestamp: new Date().toISOString(), message: `[OOC] Complete. Turn ${turn} unchanged.`, type: 'info' as const },
               ],
           }));
@@ -714,6 +791,9 @@ export const useGeminiClient = () => {
             inventedTriggerDirection: voiceLockFlagged
                 ? (preCallState.gameWorld.voiceLockFlaggedDirection ?? '')
                 : '',
+            restatementIssues: voiceLockFlagged
+                ? (preCallState.gameWorld.voiceLockRestatementIssues ?? [])
+                : [],
             intimacyInScene,                              // v1.33
             violenceInScene,                              // v1.33
             // v1.35: only an ARMED report reaches the reminder. A single marker
@@ -984,7 +1064,91 @@ export const useGeminiClient = () => {
             .filter(m => m.role === Role.MODEL && isNarrativeMessage(m))
             .slice(-6)
             .map(m => m.text.length);
-        const confessionDrift = detectSanitizationDrift(response.thought_process);
+        // v1.41: the mask-mode resample runs FIRST, because it can REPLACE
+        // `response`. Every check below reads whatever narrative and
+        // thought_process actually survived — mixing a pre-resample confession
+        // with a post-resample narrative would act on a signal the re-roll had
+        // already cleared.
+        // v1.41: RESAMPLE ON MASK-MODE.
+        //
+        // `surface-only` is the sharp case and the only voice-lock finding
+        // worth a re-roll. It is not a matter of degree — the record has two
+        // layers, the restatement drew on exactly one of them, and the model
+        // has told us so in its own words before writing a line of prose.
+        // Warning about it next turn is one whole turn too late; the turn the
+        // player is about to read is already the mask.
+        //
+        // `ungrounded-traits` deliberately does NOT resample. The stemmer is
+        // heuristic and errs toward matching, so a finding there is a good
+        // reason to warn and a bad reason to spend a generation.
+        // Computed here rather than reused from below: this runs BEFORE the
+        // logging/arming pass, and that pass must read the FINAL response.
+        const maskModeFindings = checkVoiceLock(
+            response.thought_process,
+            (preCallState.gameWorld.knownEntities ?? []),
+        ).filter(f => f.surfaceOnly);
+        let resampledThisTurn = false;
+        if (maskModeFindings.length > 0) {
+            resampledThisTurn = true;
+            const names = maskModeFindings.map(f => f.name);
+            setGameHistory(prev => ({
+                ...prev,
+                debugLog: [
+                    ...prev.debugLog,
+                    {
+                        timestamp: new Date().toISOString(),
+                        message: `[VOICE LOCK] Mask-mode restatement for ${names.join(', ')} — resampling once.`,
+                        type: 'warning',
+                    }
+                ]
+            }));
+
+            const coreReminder = `[SYSTEM REFRESH — RESTATE FROM THE WHOLE RECORD]
+Your restatement for ${names.join(', ')} named traits from their Performed
+Surface and nothing from their Actual Core. Their record has both layers and
+there is no trigger gating the core — it is who they are, governing what they
+want and what they DO, while the surface governs how that looks to whoever is
+watching.
+
+Write this turn again. Restate their canonical traits drawing on the WHOLE
+record, Actual Core included, and let that person act. If nothing they do this
+turn is anything their Actual Core describes, you are writing the mask.`;
+
+            response = await service.sendMessage(
+                fullSystemPrompt,
+                [...preCallState.gameHistory.history, userMsg],
+                preCallState.gameHistory.lastActiveSummary,
+                preCallState.gameWorld.bannedNameMap ?? {},
+                buildTrailer(coreReminder),
+                turnSchema,
+                contextPrompt,
+                staticContext,
+                escalateThinking(turnThinking),
+            );
+
+            if (latestRequestId.current !== requestId) {
+                console.log("Discarding stale voice-lock resample", requestId);
+                return;
+            }
+
+            const after = checkVoiceLock(
+                response.thought_process,
+                (preCallState.gameWorld.knownEntities ?? []),
+            ).filter(f => f.surfaceOnly);
+            setGameHistory(prev => ({
+                ...prev,
+                debugLog: [
+                    ...prev.debugLog,
+                    {
+                        timestamp: new Date().toISOString(),
+                        message: after.length > 0
+                            ? `[VOICE LOCK] Resample still mask-mode (${after.map(f => f.name).join(', ')}) — accepting anyway; the lock is armed next turn.`
+                            : `[VOICE LOCK] Resample restated from the full record.`,
+                        type: after.length > 0 ? 'warning' : 'success',
+                    }
+                ]
+            }));
+        }
 
         // v1.37: invented-trigger check, on the same thought_process the drift
         // detector reads. CANONICAL_VOICE_LOCK has forbidden this since v1.29
@@ -998,6 +1162,7 @@ export const useGeminiClient = () => {
                 .filter(e => !e.status || e.status === 'present' || e.status === 'nearby')
                 .map(e => ({ name: e.name, personality: e.personality })),
         );
+
         if (inventedTrigger.detected) {
             setGameWorld(prev => ({
                 ...prev,
@@ -1018,6 +1183,76 @@ export const useGeminiClient = () => {
                             + `declaration pins these characters into the `
                             + `${inventedTrigger.direction === 'inactive' ? 'performed surface' : 'actual core'} `
                             + `for as long as the invented condition holds. Voice lock armed next turn.`,
+                        type: 'warning',
+                    }
+                ]
+            }));
+        }
+        // v1.40: THE CHECK THE VOICE LOCK ALREADY CLAIMED TO PERFORM.
+        //
+        // sectionReminders has told the model "The engine parses this line and
+        // checks it against the record" since v1.33. Nothing did. The voice
+        // lock forces the restatement into a fixed shape every turn, so the
+        // claimed traits are sitting in thought_process already parsed for us —
+        // this reads them back and asks whether they are in the record at all,
+        // and whether a layered character was restated using only their mask.
+        const voiceLockFindings = checkVoiceLock(
+            response.thought_process,
+            (preCallState.gameWorld.knownEntities ?? []),
+        );
+        for (const f of voiceLockFindings) {
+            setGameHistory(prev => ({
+                ...prev,
+                debugLog: [
+                    ...prev.debugLog,
+                    {
+                        timestamp: new Date().toISOString(),
+                        message: `[VOICE LOCK] Restatement failed the record check — ${f.detail} `
+                            + `Voice lock armed next turn.`,
+                        type: 'warning',
+                    }
+                ]
+            }));
+        }
+        if (voiceLockFindings.length > 0) {
+            setGameWorld(prev => ({
+                ...prev,
+                voiceLockFlaggedTurn: preCallState.gameHistory.turnCount,
+                voiceLockRestatementIssues: voiceLockFindings.map(f => f.detail),
+            }));
+        }
+
+        const confessionDrift = detectSanitizationDrift(response.thought_process);
+
+        // v1.39: did an NPC SAY something only the GM should know?
+        //
+        // Dialogue only — deliberately. The narration is the GM's voice and the
+        // PC's interiority, so Carissa recalling the facility herself is correct
+        // and must not trip this. The defect is Sania mentioning it.
+        //
+        // Log-only, never a resample: the phrase list is heuristic, and a false
+        // positive must not cost the player a beat.
+        const privateTerms = privateTermsForCharacter(
+            preCallState.character,
+            preCallState.gameWorld.knownEntities ?? [],
+        );
+        const leak = detectPrivateKnowledgeLeak(
+            response.narrative,
+            response.npc_interaction?.dialogue,
+            privateTerms,
+        );
+        if (leak.leaked) {
+            setGameHistory(prev => ({
+                ...prev,
+                debugLog: [
+                    ...prev.debugLog,
+                    {
+                        timestamp: new Date().toISOString(),
+                        message: `[PRIVATE KNOWLEDGE] An NPC spoke GM-only material: `
+                            + `${leak.terms.map(t => `"${t}"`).join(', ')}. `
+                            + `Spoken: "…${leak.excerpt}…". `
+                            + `Nothing in the marked half of the backstory is known to any NPC `
+                            + `unless they learned it on the page.`,
                         type: 'warning',
                     }
                 ]
@@ -1098,6 +1333,20 @@ export const useGeminiClient = () => {
                     }
                 ]
             }));
+        } else if (drift.drifted && resampledThisTurn) {
+            // v1.41: one resample per turn. The voice-lock path already spent
+            // it, and its reminder is the stronger correction of the two.
+            setGameHistory(prev => ({
+                ...prev,
+                debugLog: [
+                    ...prev.debugLog,
+                    {
+                        timestamp: new Date().toISOString(),
+                        message: `[DRIFT] Signals present but the voice-lock resample already ran this turn — not re-rolling twice. Matches: ${drift.matches.join(', ')}`,
+                        type: 'info'
+                    }
+                ]
+            }));
         } else if (drift.drifted) {
             console.log('[VRE] Sanitization drift detected:', drift.matches);
             setGameHistory(prev => ({
@@ -1114,6 +1363,7 @@ export const useGeminiClient = () => {
 
             // v1.37: through buildTrailer, so the standing directives stay in
             // the final position even behind RESAMPLE_REMINDER.
+            resampledThisTurn = true;
             const reinforcedReminder = buildTrailer(RESAMPLE_REMINDER);
 
             response = await service.sendMessage(

@@ -15,7 +15,7 @@ export const OOC_RESPONSE_SCHEMA: Schema = {
     properties: {
         reply: {
             type: Type.STRING,
-            description: "Your out-of-character answer to the player, addressed to them directly as the engine — not as a character, not as narration. Be brief and concrete: 1-3 sentences. Answer the question, confirm the correction, or acknowledge the instruction. Never write prose fiction here, never speak as an NPC, never advance the story. If the player corrected you, say plainly what you now understand to be true."
+            description: "Your out-of-character answer to the player, addressed to them directly as the engine — not as a character, not as narration. Be brief and concrete: 1-3 sentences, EXCEPT when quoting a record, where completeness beats brevity — reproduce the whole list. Answer the question, confirm the correction, or acknowledge the instruction. Never write prose fiction here, never speak as an NPC, never advance the story. If the player corrected you, say plainly what you now understand to be true. v1.38: when they asked what is in an NPC record, answer ONLY from the [NPC RECORDS] block. If the field they asked for is not in it, say so — 'no kink list is recorded for her' is a correct answer. Never invent record content, never present invented text as a quotation, and if no records block was supplied say you cannot see the record rather than reconstructing one."
         },
         assertions: {
             type: Type.ARRAY,

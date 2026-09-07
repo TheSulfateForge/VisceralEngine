@@ -30,6 +30,12 @@ import { buildFactionPromptBlock } from './factionSystem';
 import { buildSeedBrief } from './seedBrief';
 import { buildSocialWebBlock } from './engine/socialGraph';
 import { isNarrativeMessage } from './engine/oocDetection';
+import { capSheetBySections, describeSheetSections } from './engine/sheetSections';
+import {
+    splitPrivateBackstory,
+    buildPrivateKnowledgeBlock,
+    NPC_KNOWLEDGE_RULE,
+} from './engine/privateKnowledge';
 import {
     buildSceneLedgerBlock,
     buildPlayerCanonBlock,
@@ -313,25 +319,18 @@ const trimToSentence = (text: string, cap: number): string => {
  * which is the exact bug v1.24 spent effort fixing. So keep the opening, and
  * if a second-layer marker exists, keep that clause too.
  */
-// Order matters. A layered personality often carries BOTH markers, with
-// "Subtext Bleed-through" appearing first and "Actual Core" — the half §10's
-// trigger machinery actually reads — appearing last. Matching whichever comes
-// first in the text drops the core and leaves the bleed-through, which is the
-// precise regression this function exists to prevent. Always prefer the core.
-const CORE_MARKER_RE = /Actual\s+Core\b/i;
-const BLEED_MARKER_RE = /Subtext\s+Bleed-?through\b/i;
-
-const capPersonality = (text: string, cap: number): string => {
-    const t = text.trim();
-    if (t.length <= cap) return t;
-
-    const marker = t.match(CORE_MARKER_RE) ?? t.match(BLEED_MARKER_RE);
-    if (!marker || marker.index === undefined) return trimToSentence(t, cap);
-
-    const head = trimToSentence(t.slice(0, marker.index), Math.round(cap * 0.5));
-    const tail = trimToSentence(t.slice(marker.index), Math.round(cap * 0.5));
-    return `${head} ${tail}`;
-};
+// v1.40 — REPLACED by `capSheetBySections` (utils/engine/sheetSections).
+//
+// v1.36's `capPersonality` cut by character count and special-cased the "Actual
+// Core" marker so the core half survived. It still emitted HALF of whichever
+// sections it touched, and silently dropped every section after the one it
+// kept — so a record could arrive reading "The Kinks: Severe genital and breast
+// torture, whipping to blood […]" and be read as the whole list. A truncated
+// record is not a shorter record, it is a wrong one, and the model has no way
+// to tell the difference.
+//
+// The replacement admits sections WHOLE, core first, and names anything it had
+// to leave out.
 
 /** v1.36 — how much of an entity renders, by why it is in the prompt. */
 const MENTIONED_PERSONALITY_CAP = 460;
@@ -435,7 +434,14 @@ export const buildEntityContext = (
     if (mentioned.length > 0) {
         const mentionedStrings = mentioned.map(e => {
             const personalityLine = e.personality?.trim()
-                ? ` Personality (CANONICAL — honor these traits): ${capPersonality(e.personality, MENTIONED_PERSONALITY_CAP)}\n`
+                // v1.40: section-aware. `capPersonality` cut by character
+                // count with a special case for "Actual Core", which still
+                // emitted half a section and silently dropped every section
+                // after the one it kept. Half a kink list read as a whole kink
+                // list. Sections now go in whole, core first, and anything that
+                // does not fit is NAMED as omitted so a partial record can
+                // never be mistaken for a complete one.
+                ? ` Personality (CANONICAL — honor these traits): ${capSheetBySections(e.personality, MENTIONED_PERSONALITY_CAP)}\n`
                 : '';
             const voiceLine = e.voice_sample?.trim()
                 ? ` Voice sample (write their dialogue in THIS register): "${e.voice_sample.trim()}"\n`
@@ -541,19 +547,124 @@ The simulation is running standard narrative protocols.
     `.trim();
 };
 
+// ---------------------------------------------------------------------------
+// v1.38: OOC RECORD LOOKUP
+// ---------------------------------------------------------------------------
+// `sendOocMessage` builds its own minimal prompt and deliberately skips the
+// cached prefix, on the reasoning (correct, as far as it went) that
+// SYSTEM_INSTRUCTIONS and the campaign canon exist to make the model write good
+// fiction and none of that applies to answering "why did you repeat yourself".
+//
+// The whole request was therefore: a one-line situation summary, the last four
+// messages truncated to 900 chars, and the player's question. No entities, no
+// roster, no personality fields.
+//
+// So the channel could not answer a STATE QUESTION, and the 2026-09-07 save
+// shows what it did instead. Asked for the kink lists of two NPCs it produced,
+// for Lord Aldreth Blackmoor, "extreme bondage, sensory deprivation, and power
+// exchange dynamics involving psychological dominance" — against a record
+// reading "Severe genital and breast torture, whipping to blood, heavy impact,
+// needles, breath restriction, forced endurance, and rough breeding use", and
+// against that same record's "Body Over Mind: He rejects mind control and
+// psychological conditioning". For Liora Calder, whose record has no Actual
+// Core and no kink list at all, it produced three kinks from nothing. And asked
+// to quote Countess Lyrelle Verancourt's list VERBATIM — a list that is in her
+// record, verbatim — it answered with a fabricated string introduced as
+// "listed as follows".
+//
+// The errors have the shape of their cause: they are reconstructions from the
+// four-message tail, which is the only material the request contained. Lyrelle's
+// invented kinks echoed the preceding narrative; Liora, absent from the tail,
+// got pure invention.
+//
+// The channel is a lookup channel as much as a correction channel. This gives
+// it the records to look things up in.
+
+/** Entities rendered into an OOC lookup, and the size ceiling on the block. */
+const OOC_RECORD_MAX_ENTITIES = 6;
+const OOC_RECORD_MAX_CHARS = 12000;
+
+/**
+ * Render complete, uncapped records for the entities the player named in an
+ * OOC question.
+ *
+ * Deliberately different from `buildEntityContext` in three ways:
+ *
+ *  - STATUS IS IGNORED. A lookup is not a scene. All three NPCs in the reviewed
+ *    failure were 'missing' or 'distant', so the narrative tiering would have
+ *    reduced or dropped them — but "what are Aldreth's kinks" is a question
+ *    about the record, not about who is in the room.
+ *  - NOTHING IS CAPPED. `capPersonality` exists to protect the per-turn token
+ *    budget. Truncating the field here would reintroduce the exact failure:
+ *    a partial record read as a complete one.
+ *  - The framing says these are the ONLY source, and names the absent-field
+ *    case explicitly, because Liora Calder genuinely has no kink list and the
+ *    correct answer to that question is to say so.
+ */
+export const buildOocEntityRecords = (entities: KnownEntity[]): string => {
+    if (entities.length === 0) return '';
+
+    const blocks: string[] = [];
+    let total = 0;
+    for (const e of entities.slice(0, OOC_RECORD_MAX_ENTITIES)) {
+        const parts = [
+            `--- ${e.name}${e.role ? ` (${e.role})` : ''} — status: ${e.status ?? 'present'}`,
+            e.personality?.trim()
+                ? `Personality record (COMPLETE, verbatim):\n${e.personality.trim()}`
+                : `Personality record: (EMPTY — no personality has ever been recorded for this character)`,
+            // v1.40: enumerate the sections. Asked for Liora Calder's kinks the
+            // model invented three, because nothing in the request could say
+            // "this record has no such section". Now it can.
+            e.personality?.trim() ? describeSheetSections(e.personality) : '',
+            e.impression?.trim() ? `Situational impression: ${e.impression.trim()}` : '',
+            e.leverage?.trim() ? `Leverage: ${e.leverage.trim()}` : '',
+            e.ledger?.length ? `Ledger: ${e.ledger.join(' | ')}` : '',
+            `Relationship to player: ${e.relationship_level}`,
+        ].filter(Boolean).join('\n');
+
+        if (total + parts.length > OOC_RECORD_MAX_CHARS) break;
+        blocks.push(parts);
+        total += parts.length;
+    }
+
+    if (blocks.length === 0) return '';
+
+    return `[NPC RECORDS — RETRIEVED FROM WORLD STATE, COMPLETE AND UNABRIDGED]
+These are the stored records for the characters the player named. For any
+question about what these characters are, want, or are into, THIS BLOCK IS THE
+ONLY SOURCE. Do not answer from the recent exchange above, from what would fit
+the scene, or from what a character like this usually wants.
+
+Quote the record. If the player asks for a field, a list, or a detail that does
+not appear below, say plainly that it is not in the record and stop — an absent
+field is a real and useful answer. Never present invented text as a quotation,
+and never introduce something you composed with "listed as follows", "verbatim",
+or "the record states".
+
+${blocks.join('\n\n')}`;
+};
+
 /**
  * v1.26: Character identity — the campaign-STATIC half of the old character
  * block (name, body, backstory, setting, languages). Changes rarely, so it
  * travels in the cached system prefix instead of the per-turn prompt.
  */
 const buildCharacterIdentityBlock = (character: Character): string => {
+    // v1.39: only the PUBLIC half of the backstory is rendered here. The
+    // author's GM-only marker used to be swallowed whole by this block, under a
+    // header reading "ABSOLUTE TRUTH" — which reads as true-in-the-world, i.e.
+    // common knowledge — and the secret half then travelled in the cached
+    // static prefix as authoritative canon. See utils/engine/privateKnowledge.
+    const { publicHalf } = splitPrivateBackstory(character.backstory);
     return `
 **Primary Directive: Player Character Identity**
-This is the player character. This data is ABSOLUTE TRUTH.
+This is the player character. This data is ABSOLUTE TRUTH — meaning true OF HER.
+It is not a statement about who else knows it. What other characters know is
+governed by [WHAT NPCS KNOW] below.
 - **Name:** ${character.name} (${character.gender}, ${character.race})
 - **Appearance:** ${character.appearance}
 - **Markings:** ${character.notableFeatures}
-- **Backstory:** ${character.backstory}
+- **Backstory (public — what she has lived that others could plausibly learn):** ${publicHalf}
 - **Setting:** ${character.setting}
 - **Languages Known:** ${(character.languagesKnown && character.languagesKnown.length > 0) ? character.languagesKnown.join(', ') : 'Unspecified — treat as common tongue only; render foreign speech as unintelligible subtext.'}
     `.trim();
@@ -957,6 +1068,13 @@ export const constructGeminiPrompt = async (
   const characterIdentityBlock = buildCharacterIdentityBlock(character);
   const characterStateBlock = buildCharacterStateBlock(character);
 
+  // v1.39: the GM-only half of the backstory, plus the rule that bounds what
+  // NPCs know. Both are campaign-static, so they ride the cached prefix with
+  // the identity block — and they must sit immediately after it, because the
+  // thing they are correcting is that block's own framing.
+  const { privateHalf } = splitPrivateBackstory(character.backstory);
+  const privateKnowledgeBlock = buildPrivateKnowledgeBlock(privateHalf, character.hiddenNotes);
+
   // v1.19: Section reminders removed from here — they are now appended as a
   // trailing suffix on the user message in useGeminiClient.ts → sendMessage()
   // to exploit Gemini's recency bias for better compliance.
@@ -1150,6 +1268,8 @@ ${sanitise(conditionLock ? `\n${conditionLock}\n` : '')}
   // v1.26: Campaign-static context → cached prefix (see geminiClient).
   const staticContext = [
       sanitise(characterIdentityBlock),
+      privateKnowledgeBlock ? sanitise(privateKnowledgeBlock) : '',   // v1.39
+      NPC_KNOWLEDGE_RULE,                                             // v1.39
       worldTagsBlock ? sanitise(worldTagsBlock) : '',
       worldRulesBlock ? sanitise(worldRulesBlock) : '',
       worldRosterBlock ? sanitise(worldRosterBlock) : '',
@@ -1171,6 +1291,7 @@ ${sanitise(conditionLock ? `\n${conditionLock}\n` : '')}
       trauma: traumaBlock.length,
       faction: factionBlock.length,
       static: staticContext.length,
+      private: privateKnowledgeBlock.length,   // v1.39 (inside static, cached)
       roster: worldRosterBlock.length,     // v1.27 (inside static, cached)
       loreIndex: loreIndexBlock.length,    // v1.27 (inside static, cached)
       // v1.31 — the change-carrying blocks. Watch these: if `delta` is the

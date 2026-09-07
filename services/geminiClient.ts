@@ -607,6 +607,15 @@ export class GeminiClient {
       oocBody: string,
       recentHistory: ChatMessage[],
       situationLine: string = '',
+      /**
+       * v1.38: complete records for the entities the player named, built by
+       * `buildOocEntityRecords`. Empty when the question named nobody.
+       *
+       * Without this the channel had no world state at all and answered state
+       * questions by reconstructing from the four-message tail — see the note
+       * on `buildOocEntityRecords` for what that produced.
+       */
+      recordContext: string = '',
   ): Promise<OocResponse> {
     const OOC_INSTRUCTION = `You are the engine behind a text roleplaying game, speaking DIRECTLY to the player, out of character.
 
@@ -615,6 +624,8 @@ The player has stepped outside the fiction to ask a question, correct a fact, or
 Answer plainly, in your own voice, in 1-3 sentences. If the player corrected something, state back what you now understand to be true so they can confirm you got it right. If they gave an instruction about narration, acknowledge it concretely rather than generically.
 
 Record any fact they established about THEIR OWN character in \`assertions\`. Record a standing narration instruction in \`directive\`. Both are optional.
+
+v1.38 — WHEN THE PLAYER ASKS WHAT IS IN A RECORD, THE RECORD IS THE ANSWER. If an [NPC RECORDS] block is present below, it is complete and it is the only source: quote from it, do not summarise it into three tidy items, and do not fill gaps from the recent exchange or from what a character of that type would plausibly want. If they asked for something the record does not contain — a kink list a character simply does not have, a field nobody ever wrote — say that it is not in the record. That is a correct answer and a useful one. Never invent content and never present invented content as a quotation. If no records block is present, you have not been given the data: say you cannot see the record rather than reconstructing one.
 
 The \`directive\` is PERSISTED and injected into every future turn as a binding instruction, so write it as a durable behavioural rule rather than a reply to this moment. If the player is complaining about something you keep doing, the directive is the instruction that complaint implies — state what to do instead, specifically.`;
 
@@ -625,9 +636,14 @@ The \`directive\` is PERSISTED and injected into every future turn as a binding 
         .map(m => `${m.role === Role.USER ? 'PLAYER' : 'ENGINE'}: ${m.text.slice(0, 900)}`)
         .join('\n\n');
 
+    // v1.38: the records go AFTER the recent exchange and immediately before
+    // the question. The tail is what the model was previously reconstructing
+    // from; putting the authoritative records nearer the question makes the
+    // ordering match the precedence.
     const prompt = [
         situationLine ? `[WHERE THE FICTION STANDS]\n${situationLine}` : '',
         tail ? `[RECENT EXCHANGE — for reference only, do not continue it]\n${tail}` : '',
+        recordContext,
         `[PLAYER — OUT OF CHARACTER]\n${oocBody}`,
     ].filter(Boolean).join('\n\n');
 
