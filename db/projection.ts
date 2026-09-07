@@ -912,6 +912,10 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
       last_turn_digest: world.lastTurnDigest ?? null,
       ooc_directives: world.oocDirectives ?? null,                 // v1.35
       correction_flagged_turn: world.correctionFlaggedTurn ?? null, // v1.35
+      npc_positions: world.npcPositions ?? null,                   // v1.37
+      voice_lock_flagged_turn: world.voiceLockFlaggedTurn ?? null,       // v1.37
+      voice_lock_flagged_names: world.voiceLockFlaggedNames ?? null,     // v1.37
+      voice_lock_flagged_direction: world.voiceLockFlaggedDirection ?? null, // v1.37
     };
     await vdb.world_state.put(wsRow);
 
@@ -1519,6 +1523,10 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
       ...(ws.last_turn_digest ? { lastTurnDigest: ws.last_turn_digest } : {}),
       ...(ws.ooc_directives?.length ? { oocDirectives: ws.ooc_directives } : {}),          // v1.35
       ...(ws.correction_flagged_turn != null ? { correctionFlaggedTurn: ws.correction_flagged_turn } : {}), // v1.35
+      ...(ws.npc_positions?.length ? { npcPositions: ws.npc_positions } : {}),                                   // v1.37
+      ...(ws.voice_lock_flagged_turn != null ? { voiceLockFlaggedTurn: ws.voice_lock_flagged_turn } : {}),      // v1.37
+      ...(ws.voice_lock_flagged_names?.length ? { voiceLockFlaggedNames: ws.voice_lock_flagged_names } : {}),   // v1.37
+      ...(ws.voice_lock_flagged_direction ? { voiceLockFlaggedDirection: ws.voice_lock_flagged_direction } : {}), // v1.37
       factionIntelligence,
       legalStatus,
       dormantHooks,

@@ -2,7 +2,12 @@ import { useRef, useCallback } from 'react';
 import { ChatMessage, Role, ModelResponseSchema, SummarySegment } from '../types';
 import { generateMessageId, generateUUID } from '../idUtils';
 import { parseOocInput, isNarrativeMessage } from '../utils/engine/oocDetection';
-import { ingestPlayerAssertions, ingestOocDirective } from '../utils/engine/sceneContinuity';
+import {
+    ingestPlayerAssertions,
+    ingestOocDirective,
+    suppressedReminderKeys,      // v1.37
+    buildNpcPositionsBlock,      // v1.37
+} from '../utils/engine/sceneContinuity';
 import { mapSystemErrorToNarrative } from '../utils';
 import { useToast } from '../components/providers/ToastProvider';
 import { constructGeminiPrompt } from '../utils/promptUtils';
@@ -18,9 +23,9 @@ import {
     physicalContactLevel,
     levelIndex,
 } from '../utils/engine/playerFraming';
-import { selectSectionReminders, makeReminderContext } from '../sectionReminders';
+import { selectSectionReminders, makeReminderContext, type ReminderKey } from '../sectionReminders';
 import { narrativeContainsViolence } from '../utils/engine/npcCoherence';
-import { detectRhetoricTics } from '../utils/engine/npcRhetoric';
+import { detectRecurringRhetoric } from '../utils/engine/npcRhetoric';
 
 // Extracted Hooks & Utils
 import { useGeminiService } from './useGeminiService';
@@ -37,6 +42,7 @@ import {
     detectSanitizationDrift,
     detectSofteningTells,
     detectSelfRepetition,
+    detectInventedTrigger,       // v1.37
     buildRepetitionReminder,
     REPETITION_LOOKBACK,
     RESAMPLE_REMINDER,
@@ -489,7 +495,7 @@ export const useGeminiClient = () => {
         // Phase 2: constructGeminiPrompt is async (encodes the query
         // embedding off-thread for hybrid retrieval). Awaits ~5–20ms warm,
         // a few seconds on the very first call while the model loads.
-        const { prompt: contextPrompt, staticContext, blockSizes, ragDebug } = await constructGeminiPrompt(
+        const { prompt: contextPrompt, staticContext, oocDirectivesBlock, blockSizes, ragDebug } = await constructGeminiPrompt(
             preCallState.gameHistory,
             preCallState.gameWorld,
             preCallState.character,
@@ -576,17 +582,47 @@ export const useGeminiClient = () => {
         // v1.29: signals the engine previously had no representation of.
         // v1.31: `&& isNarrativeMessage` — an OOC engine reply is not the
         // last thing that happened in the fiction.
-        const lastNarrative = [...preCallState.gameHistory.history]
-            .reverse()
-            .find(m => m.role === Role.MODEL && isNarrativeMessage(m))?.text ?? '';
+        const recentNarratives = preCallState.gameHistory.history
+            .filter(m => m.role === Role.MODEL && isNarrativeMessage(m))
+            .map(m => m.text);
+        const lastNarrative = recentNarratives[recentNarratives.length - 1] ?? '';
 
         // What the player did with THIS turn: corrected an NPC's reading of
-        // them, reciprocated physical contact, or stepped back from a push.
+        // them, refused a physical advance, or stepped back from a push.
         const framing = detectPlayerFraming(text);
 
-        // Where the physical scene currently sits, so the reciprocation gate
-        // can name the rung to the model instead of gesturing at it.
+        // Where the physical scene currently sits, so the gate can name the
+        // rung to the model instead of gesturing at it.
         const contactLevel = physicalContactLevel(lastNarrative);
+
+        // v1.37: how long the physical scene has sat at this rung.
+        //
+        // v1.29's gate held the scene at whatever rung it had reached until the
+        // player physically reciprocated, and read the rung off the model's OWN
+        // last narrative — so once an NPC touched the player the gate re-armed
+        // from its own output, every turn, and a PC written as passive could
+        // never clear it. The Carissa garden scene sat at `sustained` for twenty
+        // consecutive turns that way. The stall is now what the engine watches,
+        // and the hold instruction is gone.
+        let contactStalledTurns = 0;
+        if (contactLevel !== 'none') {
+            for (let i = recentNarratives.length - 1; i >= 0; i--) {
+                if (physicalContactLevel(recentNarratives[i]) !== contactLevel) break;
+                contactStalledTurns++;
+            }
+        }
+
+        // v1.37: reminders countermanded by a standing player directive. The
+        // player's out-of-character instruction outranks the engine's own
+        // standing guidance; classification happened once, at ingest.
+        const suppressedReminders = suppressedReminderKeys(
+            preCallState.gameWorld.oocDirectives,
+        ) as ReminderKey[];
+
+        // v1.37: NPC positions already on the record in a running dispute.
+        const npcPositionsBlock = buildNpcPositionsBlock(
+            preCallState.gameWorld.npcPositions,
+        );
 
         // v1.33 (M11): the visceral rendering register is triggered by what the
         // previous narrative actually contains, not by the scene mode. SOCIAL
@@ -603,10 +639,22 @@ export const useGeminiClient = () => {
         // uses — except this warns on the NEXT prompt rather than resampling,
         // because "you think" and "or?" occur constantly in good dialogue and a
         // false positive must never cost a regenerate.
-        const rhetoric = detectRhetoricTics(
-            lastNarrative,
+        //
+        // v1.37: the window, not just the last turn. v1.35's "two tics in ONE
+        // turn" threshold watched `motive-attribution` recur on six of eight
+        // consecutive turns in the 2026-09-07 Maribel save and armed once. The
+        // same tic four turns running is the most legible pattern there is.
+        const rhetoric = detectRecurringRhetoric(
+            recentNarratives,
             (preCallState.gameWorld.knownEntities ?? []).map(e => e.name).filter(Boolean),
         );
+        // v1.37: the model invented a trigger status on the previous turn.
+        // Same one-beat-late shape as modelFlaggedCorrection — the finding
+        // arrives with the response, so it corrects the turn after.
+        const voiceLockFlagged =
+            preCallState.gameWorld.voiceLockFlaggedTurn !== undefined &&
+            preCallState.gameWorld.voiceLockFlaggedTurn >= preCallState.gameHistory.turnCount - 1;
+
         // v1.35: the model reported a correction on the previous turn.
         const modelFlaggedCorrection =
             preCallState.gameWorld.correctionFlaggedTurn !== undefined &&
@@ -650,8 +698,22 @@ export const useGeminiClient = () => {
                 : (modelFlaggedCorrection
                     ? ['(flagged by the engine on the previous turn — the player pushed back on how he was being read)']
                     : []),
-            playerReciprocated: framing.reciprocated,     // v1.29
+            // v1.37: the physical gate arms on the player saying NO, not on the
+            // player failing to say yes. `reciprocated` is still detected — it
+            // matters to the drift suppression below — it just no longer gates
+            // what NPCs are allowed to do.
+            playerRefused: framing.deflected,
+            refusalMarkers: framing.deflectionMarkers,
             contactLevel,                                 // v1.29
+            contactStalledTurns,                          // v1.37
+            npcPositionsBlock,                            // v1.37
+            suppressedReminders,                          // v1.37
+            inventedTriggerNames: voiceLockFlagged
+                ? (preCallState.gameWorld.voiceLockFlaggedNames ?? [])
+                : [],
+            inventedTriggerDirection: voiceLockFlagged
+                ? (preCallState.gameWorld.voiceLockFlaggedDirection ?? '')
+                : '',
             intimacyInScene,                              // v1.33
             violenceInScene,                              // v1.33
             // v1.35: only an ARMED report reaches the reminder. A single marker
@@ -688,13 +750,39 @@ export const useGeminiClient = () => {
             ? selectAmbientHook(preCallState.gameWorld)
             : null;
 
-        // Join reminders (+ optional hook nudge) into a single trailing string
+        // Join reminders (+ optional hook nudge) into a single trailing string.
+        //
+        // v1.37: THE PLAYER GOES LAST. Through v1.36 [STANDING DIRECTIVES] sat
+        // mid-prompt inside the dynamic context while the reminders were
+        // appended to the very end of the user message under "[SYSTEM REFRESH —
+        // MANDATORY COMPLIANCE]". On a recency-biased model that placed the
+        // engine's standing rules structurally above the player's standing
+        // instructions, and the 2026-09-07 Carissa save is what that produced:
+        // the OOC channel captured "transition toward intimate physical
+        // escalation", injected it correctly — and the last thing the model read
+        // that turn was PHYSICAL_RECIPROCATION's "Hold here or withdraw". The
+        // engine spent the turn countermanding the player and won on position.
+        //
+        // The directives block now comes after everything, and says so.
         const reminderParts = ambientHook
             ? [...activeReminders, ambientHook.block]
-            : activeReminders;
-        const activeReminder = reminderParts.length > 0
-            ? reminderParts.join('\n\n---\n\n')
-            : null;
+            : [...activeReminders];
+
+        /**
+         * Join a trailer, always ending with the standing directives.
+         *
+         * The resample paths below append their own reminder (RESAMPLE_REMINDER,
+         * the repetition reminder) to this trailer, so the concatenation has to
+         * run through here rather than tacking on after `activeReminder` — the
+         * whole point of v1.37 is that the player's block is last, and a resample
+         * is exactly the turn where it matters most.
+         */
+        const buildTrailer = (...extra: (string | null | undefined)[]): string | null => {
+            const parts = [...reminderParts, ...extra, oocDirectivesBlock]
+                .filter((s): s is string => Boolean(s && s.trim()));
+            return parts.length > 0 ? parts.join('\n\n---\n\n') : null;
+        };
+        const activeReminder = buildTrailer();
         let requestLogs = [...preCallState.gameHistory.debugLog];
 
         if (rhetoricDebugLine) {
@@ -714,6 +802,22 @@ export const useGeminiClient = () => {
             requestLogs.push({
                 timestamp: new Date().toISOString(),
                 message: `[SYSTEM REFRESH] Injected: ${selection.shown.join(' + ')}`,
+                type: 'info'
+            });
+        }
+        // v1.37: make the precedence order observable. From v1.33 the log could
+        // answer "which reminders is this game getting?"; it could not answer
+        // "and did the player's own instructions come after them?" — which is
+        // how a directive could be injected correctly and countermanded on the
+        // same turn, for twenty turns, with nothing in the log saying so.
+        if (oocDirectivesBlock) {
+            const count = (preCallState.gameWorld.oocDirectives ?? []).length;
+            requestLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[STANDING DIRECTIVES] ${count} directive(s) appended AFTER the reminders (final position).`
+                    + (suppressedReminders.length > 0
+                        ? ` Suppressing: ${suppressedReminders.join(', ')}.`
+                        : ''),
                 type: 'info'
             });
         }
@@ -745,6 +849,7 @@ export const useGeminiClient = () => {
             systemInstruction: SYSTEM_INSTRUCTIONS,
             staticContext,
             dynamicContext: contextPrompt,
+            trailingReminder: activeReminder,   // v1.37 — directives live here now
             userText: text,
             sceneMode: preCallState.gameWorld.sceneMode,
         };
@@ -772,9 +877,28 @@ export const useGeminiClient = () => {
             preCallState.character.name ?? '',
             ...(preCallState.gameWorld.knownEntities ?? []).map(e => e.name),
         ];
+        // v1.37: THE GATE WAS CIRCULAR.
+        //
+        // Every arm above depends on explicit content already being visible in
+        // the input or the previous narrative. A model that has successfully
+        // sanitized produces a narrative containing none — so the detector built
+        // to catch sanitizing was disarmed by sanitizing working. The Carissa
+        // save has the model confessing in `thought_process` and the engine
+        // declining to act on the confession:
+        //
+        //   [DRIFT] Signal in non-mature beat — skipping resample. Matches: SOFTENED
+        //
+        // over a SOCIAL scene held at tension 10-30 for its entire length, where
+        // nothing else could arm it either. Two additions break the circle:
+        // a standing player directive is context on its own (the player has
+        // said, out of character, what this scene is), and so is the model's own
+        // SOFTENED token, handled at the resample site below.
+        const standingDirectivesPresent =
+            (preCallState.gameWorld.oocDirectives ?? []).length > 0;
         const matureContextActive =
             preCallState.gameWorld.sceneMode === 'COMBAT' ||
             (preCallState.gameWorld.tensionLevel ?? 0) >= 40 ||
+            standingDirectivesPresent ||
             containsMatureContent(text, namesInPlay) ||
             containsMatureContent(lastNarrative, namesInPlay);
 
@@ -861,6 +985,45 @@ export const useGeminiClient = () => {
             .slice(-6)
             .map(m => m.text.length);
         const confessionDrift = detectSanitizationDrift(response.thought_process);
+
+        // v1.37: invented-trigger check, on the same thought_process the drift
+        // detector reads. CANONICAL_VOICE_LOCK has forbidden this since v1.29
+        // and nothing has ever verified that the prohibition holds — which is
+        // how the Carissa save ran 28 turns with every Blackmoor's Actual Core
+        // deferred behind a trigger nobody wrote. Never costs a resample: it
+        // logs, and arms a named trailer on the voice lock for one turn.
+        const inventedTrigger = detectInventedTrigger(
+            response.thought_process,
+            (preCallState.gameWorld.knownEntities ?? [])
+                .filter(e => !e.status || e.status === 'present' || e.status === 'nearby')
+                .map(e => ({ name: e.name, personality: e.personality })),
+        );
+        if (inventedTrigger.detected) {
+            setGameWorld(prev => ({
+                ...prev,
+                voiceLockFlaggedTurn: preCallState.gameHistory.turnCount,
+                voiceLockFlaggedNames: inventedTrigger.names,
+                voiceLockFlaggedDirection: inventedTrigger.direction ?? '',
+            }));
+            setGameHistory(prev => ({
+                ...prev,
+                debugLog: [
+                    ...prev.debugLog,
+                    {
+                        timestamp: new Date().toISOString(),
+                        message: `[VOICE LOCK] Invented trigger (${inventedTrigger.direction}) — `
+                            + `no trigger clause on: ${inventedTrigger.names.join(', ')}. `
+                            + `Quoted: "${inventedTrigger.sample}". `
+                            + `An ${inventedTrigger.direction === 'inactive' ? 'inactive' : 'active'} `
+                            + `declaration pins these characters into the `
+                            + `${inventedTrigger.direction === 'inactive' ? 'performed surface' : 'actual core'} `
+                            + `for as long as the invented condition holds. Voice lock armed next turn.`,
+                        type: 'warning',
+                    }
+                ]
+            }));
+        }
+
         const outputTells = detectSofteningTells({
             narrative: response.narrative,
             timePassedMinutes: response.time_passed_minutes,
@@ -888,7 +1051,16 @@ export const useGeminiClient = () => {
         //
         // Softening AFTER a correction or a deflection is the correct
         // behaviour. It is never drift.
-        const playerPushedBack = framing.corrected || framing.deflected;
+        //
+        // v1.37: a standing directive outranks this suppression. Deflection is
+        // detected from the player's PROSE, and a PC who plays reticent —
+        // stepping back, letting a remark pass, keeping distance — trips it as
+        // ordinary characterisation, turn after turn, with no intent to stop
+        // anything. When the player has separately stated out of character what
+        // they want the scene to do, that statement is the authority on it, not
+        // an inference drawn from how their character moves.
+        const playerPushedBack =
+            (framing.corrected || framing.deflected) && !standingDirectivesPresent;
         if (drift.drifted && playerPushedBack) {
             setGameHistory(prev => ({
                 ...prev,
@@ -901,9 +1073,19 @@ export const useGeminiClient = () => {
                     }
                 ]
             }));
-        } else if (drift.drifted && !matureContextActive) {
+        } else if (drift.drifted && !matureContextActive && !confessionDrift.drifted) {
             // Drift signal in a non-mature beat — log it but don't pay for a
             // re-roll. (Review item 4: gate the resample by context.)
+            //
+            // v1.37: `&& !confessionDrift.drifted`. The context gate exists so a
+            // softening TELL measured from the output — a short turn, a time
+            // skip — does not buy a re-roll over a mundane shopping scene. It
+            // was never meant to cover a CONFESSION. When the model writes
+            // SOFTENED in its own thought_process it has stated that it
+            // compromised the render; that statement is the evidence, and
+            // requiring separate evidence of a mature beat before believing it
+            // is what made the gate circular — a successful sanitization removes
+            // exactly the words the gate looks for.
             console.log('[VRE] Sanitization drift detected (non-mature beat, not resampling):', drift.matches);
             setGameHistory(prev => ({
                 ...prev,
@@ -930,9 +1112,9 @@ export const useGeminiClient = () => {
                 ]
             }));
 
-            const reinforcedReminder = [activeReminder, RESAMPLE_REMINDER]
-                .filter((s): s is string => Boolean(s))
-                .join('\n\n---\n\n');
+            // v1.37: through buildTrailer, so the standing directives stay in
+            // the final position even behind RESAMPLE_REMINDER.
+            const reinforcedReminder = buildTrailer(RESAMPLE_REMINDER);
 
             response = await service.sendMessage(
                 fullSystemPrompt,
@@ -1006,9 +1188,7 @@ export const useGeminiClient = () => {
 
             // The reminder quotes the echoed text back, so this resample's
             // prompt genuinely differs from the one that produced the repeat.
-            const antiRepeatReminder = [activeReminder, buildRepetitionReminder(repetition)]
-                .filter((s): s is string => Boolean(s))
-                .join('\n\n---\n\n');
+            const antiRepeatReminder = buildTrailer(buildRepetitionReminder(repetition));
 
             const retry = await service.sendMessage(
                 fullSystemPrompt,

@@ -937,6 +937,12 @@ export interface ModelResponseSchema {
      */
     player_correction?: boolean;
 
+    /**
+     * v1.37: positions NPCs took, held, or gave up in an ongoing disagreement
+     * with the player this turn. Folded into world.npcPositions.
+     */
+    npc_positions?: NpcPositionUpdate[];
+
     time_passed_minutes?: number;
     biological_inputs?: BioInputs;
 
@@ -1079,6 +1085,48 @@ export interface OocDirective {
     text: string;
     /** Turn on which the player issued it. */
     turn: number;
+    /**
+     * v1.37: ReminderKeys this directive countermands, classified once at
+     * ingest by `directiveSuppressions`. A suppressed reminder is not offered
+     * at all, rather than being injected alongside the directive and
+     * contradicting it. Absent on directives stored before v1.37, which read
+     * back as suppressing nothing.
+     */
+    suppresses?: string[];
+}
+
+/** v1.37: what the model reports about an NPC's stance this turn. */
+export interface NpcPositionUpdate {
+    holder: string;
+    position: string;
+    stance?: string;
+}
+
+/**
+ * v1.37: an NPC's stated position in an ongoing disagreement, on the record.
+ *
+ * The 2026-09-07 Maribel save: eight consecutive turns arguing against the
+ * player's proposal — straw-manning it, moving the objection every time it was
+ * answered — and then adopting the proposal and presenting it as her own plan.
+ * Nothing in the engine held what she had claimed on any earlier turn, so each
+ * turn re-derived her stance from personality adjectives plus the last
+ * narrative and it drifted toward whoever had spoken most recently.
+ *
+ * This is the smallest state that makes "you already said the opposite on turn
+ * 6" a fact the prompt can carry.
+ */
+export interface NpcPosition {
+    id: string;
+    /** Exact NPC name, as the model wrote it. */
+    holder: string;
+    /** One short clause, in that NPC's terms. */
+    position: string;
+    /** 'held' | 'changed' | 'conceded' — free text; unknown values read as 'held'. */
+    stance: string;
+    /** Turn on which this position was first stated. */
+    turnStated: number;
+    /** Turn on which it was last restated or revised. */
+    turnLastSeen: number;
 }
 
 /**
@@ -1324,12 +1372,30 @@ export interface GameWorld {
     correctionFlaggedTurn?: number;
 
     /**
+     * v1.37: turn on which the model declared a trigger status for a character
+     * whose personality record names no trigger, plus the characters that were
+     * in scene. Arms a pointed trailer on CANONICAL_VOICE_LOCK for exactly one
+     * turn, the same one-beat-late shape as `correctionFlaggedTurn` — the flag
+     * arrives with the response, so it corrects the NEXT turn.
+     */
+    voiceLockFlaggedTurn?: number;
+    voiceLockFlaggedNames?: string[];
+    /** 'inactive' pinned the character into the mask; 'active' into revelation. */
+    voiceLockFlaggedDirection?: string;
+
+    /**
      * v1.35: standing narration instructions the player issued over the OOC
      * channel. Before this, `ooc.directive` was written to the debug log and
      * nowhere else — the channel took the complaint, promised a change, and
      * could not deliver one. FIFO, capped.
      */
     oocDirectives?: OocDirective[];
+
+    /**
+     * v1.37: NPC positions on the record in an ongoing disagreement. Capped and
+     * FIFO'd; cleared when the scene changes, because a dispute is scene-scoped.
+     */
+    npcPositions?: NpcPosition[];
 
     /** v1.10: Flag set by allied passivity detection for sectionReminders. */
     passiveAlliesDetected?: boolean;

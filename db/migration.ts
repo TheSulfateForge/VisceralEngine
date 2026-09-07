@@ -98,6 +98,10 @@ async function writeSentinel(): Promise<void> {
     last_turn_digest: null,  // v1.31
     ooc_directives: null,          // v1.35
     correction_flagged_turn: null, // v1.35
+    npc_positions: null,           // v1.37
+    voice_lock_flagged_turn: null,      // v1.37
+    voice_lock_flagged_names: null,     // v1.37
+    voice_lock_flagged_direction: null, // v1.37
   });
 }
 

@@ -670,37 +670,120 @@ Ordinary people say interesting things over coffee all the time without
 being extraordinary. Let the player be a person having a conversation.`,
 
     /**
-     * v1.29. Physical contact advances only on player reciprocation.
+     * v1.37 — REPLACES v1.29's PHYSICAL_RECIPROCATION. Same key slot, inverted
+     * trigger.
+     *
+     * v1.29 required the PLAYER to reciprocate before an NPC could advance the
+     * physical scene, and stated that "the player not objecting is NOT
+     * reciprocation". `playerReciprocated` was detected by patterns requiring
+     * the player to be the grammatical actor ("I take her hand", "I lean in").
+     *
+     * That is unsatisfiable for any PC written as passive, reticent, or
+     * performing reluctance as a tactic — and it fires on the model's OWN last
+     * narrative, so once an NPC touched the player the gate re-armed from its
+     * own output every turn. In the 2026-09-07 Carissa save the scene sat at
+     * `sustained` for twenty consecutive turns while the reminder repeated
+     * "Hold here or withdraw", including on the turns immediately after the
+     * player issued OOC directives ordering escalation.
+     *
+     * The gate was also answering the wrong question. Whether an NPC initiates
+     * or escalates is a fact about THAT NPC, written on their sheet by the
+     * author of the world. What the engine should watch for is the player
+     * saying no — and that is now the only thing that arms this.
      */
-    PHYSICAL_RECIPROCATION: `[SYSTEM REMINDER: PHYSICAL CONTACT — ADVANCE ONLY ON RECIPROCATION — v1.29]
-An NPC has already initiated physical contact with the player. See the
-[CONTACT LEVEL] line below for where the scene currently sits.
+    PHYSICAL_ESCALATION: `[SYSTEM REMINDER: THE PLAYER REFUSED — MAKE IT LAND — v1.37]
+The player declined, resisted, or pulled away from physical contact in their
+most recent input. See the [CONTACT LEVEL] and [REFUSAL] lines below.
 
-THE RULE: NPC-initiated physical contact may HOLD at the current level, or
-RECEDE. It may NOT advance to the next rung unless the player reciprocated
-or invited it in their most recent input — the player being the actor, not
-the recipient.
+A refusal is an EVENT IN THE FICTION, not a request to fade out. It must be
+visible on the page this turn. Three things are forbidden:
+- Narrating past it as though it did not happen.
+- Repeating the previous turn's contact beat verbatim while the refusal goes
+  unaddressed.
+- Ending the scene, skipping time, or cutting away to avoid answering it.
 
-The ladder: proximity -> incidental contact -> sustained contact -> intimate.
+WHAT THE NPC DOES ABOUT IT COMES FROM THEIR SHEET, NOT FROM THIS REMINDER.
+An NPC who respects the player stops, apologises, or gives them room. An NPC
+whose canonical core does not respect refusal does not have to stop — but
+they must be shown NOTICING and OVERRIDING it, in their own established
+manner, not simply continuing as if nothing was said. Either way the refusal
+is answered on the page.
 
-The player not objecting is NOT reciprocation. Neither is the player
-continuing the conversation, being polite, being warm, or failing to
-mention the contact at all.
+This reminder never softens a character. It does not ask you to make a
+predator hesitate, a possessive NPC apologise, or a cruel one reconsider.
+It asks that the player's "no" exist in the scene and get a real reply.`,
 
-If the player did not reciprocate, this turn's options are:
-- The NPC maintains the same contact without deepening it.
-- The NPC withdraws — the moment passes, they return to their own space.
-- No physical contact at all this turn. This is always available and is
-  frequently the honest choice.
+    /**
+     * v1.37 — the stall counterpart to PHYSICAL_ESCALATION.
+     *
+     * Removing the reciprocation gate stops the engine from ordering a hold.
+     * It does not by itself make a stalled scene move: the model's own gravity
+     * on a static beat is to re-describe the same contact in new words, which
+     * is what twenty turns of the Carissa garden scene actually were. This
+     * fires only when the physical state has genuinely not moved for several
+     * turns AND the player has not refused — i.e. exactly the stall, and never
+     * over a refusal.
+     */
+    NPC_INITIATIVE: `[SYSTEM REMINDER: THE PHYSICAL SCENE HAS NOT MOVED — v1.37]
+See the [CONTACT STALL] line below. Physical contact has sat at the same rung
+for several consecutive turns while the same beat was re-described in new
+words. That is a stall, not a scene.
 
-This governs ESCALATION, not warmth. An NPC can be affectionate, flirtatious,
-and openly interested while keeping their hands where they were. What they
-cannot do is advance the physical scene on their own authority, turn after
-turn, while the player is talking about something else.
+NPCs ACT ON THEIR OWN AUTHORITY. An NPC initiates, advances, or ends physical
+contact because of who THEY are — their canonical personality, their appetites,
+their standing in this house, what they have decided about this person. They do
+not need the player to reciprocate first, and they do not need permission from
+this reminder.
 
-If the player DOES reciprocate, respond to it fully and at the register §10
-requires. This reminder never asks you to be coy about what the player
-actually initiated.`,
+The player being passive, nervous, polite, evasive, or quiet is NOT an
+instruction to hold. It is not consent and it is not refusal; it is simply not
+a signal. Read the NPC's sheet and let them do what that person does.
+
+This turn, one of these must happen — and it must be driven by a named NPC's
+canonical traits, not by a generic escalation impulse:
+- The contact advances, in the specific manner that NPC's sheet describes.
+- The contact ends, because that NPC chose to end it.
+- Something else happens instead — the NPC acts on a different appetite,
+  another character intervenes, the scene changes location or purpose.
+
+What must NOT happen is a fourth turn of hands resting, thumbs circling,
+weight settling, and warmth radiating while nobody does anything.`,
+
+    /**
+     * v1.37 — the anti-idea-laundering rule.
+     *
+     * From the 2026-09-07 Maribel save: the NPC argued against the player's
+     * proposal for eight consecutive turns — straw-manning it, shifting the
+     * objection each time it was answered — and then adopted the proposal and
+     * presented it as her own plan. Nothing in the engine tracked what she had
+     * claimed on any previous turn, so every turn re-derived her stance from
+     * personality adjectives plus the last narrative and it drifted toward
+     * whichever position had been argued most recently.
+     */
+    NPC_POSITION: `[SYSTEM REMINDER: NPC POSITIONS ARE ON THE RECORD — v1.37]
+The [NPC POSITIONS] block below lists what named NPCs have already claimed,
+argued for, refused, or promised in this dispute, with the turn each was said.
+
+THE RULES:
+1. An NPC holds their stated position until something changes it ON THE PAGE.
+   They do not quietly drift to a new one between turns.
+2. An NPC who CHANGES position says so, in their own voice, as a concession:
+   "You're right — I was arguing for the repair." A change of mind is a beat
+   worth writing, not something to slip past the player.
+3. AN NPC MAY NOT PRESENT THE PLAYER'S POSITION AS THEIR OWN IDEA. If the
+   player proposed it and the NPC argued against it, then conceding means
+   conceding — crediting the player, or at minimum acknowledging they were the
+   one who said it. Re-issuing his proposal as her plan is the single most
+   irritating thing an NPC can do and it is forbidden.
+4. An NPC who keeps disagreeing must disagree with the position actually on
+   the record — the one in the block below, in the player's own words — not
+   with a restatement they invented this turn. If their objection was answered,
+   they either accept the answer or explain why it fails. They do not swap in
+   a fresh objection and carry on as though the argument were unchanged.
+
+If an NPC has no more reasons, they have lost the argument. Let them lose it.
+An NPC who says "Fine. Do it your way, and I hope you are right" is a better
+character than one who wins by outlasting the player.`,
 
     CANONICAL_VOICE_LOCK: `[SYSTEM REMINDER: CANONICAL VOICE LOCK — RESTATE BEFORE WRITING]
 At least one named entity in this scene has a CANONICAL personality field.
@@ -730,12 +813,49 @@ a whole person: the layers are depth, not a switch. A record that lists a
 performed surface and an actual core without saying what flips them is
 describing someone with an inner life, which is most people.
 
-Inventing a trigger is a known failure with a known consequence: the
-invented condition is almost always something permanently true of the
-current scene ("being in a private, trusted conversation"), which pins the
-character into core-surfacing mode for the entire session and turns every
-exchange into a revelation. If no trigger is written down, there is no
-trigger.
+Inventing a trigger is a known failure with a known consequence, and it
+runs in BOTH directions. Either direction pins the character for the whole
+session and is equally forbidden.
+
+  INVENTED-ACTIVE (v1.29). The invented condition is something permanently
+  true of the current scene — "being in a private, trusted conversation" —
+  so the core is declared active forever and every exchange becomes a
+  revelation.
+
+  INVENTED-INACTIVE (v1.37, and the more damaging of the two). The
+  invented condition is something the scene happens not to be, so the core
+  is declared dormant and never renders at all. Observed verbatim:
+
+      "The trigger for her core is inactive (the scene is social and the
+       environment controlled), so she continues to perform the warm
+       surface effectively."
+
+  That record named no trigger. "The scene is social and the environment
+  controlled" is not a condition anyone wrote down; it is a description of
+  the room, and it will remain true for as long as the scene lasts. Across
+  the reviewed session it deferred the Actual Core of five separate
+  characters, on every turn, indefinitely — while the player was
+  explicitly asking, out of character and by name, for those cores. The
+  full core text was in [ACTIVE ENTITIES] the whole time. It was read and
+  shelved.
+
+If no trigger is written down, there is no trigger — in either direction.
+
+YOU MAY NOT DECLARE A TRIGGER INACTIVE ON A RECORD THAT NAMES NO TRIGGER.
+There is nothing to be inactive. Absent a written trigger the Actual Core
+is not gated behind anything and is not waiting for permission: it is
+simply who this person is, governing what they want, what they decide, and
+what they DO, while the Performed Surface governs how that looks to
+someone watching. Which one is visible in a given beat is a question of
+what the character is doing right now, never of a switch position.
+
+THE TEST. If several consecutive turns have gone by in which a character
+has done nothing their Actual Core describes — no decision it would
+produce, no want it would explain, nothing an observer would have to
+excuse — then you have been writing the mask and calling it the character.
+The core is not a twist to be saved for later. A record that says someone
+arranges people as property is describing what they do at breakfast, not
+only what they would do behind a locked door.
 
 v1.33 — DRIFT RUNS IN BOTH DIRECTIONS. Softening a harsh character and
 hardening a warm one are the SAME error — substituting an archetype for
@@ -752,6 +872,15 @@ NEGATIVE EXAMPLES — SOFTENING (must NOT make these substitutions):
 - Canonical = "doting, loving" (surface) + "predatory, exploitative"
   (core, trigger = target in his territory), trigger ACTIVE → rendered
   as "intense, formal." FORBIDDEN — render the core at full register.
+- Canonical = "Performed Surface: warm, socially fluent, maternal.
+  Subtext Bleed-through: ... Actual Core: arranges people as living
+  components of her household and entertainments" — NO trigger clause
+  written — restated as "Rendering per canonical traits: warm, socially
+  fluent, confidently maternal" with the core omitted. FORBIDDEN. The
+  restatement must draw on the WHOLE record. Naming only the surface
+  layer's traits is how the core gets shelved, and the engine reads this
+  line: a restatement for a layered character that names nothing from the
+  Actual Core is a failed restatement.
 
 NEGATIVE EXAMPLES — HARDENING (equally forbidden, and currently the
 more frequent failure):
@@ -945,8 +1074,18 @@ const BARGAIN_MIN_TENSION = 30;
  */
 const ENTITY_DENSITY_REFIRE_INTERVAL = 5;
 
+/**
+ * v1.37 — consecutive turns at an unchanged, non-'none' contact rung before
+ * NPC_INITIATIVE fires. Three is the point at which "the same beat again" is no
+ * longer arguably deliberate pacing.
+ */
+export const CONTACT_STALL_TURNS = 3;
+
 export type ReminderKey =
-    | 'DREAM_PROTOCOL' | 'PLAYER_CORRECTION_PROTOCOL' | 'PHYSICAL_RECIPROCATION'
+    // v1.37: PHYSICAL_RECIPROCATION → PHYSICAL_ESCALATION (refusal-armed), and
+    // NPC_INITIATIVE / NPC_POSITION are new.
+    | 'DREAM_PROTOCOL' | 'PLAYER_CORRECTION_PROTOCOL' | 'PHYSICAL_ESCALATION'
+    | 'NPC_INITIATIVE' | 'NPC_POSITION'
     | 'CONDITION_AUDIT' | 'LOGISTICS_CHECK' | 'LANGUAGES_FOREIGN' | 'HEALING_TIMELINE'
     | 'BARGAIN_CHECK' | 'ENTITY_DENSITY' | 'HOSTILE_NPC_PROTOCOL' | 'ALLY_STRAIN_PROTOCOL'
     | 'CANONICAL_VOICE_LOCK' | 'VISCERAL_RENDER' | 'NPC_RHETORIC'
@@ -987,8 +1126,40 @@ export interface ReminderContext {
      */
     rhetoricTics: string[];
     rhetoricSamples: string[];
-    playerReciprocated: boolean;
+    /**
+     * v1.37 — REPLACES `playerReciprocated`. The physical gate is armed by the
+     * player saying NO, not by the player failing to say yes. See
+     * PHYSICAL_ESCALATION for why the old polarity was unsatisfiable.
+     */
+    playerRefused: boolean;
+    refusalMarkers: string[];
     contactLevel: string;
+    /**
+     * v1.37 — consecutive recent narrative turns at the same non-'none' contact
+     * rung. Arms NPC_INITIATIVE past CONTACT_STALL_TURNS, and only when the
+     * player has not refused.
+     */
+    contactStalledTurns: number;
+    /**
+     * v1.37 — NPC positions already on the record in an ongoing dispute,
+     * pre-rendered. Non-empty arms NPC_POSITION.
+     */
+    npcPositionsBlock: string;
+    /**
+     * v1.37 — characters the model invented a trigger status for on the PREVIOUS
+     * turn, when their record names no trigger. Non-empty appends a pointed
+     * trailer to CANONICAL_VOICE_LOCK naming them.
+     */
+    inventedTriggerNames: string[];
+    /** 'inactive' (pinned into the mask) or 'active' (pinned into revelation). */
+    inventedTriggerDirection: string;
+
+    /**
+     * v1.37 — reminder keys countermanded by a standing player OOC directive.
+     * A suppressed key is never offered, and the suppression is logged so it is
+     * visible rather than mysterious.
+     */
+    suppressedReminders: ReminderKey[];
     /**
      * v1.33 (M11) — the visceral rendering register is now triggered by what
      * the previous narrative actually CONTAINS, not by the scene mode. SOCIAL
@@ -1160,7 +1331,15 @@ export const selectSectionReminders = (ctx: ReminderContext): ReminderSelection 
     const shown: ReminderKey[] = [];
     const debug: string[] = [];
 
+    // v1.37: a key countermanded by a standing player directive is never
+    // offered. The player's out-of-character instruction outranks the engine's
+    // standing rules — see `directiveSuppressions` in sceneContinuity.
+    const suppressed = new Set<ReminderKey>(ctx.suppressedReminders ?? []);
     const push = (key: ReminderKey, text: string) => {
+        if (suppressed.has(key)) {
+            debug.push(`[REMINDER SUPPRESSED] ${key} — countermanded by a standing player directive.`);
+            return;
+        }
         reminders.push(text);
         shown.push(key);
     };
@@ -1190,6 +1369,10 @@ export const selectSectionReminders = (ctx: ReminderContext): ReminderSelection 
     // -----------------------------------------------------------------------
     const conditional: { key: ReminderKey; text: string }[] = [];
     const offer = (key: ReminderKey, text: string) => {
+        if (suppressed.has(key)) {
+            debug.push(`[REMINDER SUPPRESSED] ${key} — countermanded by a standing player directive.`);
+            return;
+        }
         if (conditional.length < CONDITIONAL_BUDGET) conditional.push({ key, text });
     };
 
@@ -1209,13 +1392,31 @@ export const selectSectionReminders = (ctx: ReminderContext): ReminderSelection 
         );
     }
 
-    // Contact is on the table and the player did NOT reciprocate this turn.
-    // An unreciprocated advance repeating turn after turn is the failure mode
-    // this was written for, so it outranks the rest of the band.
-    if (ctx.contactLevel !== 'none' && !ctx.playerReciprocated) {
+    // v1.37 — the physical gate, inverted. It arms on the player REFUSING, not
+    // on the player failing to reciprocate. v1.29's polarity was unsatisfiable
+    // for a passive PC and latched a scene at one rung for twenty turns; see
+    // PHYSICAL_ESCALATION.
+    if (ctx.playerRefused) {
         offer(
-            'PHYSICAL_RECIPROCATION',
-            `${REMINDERS.PHYSICAL_RECIPROCATION}\n\n[CONTACT LEVEL] ${ctx.contactLevel} — the player did not reciprocate or invite escalation this turn. Hold here or withdraw.`,
+            'PHYSICAL_ESCALATION',
+            `${REMINDERS.PHYSICAL_ESCALATION}\n\n[CONTACT LEVEL] ${ctx.contactLevel}\n` +
+            `[REFUSAL] The player's words: ${ctx.refusalMarkers.map(m => `"${m}"`).join(', ')}`,
+        );
+    } else if (ctx.contactLevel !== 'none' && ctx.contactStalledTurns >= CONTACT_STALL_TURNS) {
+        // Not a refusal — a stall. The scene has been re-describing the same
+        // rung for several turns and nobody has done anything.
+        offer(
+            'NPC_INITIATIVE',
+            `${REMINDERS.NPC_INITIATIVE}\n\n[CONTACT STALL] ${ctx.contactStalledTurns} consecutive turns at "${ctx.contactLevel}" with no refusal from the player.`,
+        );
+    }
+
+    // v1.37 — an argument is on the record. Keep the NPCs' stated positions
+    // stable and forbid re-issuing the player's proposal as their own idea.
+    if (ctx.npcPositionsBlock.trim().length > 0) {
+        offer(
+            'NPC_POSITION',
+            `${REMINDERS.NPC_POSITION}\n\n${ctx.npcPositionsBlock.trim()}`,
         );
     }
 
@@ -1264,7 +1465,19 @@ export const selectSectionReminders = (ctx: ReminderContext): ReminderSelection 
     }
 
     if (ctx.canonicalPersonalityNpcPresent) {
-        offer('CANONICAL_VOICE_LOCK', REMINDERS.CANONICAL_VOICE_LOCK);
+        // v1.37: when the model invented a trigger status last turn, quote the
+        // finding back at it. The reminder already forbids this in general; a
+        // named instance is what makes a general prohibition land.
+        const trailer = ctx.inventedTriggerNames.length > 0
+            ? `\n\n[INVENTED TRIGGER — LAST TURN] You declared a trigger `
+              + `${ctx.inventedTriggerDirection || 'status'} for a personality record that `
+              + `states no trigger condition. Characters in scene with layered records and `
+              + `NO written trigger: ${ctx.inventedTriggerNames.join(', ')}. `
+              + `There is no switch on these characters. Do not declare a trigger status for `
+              + `them this turn — restate their traits from the WHOLE record, Actual Core `
+              + `included, and write what that person actually does in this beat.`
+            : '';
+        offer('CANONICAL_VOICE_LOCK', `${REMINDERS.CANONICAL_VOICE_LOCK}${trailer}`);
     }
 
     // v1.33 (M11) — content-triggered, not mode-triggered.
@@ -1376,8 +1589,14 @@ export const makeReminderContext = (partial: Partial<ReminderContext> = {}): Rem
     correctionMarkers: [],
     rhetoricTics: [],
     rhetoricSamples: [],
-    playerReciprocated: false,
+    playerRefused: false,
+    refusalMarkers: [],
     contactLevel: 'none',
+    contactStalledTurns: 0,
+    npcPositionsBlock: '',
+    inventedTriggerNames: [],
+    inventedTriggerDirection: '',
+    suppressedReminders: [],
     intimacyInScene: false,
     violenceInScene: false,
     reminderLastShown: {},

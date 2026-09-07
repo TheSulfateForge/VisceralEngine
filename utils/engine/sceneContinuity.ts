@@ -25,6 +25,8 @@ import type {
     Character,
     KnownEntity,
     OocDirective,
+    NpcPosition,
+    NpcPositionUpdate,
     PlayerCanonEntry,
     SceneLedgerEntry,
     TurnDigest,
@@ -247,6 +249,63 @@ ${lines}`;
 /** How many standing directives ride in the prompt. FIFO beyond this. */
 export const OOC_DIRECTIVE_MAX = 5;
 
+// ---------------------------------------------------------------------------
+// 2c. DIRECTIVE → REMINDER SUPPRESSION  (v1.37)
+// ---------------------------------------------------------------------------
+// v1.35 made directives binding in the prompt. It did not make them binding
+// over the ENGINE's own standing reminders, which are appended after the whole
+// dynamic context under "[SYSTEM REFRESH — MANDATORY COMPLIANCE]".
+//
+// The 2026-09-07 Carissa save is the whole argument. The player issued, over
+// OOC, "Transition the narrative toward sexual themes and intimate physical
+// escalation in NPC interactions." It was extracted, persisted and injected
+// correctly. The next request carried PHYSICAL_RECIPROCATION, whose trailer
+// read "Hold here or withdraw", in the last position in the prompt. The engine
+// spent that turn telling the model to do the opposite of what the player had
+// just ordered, and it won, because it spoke last.
+//
+// Two changes close that. The block now moves to the tail, AFTER the reminders
+// (see promptUtils / useGeminiClient). And a directive that plainly countermands
+// a specific reminder now removes it from the running instead of arguing with
+// it. Classification happens ONCE, at ingest — this is a keyword pass and it
+// belongs nowhere near the per-turn path.
+//
+// Deliberately narrow: only reminders that DAMPEN are suppressible, only on an
+// unambiguous phrasing, and the suppression is logged.
+
+/** Reminder keys a standing directive is allowed to countermand. */
+const SUPPRESSIBLE: Record<string, RegExp[]> = {
+    // The v1.29 dampeners. A player asking for escalation, predation, or
+    // NPC-driven initiative is asking for exactly what these two brake.
+    PHYSICAL_ESCALATION: [
+        /\b(?:escalat|intimac|intimate|sexual|seduc|grope|molest|prey|predat|assault|forc\w*\s+(?:use|contact)|breed|rape)\w*/i,
+        /\b(?:advance|initiate|push|progress)\w*\b[^.]{0,40}\b(?:physical|contact|touch|intimac|sexual)\w*/i,
+        /\bdo\s+not\s+(?:wait|require|ask)\b[^.]{0,40}\b(?:reciprocat|permission|consent|invitation)\w*/i,
+    ],
+    PROPORTIONALITY: [
+        /\bescalat\w*/i,
+        /\b(?:do\s+not|don'?t|stop)\b[^.]{0,30}\b(?:de-?escalat|soften|sanitiz|sanitis|tone\s+down|hold\s+back)\w*/i,
+    ],
+    // A directive demanding characters be portrayed as written is a directive
+    // against the world-normalcy dampener flattening them to background people.
+    WORLD_NORMALCY: [
+        /\b(?:predat|monstrous|monster|hostile|depraved|violent|cruel)\w*/i,
+        /\bas\s+(?:they\s+are\s+)?written\b/i,
+    ],
+};
+
+/**
+ * Which reminders a directive countermands. Returns [] for the ordinary case —
+ * most directives are about pacing, tone or phrasing and suppress nothing.
+ */
+export const directiveSuppressions = (text: string): string[] => {
+    const t = (text ?? '').trim();
+    if (!t) return [];
+    return Object.entries(SUPPRESSIBLE)
+        .filter(([, patterns]) => patterns.some(re => re.test(t)))
+        .map(([key]) => key);
+};
+
 /**
  * Append a directive, de-duplicated against what is already standing.
  *
@@ -269,23 +328,158 @@ export const ingestOocDirective = (
         return { directives: current, added: false };
     }
 
-    current.push({ id: idFactory(), text, turn });
+    const suppresses = directiveSuppressions(text);
+    current.push({
+        id: idFactory(),
+        text,
+        turn,
+        ...(suppresses.length > 0 ? { suppresses } : {}),
+    });
     const capped = current.length > OOC_DIRECTIVE_MAX
         ? current.slice(current.length - OOC_DIRECTIVE_MAX)
         : current;
     return { directives: capped, added: true };
 };
 
-/** Render standing directives for the prompt. */
+/** Every reminder key countermanded by any standing directive. */
+export const suppressedReminderKeys = (directives: OocDirective[] | undefined): string[] =>
+    Array.from(new Set((directives ?? []).flatMap(d => d.suppresses ?? [])));
+
+/**
+ * Render standing directives for the prompt.
+ *
+ * v1.37: this block is no longer part of the dynamic context. The caller
+ * appends it to the very END of the user message, after the section reminders,
+ * so the player's instructions are the last thing the model reads. The
+ * precedence sentence below is what makes that placement mean something.
+ */
 export const buildOocDirectivesBlock = (directives: OocDirective[] | undefined): string => {
     if (!directives || directives.length === 0) return '';
     const lines = directives.map(d => `- ${d.text}`).join('\n');
-    return `[STANDING DIRECTIVES — from the player, binding]
+    return `[STANDING DIRECTIVES — from the player, binding, HIGHEST PRECEDENCE]
 The player gave these instructions about HOW to narrate, out of character.
-They apply to every turn from now on, not just the turn they were given. They
-outrank your own stylistic instincts. If one of them contradicts something you
-were about to write, the directive wins.
+They apply to every turn from now on, not just the turn they were given.
+
+PRECEDENCE: these outrank your own stylistic instincts AND every [SYSTEM
+REMINDER] above. A system reminder is the engine's standing guidance; a
+standing directive is the player telling you what they want from their own
+game. Where the two conflict, the directive wins and the reminder is set
+aside for that conflict — do not split the difference, do not comply
+partially, and do not acknowledge the conflict in the narrative.
 ${lines}`;
+};
+
+// ---------------------------------------------------------------------------
+// 2d. NPC POSITIONS → [NPC POSITIONS]  (v1.37)
+// ---------------------------------------------------------------------------
+// The idea-laundering failure. In the 2026-09-07 Maribel save an NPC argued
+// against the player's proposal for eight consecutive turns, shifting the
+// objection every time the previous one was answered, and then adopted the
+// proposal and presented it as her own plan.
+//
+// `npcRhetoric.ts` (v1.35) names this in its own header — "having invented it,
+// conceding it reads as the player's own idea handed back" — and has no
+// detector for it, because detecting it needs memory the engine did not keep.
+// Maribel's `ledger` after twelve turns of sustained argument read, in full:
+//
+//     ["Invited Ryan to mediate a dispute regarding an heirloom seal."]
+//
+// Her position on the seal — the entire dispute — was recorded nowhere, so
+// every turn re-derived it from personality adjectives plus the last narrative
+// and it drifted toward whoever had argued most recently.
+//
+// This is the minimum state that makes "you argued the opposite on turn 6" a
+// fact the prompt can carry.
+
+/** How many positions ride in the prompt. FIFO beyond this. */
+export const NPC_POSITION_MAX = 6;
+
+/** Recognised stances; anything else is normalised to 'held'. */
+const STANCES = new Set(['held', 'changed', 'conceded']);
+
+const normaliseStance = (s: string | undefined): string => {
+    const v = (s ?? '').trim().toLowerCase();
+    return STANCES.has(v) ? v : 'held';
+};
+
+/**
+ * Fold this turn's reported positions into the record.
+ *
+ * One position per holder: an NPC has one stance on the dispute at a time, and
+ * keeping a stack of them per character would reproduce the drift this exists
+ * to stop. A new report for a holder REPLACES their line and keeps the original
+ * `turnStated`, so the prompt can show how long they have held it.
+ */
+export const ingestNpcPositions = (
+    existing: NpcPosition[] | undefined,
+    updates: NpcPositionUpdate[] | undefined,
+    turn: number,
+    idFactory: () => string,
+): { positions: NpcPosition[]; changed: string[] } => {
+    const current = existing ? [...existing] : [];
+    const changed: string[] = [];
+    if (!updates || updates.length === 0) return { positions: current, changed };
+
+    for (const u of updates) {
+        const holder = (u?.holder ?? '').trim();
+        const position = (u?.position ?? '').trim();
+        if (!holder || !position) continue;
+
+        const stance = normaliseStance(u?.stance);
+        const idx = current.findIndex(p => p.holder.toLowerCase() === holder.toLowerCase());
+
+        if (idx === -1) {
+            current.push({
+                id: idFactory(),
+                holder,
+                position,
+                stance,
+                turnStated: turn,
+                turnLastSeen: turn,
+            });
+            changed.push(`${holder}: "${position}" (${stance})`);
+            continue;
+        }
+
+        const prev = current[idx];
+        const samePosition = beatKey(prev.position) === beatKey(position);
+        current[idx] = {
+            ...prev,
+            position,
+            stance,
+            // A restatement keeps the original turn; a genuine change restarts
+            // the clock, because that is a new position with its own history.
+            turnStated: samePosition ? prev.turnStated : turn,
+            turnLastSeen: turn,
+        };
+        if (!samePosition || prev.stance !== stance) {
+            changed.push(`${holder}: "${position}" (${stance}, was "${prev.position}" / ${prev.stance})`);
+        }
+    }
+
+    const capped = current.length > NPC_POSITION_MAX
+        ? current.slice(current.length - NPC_POSITION_MAX)
+        : current;
+    return { positions: capped, changed };
+};
+
+/**
+ * Render the record for the prompt.
+ *
+ * Returns '' when there is nothing on the record, which is also what keeps
+ * NPC_POSITION from firing — a scene with no dispute in it pays nothing.
+ */
+export const buildNpcPositionsBlock = (positions: NpcPosition[] | undefined): string => {
+    if (!positions || positions.length === 0) return '';
+    const lines = positions
+        .map(p => {
+            const held = p.turnLastSeen > p.turnStated
+                ? ` — stated turn ${p.turnStated}, still held as of turn ${p.turnLastSeen}`
+                : ` — stated turn ${p.turnStated}`;
+            return `- ${p.holder} [${p.stance}]: ${p.position}${held}`;
+        })
+        .join('\n');
+    return `[NPC POSITIONS — already on the record]\n${lines}`;
 };
 
 // ---------------------------------------------------------------------------

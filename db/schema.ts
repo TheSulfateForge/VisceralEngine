@@ -45,6 +45,7 @@ import type {
   BioMonitor,
   MontageProposal,
   OocDirective,
+  NpcPosition,
   PlayerCanonEntry,
   SceneLedgerEntry,
   TurnDigest,
@@ -552,6 +553,17 @@ export interface WorldStateRow {
    */
   ooc_directives: OocDirective[] | null;
   correction_flagged_turn: number | null;
+  /**
+   * v1.37. Same treatment: a small bounded JSON payload (capped at
+   * NPC_POSITION_MAX and cleared on a scene change), never queried by its inner
+   * fields, not indexed — so no Dexie version bump, and pre-v1.37 saves load
+   * with it absent and start empty.
+   */
+  npc_positions: NpcPosition[] | null;
+  /** v1.37: one-turn voice-lock flag. Unindexed; absent on older saves. */
+  voice_lock_flagged_turn: number | null;
+  voice_lock_flagged_names: string[] | null;
+  voice_lock_flagged_direction: string | null;
 }
 
 export interface WorldRuleRow {

@@ -127,19 +127,22 @@ describe('v1.29 — physical contact ladder tracks the save\'s escalation', () =
 });
 
 /**
- * Reminders for a calm SOCIAL beat at tension 10, with the four v1.29
- * player-framing signals supplied per case.
+ * Reminders for a calm SOCIAL beat at tension 10, with the player-framing
+ * signals supplied per case.
  *
  * v1.33: migrated from the positional 21-argument signature to the
  * ReminderContext object.
+ * v1.37: the physical gate's third argument is now `refused`, not
+ * `reciprocated` — the polarity is inverted, see PHYSICAL_ESCALATION.
  */
 const remindersFor = (
     corrected: boolean,
     markers: string[],
-    reciprocated: boolean,
+    refused: boolean,
     contactLevel: string,
     turnCount = 16,
     canonicalPersonality = true,
+    extra: Partial<Parameters<typeof makeReminderContext>[0]> = {},
 ) => getSectionReminders(makeReminderContext({
     turnCount,
     worldTurn: turnCount,
@@ -151,8 +154,10 @@ const remindersFor = (
     canonicalPersonalityNpcPresent: canonicalPersonality,
     playerCorrected: corrected,
     correctionMarkers: markers,
-    playerReciprocated: reciprocated,
+    playerRefused: refused,
+    refusalMarkers: refused ? ['I pull away'] : [],
     contactLevel,
+    ...extra,
 }));
 
 describe('v1.29 — reminder selection responds to player pushback', () => {
@@ -163,21 +168,59 @@ describe('v1.29 — reminder selection responds to player pushback', () => {
         expect(out.join('\n')).toContain("you're doing it again");
     });
 
-    it('fires the physical gate when contact is live and unreciprocated', () => {
+    // --- v1.37: the physical gate, inverted ---------------------------------
+    // v1.29 fired on "contact is live AND the player did not reciprocate",
+    // which for a PC written as passive was every turn forever. It now fires on
+    // the player REFUSING, and says nothing at all when they simply have not
+    // acted.
+
+    it('fires the physical gate when the player refuses', () => {
+        const out = remindersFor(false, [], true, 'incidental');
+        const joined = out.join('\n');
+        expect(joined).toContain('THE PLAYER REFUSED');
+        expect(joined).toContain('[CONTACT LEVEL] incidental');
+        expect(joined).toContain('[REFUSAL]');
+    });
+
+    it('does NOT gate contact merely because the player did not reciprocate', () => {
         const out = remindersFor(false, [], false, 'incidental');
         const joined = out.join('\n');
-        expect(joined).toContain('ADVANCE ONLY ON RECIPROCATION');
-        expect(joined).toContain('[CONTACT LEVEL] incidental');
+        expect(joined).not.toContain('THE PLAYER REFUSED');
+        // and specifically never tells the model to hold or withdraw
+        expect(joined).not.toMatch(/Hold here or withdraw/i);
     });
 
-    it('does not fire the physical gate once the player reciprocates', () => {
-        const out = remindersFor(false, [], true, 'incidental');
-        expect(out.join('\n')).not.toContain('ADVANCE ONLY ON RECIPROCATION');
-    });
-
-    it('does not fire the physical gate when there is no contact', () => {
+    it('does not fire the physical gate when there is no contact and no refusal', () => {
         const out = remindersFor(false, [], false, 'none');
-        expect(out.join('\n')).not.toContain('ADVANCE ONLY ON RECIPROCATION');
+        expect(out.join('\n')).not.toContain('THE PLAYER REFUSED');
+    });
+
+    it('fires the stall reminder after several static turns at one rung', () => {
+        const out = remindersFor(false, [], false, 'sustained', 16, true, {
+            contactStalledTurns: 4,
+        });
+        const joined = out.join('\n');
+        expect(joined).toContain('THE PHYSICAL SCENE HAS NOT MOVED');
+        expect(joined).toContain('[CONTACT STALL] 4');
+        // The stall reminder must never read as an order to escalate on its own
+        // authority — it defers to the NPC's sheet.
+        expect(joined).toContain('NPCs ACT ON THEIR OWN AUTHORITY');
+    });
+
+    it('prefers the refusal over the stall when both are true', () => {
+        const out = remindersFor(false, [], true, 'sustained', 16, true, {
+            contactStalledTurns: 9,
+        });
+        const joined = out.join('\n');
+        expect(joined).toContain('THE PLAYER REFUSED');
+        expect(joined).not.toContain('THE PHYSICAL SCENE HAS NOT MOVED');
+    });
+
+    it('a standing directive suppresses the physical gate entirely', () => {
+        const out = remindersFor(false, [], true, 'sustained', 16, true, {
+            suppressedReminders: ['PHYSICAL_ESCALATION'],
+        });
+        expect(out.join('\n')).not.toContain('THE PLAYER REFUSED');
     });
 
     it('surfaces proportionality on calm social beats even with no correction', () => {

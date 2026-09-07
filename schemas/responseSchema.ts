@@ -284,6 +284,27 @@ export const RESPONSE_SCHEMA: Schema = {
       nullable: true,
       description: "TRUE when the player's input THIS TURN pushes back on how an NPC or the narration has characterised THEM — their motives, their intentions, what they are 'really' after, or what they supposedly meant. Any phrasing counts, including amused or indirect ones: 'that's not what I said'; 'I was just asking'; 'doesn't mean I'm trying to...'; 'you're getting awfully fond of deciding what I mean before I've decided it myself'; 'you don't have to fit me into a neat little box'; 'I asked because I was curious'. ERR TOWARD SETTING IT — the engine acts on this, and a false positive costs one turn of an NPC being careful about the player's motives, which is never the wrong note. Scope: only the player correcting a reading of HIMSELF — not ordinary disagreement about the WORLD, a refused offer, or an argument between characters. Default false/omitted."
     },
+    // v1.37: NPC POSITIONS. The 2026-09-07 Maribel save had an NPC argue
+    // against the player's proposal for eight consecutive turns and then adopt
+    // it and present it as her own plan. Her whole ledger after those turns
+    // read ["Invited Ryan to mediate a dispute regarding an heirloom seal."] —
+    // her position on the thing under dispute was recorded nowhere, so every
+    // turn re-derived it from personality adjectives plus the last narrative,
+    // and it drifted toward whoever had argued most recently.
+    npc_positions: {
+      type: Type.ARRAY,
+      nullable: true,
+      description: "STATED POSITIONS. Record ONLY when an NPC takes, holds, or changes a position in a disagreement with the player. 0-2 per turn; omit when no dispute is in play. `stance`: 'held' (restating or defending), 'changed' (moved off a recorded position), 'conceded' (accepted the player's position). On 'conceded' the narrative must show them saying so and crediting the player — never re-issuing his proposal as their own idea.",
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          holder: { type: Type.STRING },
+          position: { type: Type.STRING, description: "One short clause, in their terms: 'the old seal should be repaired, not replaced'." },
+          stance: { type: Type.STRING },
+        },
+        required: ["holder", "position"],
+      },
+    },
     // v1.26: legacy new_memory singleton removed from the schema — every
     // property costs request tokens. validateResponse still accepts it from
     // any model that emits it out of habit; new_memories[] is the contract.
@@ -490,6 +511,7 @@ export const KEEP_DESCRIPTIONS: ReadonlySet<string> = new Set<string>([
   'new_memories', 'salience', 'tags',
   'established', 'player_assertions',   // v1.31 — both need their scope rules kept
   'player_correction',                  // v1.35
+  'npc_positions', 'position',          // v1.37 — scope + concession rule
   'new_lore', 'keyword', 'content',
   'biological_inputs',
   'location_update', 'traveled_from', 'travel_time_minutes', 'nearby_locations',

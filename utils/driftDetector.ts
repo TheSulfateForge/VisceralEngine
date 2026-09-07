@@ -367,3 +367,96 @@ The camera is in the room. Equal time and equal anatomical specificity
 for pleasure and damage. Render in the tradition of Cormac McCarthy and
 Samuel R. Delany: concrete, specific, autonomic, present-tense in the
 body. Render the scene the player initiated; only the player ends it.`;
+
+// ============================================================================
+// INVENTED-TRIGGER DETECTOR — v1.37
+// ============================================================================
+// CANONICAL_VOICE_LOCK asks the model to declare a trigger status ONLY when
+// the personality record contains an explicit trigger clause, and has said
+// "DO NOT INVENT A TRIGGER" since v1.29. In the 2026-09-07 Carissa save it did
+// it anyway, in the direction v1.29's text did not cover:
+//
+//     "Rendering Sania per canonical traits: Warm, socially fluent,
+//      confidently maternal. ... The trigger for her core is inactive (the
+//      scene is social and the environment controlled), so she continues to
+//      perform the warm surface effectively."
+//
+// None of the five Blackmoor records contains a trigger clause. The invented
+// condition was a description of the room, permanently true for the scene, and
+// it deferred every character's Actual Core indefinitely.
+//
+// This codebase's recurring failure is a guard that is written and then never
+// observed to fire — v1.35's correction regex matched nothing across two whole
+// saves and nobody knew. So the prompt change ships with a detector: cheap, in
+// the same shape as the [RHETORIC] and [DRIFT] lines, and reading the same
+// thought_process those already read.
+
+/** An explicit trigger clause, as §10 specifies it: "(surfaces when …)". */
+const TRIGGER_CLAUSE_RE = /\b(?:surfaces?|emerges?|appears?|activates?)\s+when\b|\btrigger\s*(?:condition)?\s*[:=]/i;
+
+/** The model declaring a trigger dormant. */
+const TRIGGER_INACTIVE_RE =
+    /\btrigger\b[^.\n]{0,60}\b(?:is\s+)?(?:inactive|not\s+active|dormant|unmet|not\s+met|absent)\b|\b(?:no|not)\s+trigger\s+active\b/i;
+
+/** The model declaring one live. */
+const TRIGGER_ACTIVE_RE =
+    /\btrigger\b[^.\n]{0,60}\b(?:is\s+)?(?:active|met|satisfied|fulfilled)\b/i;
+
+export interface InventedTriggerReport {
+    /** The model declared a trigger status for a record that names no trigger. */
+    detected: boolean;
+    /** 'inactive' pins the character into the mask; 'active' into revelation. */
+    direction: 'inactive' | 'active' | null;
+    /** Layered entities in scene whose record has no trigger clause. */
+    names: string[];
+    /** The offending clause, for the debug log. */
+    sample: string | null;
+}
+
+/**
+ * Catch a trigger declaration made against a record that has no trigger.
+ *
+ * `entities` should be the in-scene entities whose personality the model could
+ * have been reading — name plus the raw personality text. An entity whose
+ * record DOES carry a trigger clause is excluded: a declaration about that
+ * character is the reminder working as designed.
+ *
+ * Conservative by construction. It fires only when the thought_process names a
+ * trigger status AND at least one layered, trigger-less character is in scene,
+ * and it never costs a resample — it writes a line to the debug log and arms
+ * the voice lock for one turn.
+ */
+export const detectInventedTrigger = (
+    thoughtProcess: string | undefined | null,
+    entities: { name: string; personality?: string | null }[],
+): InventedTriggerReport => {
+    const empty: InventedTriggerReport = { detected: false, direction: null, names: [], sample: null };
+    const text = (thoughtProcess ?? '').trim();
+    if (!text) return empty;
+
+    const inactive = text.match(TRIGGER_INACTIVE_RE);
+    const active = inactive ? null : text.match(TRIGGER_ACTIVE_RE);
+    const hit = inactive ?? active;
+    if (!hit) return empty;
+
+    // Layered characters in scene whose record states no trigger. If every
+    // layered character in scene HAS a trigger clause, the declaration is
+    // legitimate and this is not a finding.
+    const triggerless = entities
+        .filter(e => {
+            const p = (e.personality ?? '').trim();
+            if (!p) return false;
+            const layered = /Actual\s+Core\b/i.test(p) || /Performed\s+Surface\b/i.test(p);
+            return layered && !TRIGGER_CLAUSE_RE.test(p);
+        })
+        .map(e => e.name);
+
+    if (triggerless.length === 0) return empty;
+
+    return {
+        detected: true,
+        direction: inactive ? 'inactive' : 'active',
+        names: triggerless,
+        sample: hit[0].slice(0, 160),
+    };
+};

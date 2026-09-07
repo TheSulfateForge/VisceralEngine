@@ -65,6 +65,23 @@ export interface PromptResult {
      * paying full price for it every turn.
      */
     staticContext: string;
+    /**
+     * v1.37: the player's standing OOC directives, rendered but deliberately
+     * NOT included in `prompt`.
+     *
+     * Through v1.36 this block lived mid-prompt, ahead of [CONTEXT], while the
+     * section reminders are appended to the very END of the user message under
+     * [SYSTEM REFRESH — MANDATORY COMPLIANCE]. On a recency-biased model that
+     * put the ENGINE's standing rules structurally above the PLAYER's, and the
+     * 2026-09-07 Carissa save is what that looks like: the player ordered
+     * escalation over OOC, the directive was extracted, persisted and injected
+     * exactly as designed — and the last thing the model read that turn was
+     * PHYSICAL_RECIPROCATION's "Hold here or withdraw."
+     *
+     * The caller appends this AFTER the reminders so the player has the last
+     * word. See `useGeminiClient`.
+     */
+    oocDirectivesBlock: string;
     /** v1.26: Char count per dynamic block — token-diet instrumentation. */
     blockSizes: Record<string, number>;
     ragDebug: RAGResult['debugInfo'];
@@ -1046,10 +1063,14 @@ This world is fundamentally: ${gameWorld.worldTags.join(', ')}.
   const sinceLastTurnBlock = buildSinceLastTurnBlock(digest, gameWorld, character, canonFromLastTurn);
   const sceneLedgerBlock = buildSceneLedgerBlock(gameWorld.sceneLedger);
   const playerCanonBlock = buildPlayerCanonBlock(gameWorld.playerCanon);
-  // v1.35: standing OOC instructions. Placed with the other binding blocks —
-  // before the entity/atmosphere context, so a directive about HOW to narrate
-  // is in hand before the model reads what there is to narrate.
-  const oocDirectivesBlock = buildOocDirectivesBlock(gameWorld.oocDirectives);
+  // v1.35: standing OOC instructions.
+  //
+  // v1.37: NO LONGER PART OF `promptString`. It is returned separately and the
+  // caller appends it to the tail of the user message, after the section
+  // reminders. Rationale in the PromptResult doc comment: mid-prompt placement
+  // put the player's binding instructions structurally BELOW the engine's own
+  // reminders, and on Flash-Lite the tail wins.
+  const oocDirectivesBlock = sanitise(buildOocDirectivesBlock(gameWorld.oocDirectives));
 
   // v1.19: Dream/Nightmare seed — only injected when the player is sleeping
   // and trauma ≥ DREAM_TRAUMA_THRESHOLD. Empty string otherwise.
@@ -1083,7 +1104,6 @@ ${sanitise(situationRecap)}
 ${sanitise(sinceLastTurnBlock ? `\n${sinceLastTurnBlock}\n` : '')}
 ${sanitise(sceneLedgerBlock ? `\n${sceneLedgerBlock}\n` : '')}
 ${sanitise(playerCanonBlock ? `\n${playerCanonBlock}\n` : '')}
-${sanitise(oocDirectivesBlock ? `\n${oocDirectivesBlock}\n` : '')}
 ${sanitise(dreamSeed ? `\n${dreamSeed}\n` : '')}
 ${sanitise(worldPrimerBlock ? `\n${worldPrimerBlock}\n` : '')}
 
@@ -1165,6 +1185,7 @@ ${sanitise(conditionLock ? `\n${conditionLock}\n` : '')}
   return {
       prompt: promptString,
       staticContext,
+      oocDirectivesBlock,   // v1.37 — appended to the tail by the caller
       blockSizes,
       ragDebug: debugInfo
   };

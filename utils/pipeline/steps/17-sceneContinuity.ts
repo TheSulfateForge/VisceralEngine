@@ -3,6 +3,7 @@ import {
     sceneChanged,
     updateSceneLedger,
     ingestPlayerAssertions,
+    ingestNpcPositions,
     buildTurnDigest,
 } from '../../engine/sceneContinuity';
 import { generateUUID } from '../../../idUtils';
@@ -110,6 +111,28 @@ export const sceneContinuityStep: PipelineStep = {
                 ctx.previousWorld.correctionFlaggedTurn === turn - 1
                     ? ctx.previousWorld.correctionFlaggedTurn
                     : undefined;
+        }
+
+        // --- 2c. NPC positions (v1.37) --------------------------------------
+        // A dispute is scene-scoped: when the scene changes, the argument that
+        // was running in it is over, and carrying its positions forward would
+        // put stale claims in front of the model for the rest of the campaign.
+        // Same reset rule as the scene ledger above, and it reuses the same
+        // `didSceneChange` computation.
+        const { positions, changed } = ingestNpcPositions(
+            didSceneChange ? [] : ctx.previousWorld.npcPositions,
+            ctx.sanitisedResponse.npc_positions,
+            turn,
+            () => generateUUID(),
+        );
+        ctx.worldUpdate.npcPositions = positions;
+
+        for (const line of changed) {
+            ctx.debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[NPC POSITION] ${line}`,
+                type: 'info'
+            });
         }
 
         // --- 3. Turn digest -------------------------------------------------

@@ -436,3 +436,90 @@ export const detectRhetoricTics = (
         samples,
     };
 };
+
+// ---------------------------------------------------------------------------
+// M2b — CROSS-TURN ACCUMULATOR (v1.37)
+// ---------------------------------------------------------------------------
+// RHETORIC_TIC_THRESHOLD asks "two tics in ONE turn", on the reasoning that one
+// marker is a sentence and two are a pattern. That is true of a single turn and
+// false of a run of them.
+//
+// Measured in the 2026-09-07 Maribel save: `motive-attribution` — the NPC
+// opening by asserting what the player thinks — was detected on SIX of eight
+// consecutive turns and armed the reminder ONCE, because it never happened to
+// co-occur with a second tic. The debug log reads:
+//
+//   [RHETORIC] noted (below threshold) - motive-attribution | 'You speak as if the misfire is a tragedy, Ryan.
+//   [RHETORIC] noted (below threshold) - motive-attribution | 'You want a fresh plate, a clean geometry, a safe seal.
+//   [RHETORIC] noted (below threshold) - motive-attribution | You think the danger is the metal.
+//   [RHETORIC] noted (below threshold) - motive-attribution | 'You think tradition is a choice we make to be stubborn.
+//
+// Six identical observations, six decisions to do nothing. The same tic every
+// turn is the most legible possible pattern and the per-turn threshold is
+// structurally incapable of seeing it. One marker is a sentence; the same
+// marker four turns running is a tic.
+
+/** How many recent model turns the accumulator looks at. */
+export const RHETORIC_RECENT_WINDOW = 4;
+/** Occurrences of ONE tic within that window that arm the reminder. */
+export const RHETORIC_RECENT_MIN = 3;
+
+export interface RecurringTicReport extends RhetoricTicReport {
+    /** Tics that recurred across the window, with their hit counts. */
+    recurring: { tic: RhetoricTic; count: number }[];
+}
+
+/**
+ * Scan this turn AND the recent window.
+ *
+ * `narratives` must be the model's own narrative turns, oldest first, with the
+ * MOST RECENT LAST — the same text `detectRhetoricTics` is given, plus its
+ * predecessors. OOC replies are not narrative and must not be included.
+ *
+ * Arms when EITHER rule trips: two tics in the latest turn (v1.35), or one tic
+ * appearing in at least RHETORIC_RECENT_MIN of the last RHETORIC_RECENT_WINDOW
+ * turns (v1.37). The returned `tics`/`samples` describe the latest turn plus
+ * whatever recurred, so the reminder always names something the model can see
+ * in its own recent output.
+ */
+export const detectRecurringRhetoric = (
+    narratives: (string | null | undefined)[],
+    names: string[] = [],
+): RecurringTicReport => {
+    const window = narratives
+        .filter((n): n is string => typeof n === 'string' && n.trim().length > 0)
+        .slice(-RHETORIC_RECENT_WINDOW);
+
+    if (window.length === 0) {
+        return { tics: [], armed: false, samples: [], recurring: [] };
+    }
+
+    const perTurn = window.map(n => detectRhetoricTics(n, names));
+    const latest = perTurn[perTurn.length - 1];
+
+    const counts = new Map<RhetoricTic, number>();
+    for (const report of perTurn) {
+        // Count each tic once per turn, however many times it occurred in it.
+        for (const tic of new Set(report.tics)) {
+            counts.set(tic, (counts.get(tic) ?? 0) + 1);
+        }
+    }
+
+    const recurring = [...counts.entries()]
+        .filter(([, count]) => count >= RHETORIC_RECENT_MIN)
+        .map(([tic, count]) => ({ tic, count }))
+        .sort((a, b) => b.count - a.count);
+
+    if (recurring.length === 0) return { ...latest, recurring: [] };
+
+    // Union the latest turn's tics with the recurring ones, order-stable.
+    const tics: RhetoricTic[] = [...latest.tics];
+    for (const { tic } of recurring) if (!tics.includes(tic)) tics.push(tic);
+
+    const samples = [...latest.samples];
+    for (const { tic, count } of recurring) {
+        samples.push(`"${tic}" in ${count} of the last ${window.length} turns`);
+    }
+
+    return { tics, armed: true, samples, recurring };
+};

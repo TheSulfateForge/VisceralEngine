@@ -118,10 +118,112 @@ export const updateTime = (
     calendar: CalendarConfig = DEFAULT_CALENDAR
 ): WorldTime => deriveWorldTime(currentMinutes + delta, calendar);
 
+// ---------------------------------------------------------------------------
+// v1.37: registry stall collapse
+// ---------------------------------------------------------------------------
+// The hidden registry is injected WHOLE into every prompt as a record of what
+// NPCs have been doing. In the 2026-09-07 Carissa save it was 8.8KB of this:
+//
+//   T19 | Duchess Sania Blackmoor | Reinforces the sense of sanctuary and
+//         belonging to encourage Carissa's continued compliance.
+//   T20 | Duke Corrith Blackmoor  | Redirects the conversation to discourage
+//         the guest's departure...
+//   T21 | Duchess Sania Blackmoor | Reinforces Carissa's physical containment...
+//
+// Twenty turns of maintain / observe / reinforce / assess, handed back to the
+// model every turn as a description of who these characters are. It is the same
+// feedback loop v1.35 found in `voice_sample`: the engine recorded a stall and
+// then taught it.
+//
+// So a run of same-actor, same-verb entries collapses to the first and a count.
+// The information ("Sania has been maintaining contact since T17") survives;
+// the twenty worked examples of writing another holding beat do not.
+
+/** Consecutive same-actor, same-verb entries before a run is collapsed. */
+const REGISTRY_RUN_LIMIT = 2;
+
+/** `T21 | NPC: Name | Verb rest of line` → the parts worth comparing. */
+const REGISTRY_LINE_RE = /^\s*T(\d+)\s*\|\s*(?:NPC:\s*)?([^|]+?)\s*\|\s*(\S+)/i;
+
+/**
+ * Collapse runs of a single actor repeating a single leading verb.
+ *
+ * Lines that do not parse as registry entries pass through untouched, and a run
+ * is only collapsed when the SAME actor uses the SAME verb on consecutive
+ * entries — an actor alternating verbs, or two actors interleaving, is a scene
+ * doing something and is left alone.
+ */
+export const collapseRegistryStalls = (registry: string): string => {
+    if (!registry) return '';
+    const lines = registry.split('\n');
+    const out: string[] = [];
+
+    let runActor: string | null = null;
+    let runActorLabel = '';
+    let runVerb: string | null = null;
+    let runVerbLabel = '';
+    let runCount = 0;
+    let collapsedFrom = '';
+    let collapsedTo = '';
+    let placeholderAt = -1;
+
+    const flush = () => {
+        if (placeholderAt >= 0 && runCount > REGISTRY_RUN_LIMIT) {
+            const dropped = runCount - REGISTRY_RUN_LIMIT;
+            out[placeholderAt] =
+                `T${collapsedFrom}-T${collapsedTo} | NPC: ${runActorLabel} | ` +
+                `[${dropped} further turn(s) of "${runVerbLabel}…" collapsed — this actor has now ` +
+                `repeated the same action for ${runCount} consecutive turns and it is no longer new]`;
+        }
+        runActor = null; runVerb = null; runCount = 0; placeholderAt = -1;
+    };
+
+    for (const line of lines) {
+        const m = line.match(REGISTRY_LINE_RE);
+        if (!m) { flush(); out.push(line); continue; }
+
+        const [, turn, actor, verb] = m;
+        const actorKey = actor.trim().toLowerCase();
+        const verbKey = verb.trim().toLowerCase().replace(/[^a-z]/g, '');
+
+        if (actorKey === runActor && verbKey === runVerb) {
+            runCount++;
+            if (runCount <= REGISTRY_RUN_LIMIT) {
+                out.push(line);
+            } else if (placeholderAt < 0) {
+                out.push('');
+                placeholderAt = out.length - 1;
+                collapsedFrom = turn;
+                collapsedTo = turn;
+            } else {
+                // Beyond the placeholder the line is dropped; only its turn
+                // number survives, as the end of the collapsed range.
+                collapsedTo = turn;
+            }
+            continue;
+        }
+
+        flush();
+        runActor = actorKey;
+        runActorLabel = actor.trim();
+        runVerb = verbKey;
+        runVerbLabel = verb.trim();
+        runCount = 1;
+        out.push(line);
+    }
+    flush();
+
+    return out.join('\n');
+};
+
 export const trimHiddenRegistry = (registry: string): string => {
     if (!registry) return "";
-    const lines = registry.split('\n').filter(l => l.trim());
-    if (lines.length <= MAX_REGISTRY_LINES) return registry;
+    // v1.37: collapse stalls BEFORE the line cap, so a stalled scene does not
+    // consume the whole window with restatements of one beat and push the
+    // genuinely distinct entries out of it.
+    const collapsed = collapseRegistryStalls(registry);
+    const lines = collapsed.split('\n').filter(l => l.trim());
+    if (lines.length <= MAX_REGISTRY_LINES) return lines.join('\n');
     return lines.slice(-MAX_REGISTRY_LINES).join('\n');
 };
 

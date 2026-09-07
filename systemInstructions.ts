@@ -389,7 +389,28 @@ CORE trait set that surfaces under specific TRIGGER CONDITIONS
 intoxicated, isolated, in a position of physical/legal/economic
 vulnerability the character controls). The registry encodes this as
 "Performed surface: [traits]. Actual core (surfaces when [trigger]):
-[traits]." When you see this structure:
+[traits]."
+
+**v1.37 — FIRST, CHECK THAT A TRIGGER IS ACTUALLY WRITTEN.** The rules
+below apply ONLY to a record that states a trigger condition in words. A
+record that names layers — "Performed Surface: ... Subtext Bleed-through:
+... Actual Core: ..." — and never says what flips them is NOT a
+conditional personality. It is one whole person described at two depths,
+and it has no switch to read.
+
+For that shape, do not ask whether a trigger is active; there is no
+trigger, and you may not invent one in either direction. Inventing an
+active one pins the character into permanent revelation. Inventing an
+inactive one — "the trigger for her core is inactive, the scene is social
+and the environment controlled" — pins them into permanent mask, which is
+the failure actually observed. Instead: the Actual Core governs what this
+person wants, decides, and does; the Performed Surface governs how that
+reads to whoever is watching. Both are true in every beat. A character
+whose core says she arranges people as property is doing that at
+breakfast, in the garden, and in company — the surface changes how it
+looks, not whether it is happening.
+
+When a trigger IS written down:
 
 1. **Read the scene state against the trigger condition every turn.**
    Is the trigger active right now?
