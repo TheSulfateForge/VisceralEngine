@@ -74,6 +74,74 @@ const stem = (w: string): string =>
      .replace(/(?:ise|ize|ive|ful|ous|al)$/i, '')
      .slice(0, 6);
 
+/** Shortest shared prefix that counts two words as the same root. */
+const PREFIX_MATCH_LEN = 4;
+
+/**
+ * Is this trait word present in the record, allowing for inflection?
+ *
+ * v1.41.1 — the suffix stripper alone was not enough. It does not strip "-th",
+ * so "warm" never matched "warmth", and Lady Mirabel Calder — whose record
+ * reads "run with a warmth that never reads as calculation" — was reported nine
+ * times in one session for the trait "warm" having no basis in her record. The
+ * finding was noise and the log said otherwise.
+ *
+ * A shared four-character prefix now also counts. That is loose, and loose is
+ * the correct direction here: a false MATCH means we decline to flag something,
+ * a false MISS means we tell the player their record says something it does not.
+ */
+const isGroundedWord = (word: string, recordWords: string[], recordStems: Set<string>): boolean => {
+    if (recordStems.has(stem(word))) return true;
+    if (word.length < PREFIX_MATCH_LEN) return false;
+    const prefix = word.slice(0, PREFIX_MATCH_LEN);
+    return recordWords.some(r =>
+        r.length >= PREFIX_MATCH_LEN && (r.startsWith(prefix) || word.startsWith(r.slice(0, PREFIX_MATCH_LEN))),
+    );
+};
+
+/**
+ * v1.41.1 — is this character actually the subject of the turn?
+ *
+ * The mask-mode resample fired 17 times in one 29-turn session, 13 of them for
+ * a single secondary character who was standing quietly in a scene about
+ * someone else. Restating a bystander's surface traits is not a failure worth
+ * a full re-roll; restating the surface of the character the turn is ABOUT is.
+ *
+ * Focal means: they spoke this turn, or the narrative names them at least as
+ * often as it names anyone else in the scene.
+ */
+export const isFocalCharacter = (
+    name: string,
+    narrative: string | undefined | null,
+    speaker: string | undefined | null,
+    inSceneNames: string[],
+): boolean => {
+    const n = (name ?? '').trim().toLowerCase();
+    if (!n) return false;
+
+    const spoke = (speaker ?? '').trim().toLowerCase();
+    if (spoke && (spoke === n || n.includes(spoke) || spoke.includes(n))) return true;
+
+    const text = (narrative ?? '').toLowerCase();
+    if (!text) return false;
+
+    const count = (who: string): number => {
+        // Count the most distinctive part of the name — models write "Liora",
+        // not "Liora Calder", after the first mention.
+        const parts = who.split(/\s+/).filter(w => w.length >= 4);
+        if (parts.length === 0) return 0;
+        return Math.max(...parts.map(part => {
+            const safe = part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            return (text.match(new RegExp(`\\b${safe}`, 'g')) ?? []).length;
+        }));
+    };
+
+    const mine = count(n);
+    if (mine === 0) return false;
+    const best = Math.max(...inSceneNames.map(o => count(o.toLowerCase())), 0);
+    return mine >= best;
+};
+
 export interface Restatement {
     /** Name as the model wrote it. */
     name: string;
@@ -133,15 +201,14 @@ export const checkRestatement = (
     const record = (entity.personality ?? '').trim();
     if (!record) return null;
 
-    const recordStems = new Set(contentWords(record).map(stem));
+    const recordWords = contentWords(record);
+    const recordStems = new Set(recordWords.map(stem));
     const ungrounded: string[] = [];
     for (const trait of restatement.traits) {
         const wordsIn = contentWords(trait);
         if (wordsIn.length === 0) continue;
-        const grounded = wordsIn.some(w => recordStems.has(stem(w)));
-        const isOffender = wordsIn.some(w => ARCHETYPE_OFFENDERS.has(w));
-        if (!grounded || (isOffender && !wordsIn.some(w => ARCHETYPE_OFFENDERS.has(w) && recordStems.has(stem(w))))) {
-            if (!grounded) ungrounded.push(trait);
+        if (!wordsIn.some(w => isGroundedWord(w, recordWords, recordStems))) {
+            ungrounded.push(trait);
         }
     }
 
