@@ -30,7 +30,7 @@ import {
     privateTermsForCharacter,
     detectPrivateKnowledgeLeak,
 } from '../utils/engine/privateKnowledge';
-import { checkVoiceLock } from '../utils/engine/voiceLockCheck';
+import { checkVoiceLock, isFocalCharacter } from '../utils/engine/voiceLockCheck';
 import { classifyRecordQuery, answerRecordQuery } from '../utils/engine/recordQuery';
 import { detectRecurringRhetoric } from '../utils/engine/npcRhetoric';
 
@@ -93,6 +93,26 @@ let personalityRepairDone = false;
 // gone static — or immediately after a turn that actually tripped the
 // repetition guard.
 const STATIC_BEAT_THINKING_FLOOR = 3;
+
+// v1.41.1: mask-mode resample cooldown.
+//
+// The unguarded version fired 17 times in a 29-turn session — 13 of them for
+// ONE secondary character standing quietly in a scene about someone else — and
+// each firing is a full extra model call at escalated thinking. Median turn
+// latency went 24s -> 34s, essentially all of it here.
+//
+// Two guards, both needed. The focal test (voiceLockCheck.isFocalCharacter)
+// stops a bystander triggering it at all; this cooldown stops even a genuinely
+// focal character triggering it every turn, because a model that renders one
+// character as their mask is not going to be talked out of it by a third
+// re-roll in four turns — at that point the armed reminder is the right tool
+// and the re-roll is just cost.
+//
+// Module-scoped and non-persisted, like `staticBeatStreak` and `threatStats`:
+// this is a rate limiter, not campaign state, and resetting it on reload is
+// harmless.
+const MASK_RESAMPLE_COOLDOWN_TURNS = 5;
+const maskResampleLastTurn = new Map<string, number>();
 let staticBeatStreak = 0;
 let staticBeatLocation = '';
 let lastTurnRepeated = false;
@@ -973,12 +993,25 @@ export const useGeminiClient = () => {
         // a standing player directive is context on its own (the player has
         // said, out of character, what this scene is), and so is the model's own
         // SOFTENED token, handled at the resample site below.
-        const standingDirectivesPresent =
-            (preCallState.gameWorld.oocDirectives ?? []).length > 0;
+        //
+        // v1.41.1 — CONTENT directives only. v1.37 counted ANY standing
+        // directive, which meant one style instruction armed the anti-softening
+        // resampler for the rest of the campaign. In the 2026-09-08 session the
+        // directive was "Do not repeat or loop previously generated dialogue or
+        // narrative segments" — a pacing note with no bearing on rendering
+        // register — and it made every subsequent turn a "mature beat".
+        //
+        // `suppresses` is already the engine's classification of a directive as
+        // being about content register rather than style: it is set at ingest
+        // by `directiveSuppressions` precisely for the directives that
+        // countermand the dampeners. Reusing it here costs nothing and means
+        // there is one definition of "this directive is about content", not two.
+        const contentDirectivesPresent =
+            (preCallState.gameWorld.oocDirectives ?? []).some(d => (d.suppresses ?? []).length > 0);
         const matureContextActive =
             preCallState.gameWorld.sceneMode === 'COMBAT' ||
             (preCallState.gameWorld.tensionLevel ?? 0) >= 40 ||
-            standingDirectivesPresent ||
+            contentDirectivesPresent ||
             containsMatureContent(text, namesInPlay) ||
             containsMatureContent(lastNarrative, namesInPlay);
 
@@ -1083,14 +1116,55 @@ export const useGeminiClient = () => {
         // reason to warn and a bad reason to spend a generation.
         // Computed here rather than reused from below: this runs BEFORE the
         // logging/arming pass, and that pass must read the FINAL response.
-        const maskModeFindings = checkVoiceLock(
+        //
+        // v1.41.1: gated twice — focal, then rate-limited. See
+        // MASK_RESAMPLE_COOLDOWN_TURNS. A finding that fails either gate is
+        // still LOGGED and still arms the voice lock next turn; it just does
+        // not buy a generation.
+        const inSceneNames = (preCallState.gameWorld.knownEntities ?? [])
+            .filter(e => !e.status || e.status === 'present' || e.status === 'nearby')
+            .map(e => e.name)
+            .filter(Boolean);
+        const thisTurn = preCallState.gameHistory.turnCount;
+        const allSurfaceOnly = checkVoiceLock(
             response.thought_process,
             (preCallState.gameWorld.knownEntities ?? []),
         ).filter(f => f.surfaceOnly);
+
+        const skipped: string[] = [];
+        const maskModeFindings = allSurfaceOnly.filter(f => {
+            if (!isFocalCharacter(f.name, response.narrative, response.npc_interaction?.speaker, inSceneNames)) {
+                skipped.push(`${f.name} (not focal this turn)`);
+                return false;
+            }
+            const last = maskResampleLastTurn.get(f.name);
+            if (last !== undefined && thisTurn - last < MASK_RESAMPLE_COOLDOWN_TURNS) {
+                skipped.push(`${f.name} (resampled ${thisTurn - last} turn(s) ago, cooldown ${MASK_RESAMPLE_COOLDOWN_TURNS})`);
+                return false;
+            }
+            return true;
+        });
+
+        if (skipped.length > 0) {
+            setGameHistory(prev => ({
+                ...prev,
+                debugLog: [
+                    ...prev.debugLog,
+                    {
+                        timestamp: new Date().toISOString(),
+                        message: `[VOICE LOCK] Mask-mode noted but NOT resampled — ${skipped.join('; ')}. `
+                            + `Still logged and still armed for the next turn.`,
+                        type: 'info',
+                    }
+                ]
+            }));
+        }
+
         let resampledThisTurn = false;
         if (maskModeFindings.length > 0) {
             resampledThisTurn = true;
             const names = maskModeFindings.map(f => f.name);
+            for (const n of names) maskResampleLastTurn.set(n, thisTurn);
             setGameHistory(prev => ({
                 ...prev,
                 debugLog: [
@@ -1295,7 +1369,7 @@ turn is anything their Actual Core describes, you are writing the mask.`;
         // they want the scene to do, that statement is the authority on it, not
         // an inference drawn from how their character moves.
         const playerPushedBack =
-            (framing.corrected || framing.deflected) && !standingDirectivesPresent;
+            (framing.corrected || framing.deflected) && !contentDirectivesPresent;
         if (drift.drifted && playerPushedBack) {
             setGameHistory(prev => ({
                 ...prev,
