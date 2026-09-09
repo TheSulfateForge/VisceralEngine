@@ -37,7 +37,7 @@ import {
   RAGResult,
 } from './ragEngine';
 import { embeddingService } from '../services/embeddingService';
-import { profileSpan, profileNote } from './promptProfiler';
+import { profileSpan } from './promptProfiler';
 import { embeddingsRepo } from '../db/repos/embeddings';
 import { EmbeddingRow, EmbeddingOwnerKind } from '../db/schema';
 import {
@@ -187,25 +187,26 @@ export async function buildHybridContext(
     tailVector = null;
   }
 
-  // 3. Load all embeddings for this campaign in one query, keeping only
-  //    rows produced by the CURRENT model. After a model swap the backfill
-  //    re-embeds in the background; until it finishes, stale vectors live
-  //    in a different embedding space and comparing against them is noise —
-  //    those items degrade gracefully to lexical-only instead.
+  // 3. Load this campaign's embeddings for the CURRENT model. After a model
+  //    swap the backfill re-embeds in the background; until it finishes those
+  //    items degrade gracefully to lexical-only rather than being compared
+  //    against vectors from a different embedding space.
   const modelId = embeddingService.getModelId();
-  // v1.43: timed and counted. This reads EVERY embedding row for the campaign
-  // out of IndexedDB on EVERY turn and filters by model in JS — so its cost
-  // grows with the campaign, not with what the turn needs, which is exactly the
-  // shape of a fixed per-turn cost that does not track prompt size.
-  const allRows = await profileSpan(
+  // v1.43 measured this at 32,077ms — 92% of a 34.7-second prompt build. It
+  // read EVERY embedding row for the campaign (462,367 of them) and then threw
+  // 236,359 away as stale-model in JS.
+  //
+  // v1.44 narrows it on both axes: scoped to the current model by the
+  // `[campaign_id+model_id]` index, so the stale rows are never read at all,
+  // and memoised in the repo, so a turn that follows a turn pays nothing for
+  // it. The leak that produced those rows is fixed in `db/projection.ts` and
+  // `services/embeddingBackfill.ts` — this is the read side of the same fix,
+  // and it is what keeps the cost bounded if anything ever leaks again.
+  const embeddings = await profileSpan(
     'embed:loadRows',
-    () => embeddingsRepo.listForCampaign(campaignId),
-    (rows) => `${rows.length} rows read from IndexedDB`,
+    () => embeddingsRepo.listForRetrieval(campaignId, modelId),
+    (rows) => `${rows.length} rows for ${modelId}`,
   );
-  const embeddings = allRows.filter((r) => r.model_id === modelId);
-  if (allRows.length !== embeddings.length) {
-    profileNote('embed:modelFilter', `${allRows.length - embeddings.length} row(s) dropped as stale-model`);
-  }
 
   return { campaignId, embeddings, inputVector, tailVector, queryText };
 }

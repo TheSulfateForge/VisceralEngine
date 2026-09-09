@@ -13,6 +13,27 @@ import { vdb, EmbeddingRow, EmbeddingOwnerKind } from '../schema';
 import { SaveId } from '../../types';
 import { generateUUID } from '../../idUtils';
 
+// ---------------------------------------------------------------------------
+// Per-campaign vector cache (v1.44)
+//
+// `buildHybridContext` needs the same set of vectors on every turn, and that
+// set changes only when this repo writes. Before v1.44 it re-read them from
+// IndexedDB every turn — measured at 32,077ms for one campaign. The read is
+// now scoped to the current model by index AND memoised here, so a turn that
+// follows a turn pays nothing for it at all.
+//
+// Invalidated on every write path below rather than by TTL: a stale vector set
+// would silently retrieve against deleted lore, and the backfill that writes is
+// the only thing that changes it.
+// ---------------------------------------------------------------------------
+interface CacheEntry { modelId: string; rows: EmbeddingRow[] }
+const vectorCache = new Map<SaveId, CacheEntry>();
+
+const invalidate = (campaign_id?: SaveId): void => {
+  if (campaign_id) vectorCache.delete(campaign_id);
+  else vectorCache.clear();
+};
+
 export interface EmbeddingUpsert {
   campaign_id: SaveId;
   owner_kind: EmbeddingOwnerKind;
@@ -73,6 +94,31 @@ export const embeddingsRepo = {
   },
 
   /**
+   * List a campaign's embeddings for ONE model, from cache when warm.
+   *
+   * This is what the retrieval path should call. `listForCampaign` reads
+   * every row for the campaign — including every row from a previous
+   * embedding model, which the caller then throws away — and on a campaign
+   * that has been played for a while that is hundreds of thousands of rows
+   * and tens of seconds. The `[campaign_id+model_id]` index means the dead
+   * ones are never read at all.
+   */
+  async listForRetrieval(campaign_id: SaveId, model_id: string): Promise<EmbeddingRow[]> {
+    const hit = vectorCache.get(campaign_id);
+    if (hit && hit.modelId === model_id) return hit.rows;
+
+    const rows = await vdb.embeddings
+      .where('[campaign_id+model_id]')
+      .equals([campaign_id, model_id])
+      .toArray();
+    vectorCache.set(campaign_id, { modelId: model_id, rows });
+    return rows;
+  },
+
+  /** Drop the memoised vector set. Exposed for tests and for manual refresh. */
+  invalidateCache: invalidate,
+
+  /**
    * List embeddings of a specific kind for a campaign.
    */
   async listForCampaignByKind(
@@ -103,6 +149,7 @@ export const embeddingsRepo = {
       created_turn: input.created_turn,
     };
     await vdb.embeddings.put(row);
+    invalidate(input.campaign_id);
   },
 
   async bulkUpsert(inputs: EmbeddingUpsert[]): Promise<void> {
@@ -123,6 +170,7 @@ export const embeddingsRepo = {
       created_turn: input.created_turn,
     }));
     await vdb.embeddings.bulkPut(rows);
+    invalidate(inputs[0].campaign_id);
   },
 
   async deleteByOwner(owner_kind: EmbeddingOwnerKind, owner_id: string): Promise<void> {
@@ -130,10 +178,61 @@ export const embeddingsRepo = {
       .where('[owner_kind+owner_id]')
       .equals([owner_kind, owner_id])
       .delete();
+    invalidate();
   },
 
   async deleteForCampaign(campaign_id: SaveId): Promise<void> {
     await vdb.embeddings.where('campaign_id').equals(campaign_id).delete();
+    invalidate(campaign_id);
+  },
+
+  /**
+   * Delete rows for a campaign whose owner no longer exists (v1.44).
+   *
+   * `deleteCampaignRows` in the projection wipes and rewrites the tables an
+   * embedding points at, but has never touched `embeddings` — so a row whose
+   * owner_id has gone stays forever and is read on every turn thereafter. The
+   * backfill knows exactly which owners are live, so it is the right place to
+   * call this from.
+   *
+   * `liveOwners` is keyed `kind:owner_id`. Only the kinds present in
+   * `checkedKinds` are considered: a kind the caller did not gather is not
+   * evidence that its owners are gone.
+   */
+  async pruneOrphans(
+    campaign_id: SaveId,
+    liveOwners: Set<string>,
+    checkedKinds: EmbeddingOwnerKind[],
+  ): Promise<number> {
+    if (checkedKinds.length === 0) return 0;
+    const kinds = new Set(checkedKinds);
+    const doomed = await vdb.embeddings
+      .where('campaign_id')
+      .equals(campaign_id)
+      .filter((r) => kinds.has(r.owner_kind) && !liveOwners.has(`${r.owner_kind}:${r.owner_id}`))
+      .primaryKeys();
+    if (doomed.length === 0) return 0;
+    await vdb.embeddings.bulkDelete(doomed as string[]);
+    invalidate(campaign_id);
+    return doomed.length;
+  },
+
+  /**
+   * Delete rows for a campaign embedded under any model but `keepModelId`
+   * (v1.44). After a model swap the backfill re-embeds under the new id; the
+   * old vectors are then unreadable noise that the retrieval path filtered out
+   * in JS on every turn — 236,359 of them on the turn that prompted this.
+   */
+  async pruneStaleModels(campaign_id: SaveId, keepModelId: string): Promise<number> {
+    const doomed = await vdb.embeddings
+      .where('campaign_id')
+      .equals(campaign_id)
+      .filter((r) => r.model_id !== keepModelId)
+      .primaryKeys();
+    if (doomed.length === 0) return 0;
+    await vdb.embeddings.bulkDelete(doomed as string[]);
+    invalidate(campaign_id);
+    return doomed.length;
   },
 
   /**

@@ -150,6 +150,33 @@ function stampOpt<T extends string>(cid: SaveId, id: T | null | undefined): T | 
   if (!id) return null;
   return `${cid}${ID_SEP}${id}` as T;
 }
+
+/**
+ * A stable row id for a table whose legacy blob carries no id of its own
+ * (v1.44).
+ *
+ * `generateUUID()` was fine for a row nothing else points at. It was NOT fine
+ * for `summary_segments` and `world_rules`, because `services/embeddingBackfill`
+ * keys an embedding by (owner_kind, owner_id): absorb runs on every autosave,
+ * wipes those tables, rewrote them under brand-new UUIDs, and the backfill then
+ * embedded them all over again as owners it had never seen. Every autosave
+ * leaked a generation of vectors that nothing ever deleted — 462,367 rows and
+ * 32 seconds a turn by the time it was measured.
+ *
+ * The fix is to derive the id from what actually identifies the row, so a
+ * re-absorb of unchanged content produces the same id and the backfill's hash
+ * check does its job.
+ */
+export function derivedId(cid: SaveId, kind: string, identity: string): string {
+  // FNV-1a, 32-bit. Not a security hash — just a short, stable, synchronous
+  // digest so an id stays a sane length when the identity is a paragraph.
+  let h = 0x811c9dc5;
+  for (let i = 0; i < identity.length; i++) {
+    h ^= identity.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return stamp(cid, `${kind}:${h.toString(36)}-${identity.length}`);
+}
 function stripStamp(cid: SaveId, stamped: string | null | undefined): string {
   if (!stamped) return '';
   const prefix = `${cid}${ID_SEP}`;
@@ -363,7 +390,9 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
 
     if (history.summarySegments?.length) {
       const rows: SummarySegmentRow[] = history.summarySegments.map((s: SummarySegment) => ({
-        id: generateUUID(),
+        // v1.44: a segment is identified by the turn range it covers, which is
+        // stable across re-absorbs. See `derivedId`.
+        id: derivedId(cid, 'seg', `${s.startTurn}-${s.endTurn}`),
         campaign_id: cid,
         start_turn: s.startTurn,
         end_turn: s.endTurn,
@@ -549,7 +578,9 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
       if (nodeRows.length) await vdb.locations.bulkPut(nodeRows);
 
       const edgeRows: LocationEdgeRow[] = (lg.edges ?? []).map((e: LocationEdge) => ({
-        id: generateUUID(),
+        // v1.44: an edge is its endpoints. Not embedded, but absorb should be
+        // idempotent for the same reason everywhere it can be.
+        id: derivedId(cid, 'edge', `${e.from}->${e.to}`),
         campaign_id: cid,
         from_id: stamp(cid, e.from),
         to_id: stamp(cid, e.to),
@@ -921,7 +952,9 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
 
     if (world.worldRules?.length) {
       const rows: WorldRuleRow[] = world.worldRules.map((rule) => ({
-        id: generateUUID(),
+        // v1.44: a rule IS its text — that is what gets embedded and what the
+        // backfill hashes. See `derivedId`.
+        id: derivedId(cid, 'rule', rule),
         campaign_id: cid,
         rule,
         source: 'gameplay',                 // origin not preserved in legacy; default to gameplay

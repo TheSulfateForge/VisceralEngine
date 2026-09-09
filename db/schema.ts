@@ -670,6 +670,17 @@ export type EmbeddingOwnerKind =
   | 'world_rule'
   | 'message';
 
+/**
+ * The model id the v4 prune treats as current.
+ *
+ * Duplicated from `services/embeddingService.DEFAULT_EMBEDDING_MODEL` on
+ * purpose: this module is imported by every repo, and it must not pull the
+ * embedding service — and everything that lazily reaches for — into that
+ * graph just to name a string. `tests/v144EmbeddingLeak.test.ts` pins the two
+ * together so they cannot drift apart silently.
+ */
+export const EMBEDDING_MODEL_FOR_PRUNE = 'Xenova/bge-small-en-v1.5';
+
 export interface EmbeddingRow {
   id: string;
   campaign_id: SaveId;
@@ -883,8 +894,93 @@ export class VisceralDB extends Dexie {
     this.version(3).stores({
       pending_montage: '&campaign_id',
     });
+
+    // ─── v4 ─────────────────────────────────────────────────────────────
+    // v1.44. Adds `[campaign_id+model_id]` to `embeddings`, and prunes the
+    // rows that index exists to stop us reading.
+    //
+    // The measurement that forced this — one real turn's [PROMPT PROFILE]:
+    //
+    //   total=34717ms · hybridContext=34392ms(99%)
+    //   embed:loadRows=32077ms(92%) [462367 rows read from IndexedDB]
+    //   embed:modelFilter: 236359 row(s) dropped as stale-model
+    //
+    // 92% of a 34.7-second prompt build spent reading embedding rows, half of
+    // which were then discarded in JS. Those rows were leaked, not authored:
+    //
+    //   1. `absorbGameSave` runs on EVERY autosave and minted fresh
+    //      `generateUUID()` ids for `summary_segments` and `world_rules`.
+    //   2. `deleteCampaignRows` wipes those tables but NOT `embeddings`.
+    //   3. `kickBackfill` then saw owner_ids it had never embedded and wrote
+    //      a new embedding row for each.
+    //
+    // So every autosave orphaned one generation of vectors, permanently, in
+    // a table nothing ever pruned — and `buildHybridContext` read all of
+    // them on every turn. v1.44 closes the leak at each of those three
+    // points; this upgrade reclaims what has already accumulated.
+    //
+    // Deleting here is safe in a way deleting almost anything else would not
+    // be: an embedding is derived data. `backfillEmbeddings` regenerates any
+    // row that still has a live owner, in the background, idempotently. The
+    // cost of over-deleting is a re-embed. The cost of under-deleting is the
+    // 32 seconds above, on every turn, forever.
+    this.version(4).stores({
+      embeddings:
+        '&id, campaign_id, [campaign_id+owner_kind], [campaign_id+model_id], [owner_kind+owner_id], model_id, text_hash',
+    }).upgrade(async (tx) => {
+      const table = tx.table('embeddings');
+      const before = await table.count();
+
+      // ── Stale-model rows go first, by index rather than by scan. ──
+      // Which model is current is decided from the data, not hardcoded: the
+      // default model if it is present at all, otherwise whichever model
+      // holds the most rows. A campaign embedded under a deliberately
+      // overridden model therefore keeps its vectors instead of being
+      // silently re-embedded.
+      const byModel = new Map<string, number>();
+      await table.each((r: EmbeddingRow) => {
+        byModel.set(r.model_id, (byModel.get(r.model_id) ?? 0) + 1);
+      });
+      let staleDeleted = 0;
+      if (byModel.size > 1) {
+        const keep = byModel.has(EMBEDDING_MODEL_FOR_PRUNE)
+          ? EMBEDDING_MODEL_FOR_PRUNE
+          : [...byModel.entries()].sort((a, b) => b[1] - a[1])[0][0];
+        const dead = [...byModel.keys()].filter((m) => m !== keep);
+        staleDeleted = await table.where('model_id').anyOf(dead).delete();
+      }
+
+      // ── Orphans: rows whose owner no longer exists. ──
+      // Checked per kind against the table that owns it. A kind with no
+      // owner table listed here is left alone rather than guessed at.
+      const OWNER_TABLES: Partial<Record<EmbeddingOwnerKind, string>> = {
+        memory: 'memories',
+        lore: 'lore',
+        entity: 'entities',
+        summary_segment: 'summary_segments',
+        location: 'locations',
+        world_rule: 'world_rules',
+      };
+      const liveIds = new Map<string, Set<string>>();
+      for (const [kind, tableName] of Object.entries(OWNER_TABLES)) {
+        const keys = (await tx.table(tableName!).toCollection().primaryKeys()) as string[];
+        liveIds.set(kind, new Set(keys));
+      }
+      const orphanDeleted = await table
+        .filter((r: EmbeddingRow) => {
+          const known = liveIds.get(r.owner_kind);
+          return known ? !known.has(r.owner_id) : false;
+        })
+        .delete();
+
+      console.info(
+        `[db v4] embeddings pruned: ${before} → ${before - staleDeleted - orphanDeleted} `
+        + `(${staleDeleted} stale-model, ${orphanDeleted} orphaned).`
+      );
+    });
   }
 }
+
 
 export const vdb = new VisceralDB();
 

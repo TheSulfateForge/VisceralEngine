@@ -164,6 +164,37 @@ export async function backfillEmbeddings(
     for (const k of kinds) perKind[k] = { kind: k, done: 0, total: 0, skippedByHash: 0, errors: [] };
 
     const rowsByKind = await gatherRows(campaignId, kinds);
+
+    // ── v1.44: collect the garbage before adding to it. ──
+    // Absorb wipes and rewrites the owner tables on every autosave but has
+    // never touched `embeddings`, so a row whose owner is gone stayed forever
+    // and was read back on every turn. This is the only place that knows which
+    // owners are live, so it is where the sweep belongs. Both calls are no-ops
+    // once the DB is clean, and only look at the kinds actually gathered.
+    const liveOwners = new Set<string>();
+    for (const group of rowsByKind) {
+      for (const r of group.rows) liveOwners.add(`${group.kind}:${r.id}`);
+    }
+    const gatheredKinds = rowsByKind.map((g) => g.kind);
+    try {
+      const staleDropped = await embeddingsRepo.pruneStaleModels(campaignId, modelId);
+      const orphansDropped = await embeddingsRepo.pruneOrphans(
+        campaignId,
+        liveOwners,
+        gatheredKinds,
+      );
+      if (staleDropped || orphansDropped) {
+        console.info(
+          `[embedding backfill] pruned ${orphansDropped} orphaned and `
+          + `${staleDropped} stale-model row(s) before embedding.`
+        );
+      }
+    } catch (err) {
+      // A failed sweep must never stop the backfill — the vectors are what
+      // the turn actually needs.
+      console.warn('[embedding backfill] prune failed:', err);
+    }
+
     const existing = await embeddingsRepo.listForCampaign(campaignId);
     const existingByOwner = new Map<string, typeof existing[number]>();
     for (const e of existing) {
