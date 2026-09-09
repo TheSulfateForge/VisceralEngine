@@ -760,6 +760,43 @@ weight settling, and warmth radiating while nobody does anything.`,
      * personality adjectives plus the last narrative and it drifted toward
      * whichever position had been argued most recently.
      */
+    /**
+     * v1.42 — the scene has run out of room.
+     *
+     * The self-repetition guard (v1.30) catches a repeat AFTER it is written and
+     * re-rolls. That works for an accidental echo. It cannot work when the
+     * underlying cause is that the scene itself has stopped producing new
+     * material: in the 2026-09-09 save the location had not changed in 49 turns,
+     * tension sat at 10, and three of fifteen repetition re-rolls came back no
+     * better than the turn they replaced.
+     *
+     * This fires before the turn instead of after it, and asks for the one thing
+     * a resample cannot produce — a different scene.
+     */
+    SCENE_EXHAUSTED: `[SYSTEM REMINDER: THIS SCENE HAS RUN ITS COURSE — v1.42]
+See the [SCENE STATIC] line below. The location has not changed in a long time
+and the beats are starting to repeat, which means the material this scene had in
+it has been spent.
+
+Do not solve this by describing the same room in fresh words. Re-describing the
+light, the quiet, the warmth or the weight of a hand is what a scene does when it
+has nothing left to do, and the player can tell.
+
+END THE BEAT. Pick whichever of these the fiction actually supports:
+- Someone leaves, or everyone moves — another room, outside, a different part of
+  the building. Report it in \`location_update\`; a move you narrate but do not
+  report leaves the engine believing you never left.
+- Time moves. Hours pass, the meal ends, they sleep, morning comes.
+- Something arrives from outside the room: a caller, a message, a noise, a
+  consequence of something set up earlier.
+- Someone decides. A question that has been circling gets answered and the
+  answer changes what happens next.
+
+The player's own input still leads. If they are clearly staying put and talking,
+you may stay — but then something in the room must CHANGE, and the change must
+be concrete enough to name. A scene is allowed to end. Ending one is not a
+failure of nerve; leaving it running on empty is.`,
+
     NPC_POSITION: `[SYSTEM REMINDER: NPC POSITIONS ARE ON THE RECORD — v1.37]
 The [NPC POSITIONS] block below lists what named NPCs have already claimed,
 argued for, refused, or promised in this dispute, with the turn each was said.
@@ -1081,11 +1118,26 @@ const ENTITY_DENSITY_REFIRE_INTERVAL = 5;
  */
 export const CONTACT_STALL_TURNS = 3;
 
+/**
+ * v1.42 — consecutive turns in one location before the scene is treated as
+ * exhausted.
+ *
+ * The 2026-09-09 save sat at "Verancourt Estate Parlor" for FORTY-NINE
+ * consecutive turns at tension 10, and the self-repetition guard fired fifteen
+ * times, three of which came back "Resample was no better (96%) — keeping the
+ * original turn". A resample cannot fix that: it re-rolls the same prompt, and
+ * the prompt describes a scene where nothing has changed for an hour of play.
+ *
+ * Twelve is deliberately generous. A real conversation can run a long time; what
+ * cannot run forever is a conversation in a room nobody ever leaves.
+ */
+export const SCENE_EXHAUSTED_TURNS = 12;
+
 export type ReminderKey =
     // v1.37: PHYSICAL_RECIPROCATION → PHYSICAL_ESCALATION (refusal-armed), and
     // NPC_INITIATIVE / NPC_POSITION are new.
     | 'DREAM_PROTOCOL' | 'PLAYER_CORRECTION_PROTOCOL' | 'PHYSICAL_ESCALATION'
-    | 'NPC_INITIATIVE' | 'NPC_POSITION'
+    | 'NPC_INITIATIVE' | 'NPC_POSITION' | 'SCENE_EXHAUSTED'
     | 'CONDITION_AUDIT' | 'LOGISTICS_CHECK' | 'LANGUAGES_FOREIGN' | 'HEALING_TIMELINE'
     | 'BARGAIN_CHECK' | 'ENTITY_DENSITY' | 'HOSTILE_NPC_PROTOCOL' | 'ALLY_STRAIN_PROTOCOL'
     | 'CANONICAL_VOICE_LOCK' | 'VISCERAL_RENDER' | 'NPC_RHETORIC'
@@ -1160,6 +1212,14 @@ export interface ReminderContext {
      * finding, already human-readable.
      */
     restatementIssues: string[];
+
+    /**
+     * v1.42 — consecutive turns this scene has spent in one location without the
+     * location changing. Arms SCENE_EXHAUSTED past SCENE_EXHAUSTED_TURNS.
+     */
+    sceneStaticTurns: number;
+    /** v1.42 — the self-repetition guard fired on the previous turn. */
+    repeatedLastTurn: boolean;
 
     /**
      * v1.37 — reminder keys countermanded by a standing player OOC directive.
@@ -1418,6 +1478,20 @@ export const selectSectionReminders = (ctx: ReminderContext): ReminderSelection 
         );
     }
 
+    // v1.42 — the scene has stopped producing new material. This heads the band
+    // with the rhetoric guard: a stalled scene is the single largest cause of the
+    // repetition the v1.30 guard spends re-rolls on, and this is the only rule
+    // that addresses the cause rather than the symptom.
+    if (ctx.sceneStaticTurns >= SCENE_EXHAUSTED_TURNS || ctx.repeatedLastTurn) {
+        const why = ctx.repeatedLastTurn
+            ? `the previous turn repeated itself and had to be re-rolled`
+            : `no location change in ${ctx.sceneStaticTurns} consecutive turns`;
+        offer(
+            'SCENE_EXHAUSTED',
+            `${REMINDERS.SCENE_EXHAUSTED}\n\n[SCENE STATIC] ${why}.`,
+        );
+    }
+
     // v1.37 — an argument is on the record. Keep the NPCs' stated positions
     // stable and forbid re-issuing the player's proposal as their own idea.
     if (ctx.npcPositionsBlock.trim().length > 0) {
@@ -1616,6 +1690,8 @@ export const makeReminderContext = (partial: Partial<ReminderContext> = {}): Rem
     inventedTriggerNames: [],
     inventedTriggerDirection: '',
     restatementIssues: [],
+    sceneStaticTurns: 0,
+    repeatedLastTurn: false,
     suppressedReminders: [],
     intimacyInScene: false,
     violenceInScene: false,

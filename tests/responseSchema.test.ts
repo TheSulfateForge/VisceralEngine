@@ -27,11 +27,24 @@ describe('getResponseSchema — scene-mode gating (review item 3)', () => {
     expect(s.properties.location_update).toBeDefined();
   });
 
-  it('SOCIAL drops combat, montage AND location_update', () => {
+  it('SOCIAL drops combat and montage but KEEPS location_update (v1.42)', () => {
+    // v1.42 reverses the location_update half of this. SOCIAL was excluded on
+    // the reasoning that a conversation is not travel, but people walk to the
+    // next room mid-conversation and SOCIAL is the mode this engine spends most
+    // of its time in. Measured on the 2026-09-09 save: 47 of 65 turns ran
+    // SOCIAL, the location sat unchanged for 49 consecutive turns, and a
+    // standing player directive to move the scene to the garden was still
+    // unfulfilled fourteen turns later — the model had no field in which to say
+    // the scene had moved.
     const s: any = getResponseSchema('SOCIAL');
     expect(s.properties.combat_context).toBeUndefined();
-    expect(s.properties.location_update).toBeUndefined();
     expect(s.properties.montage_block).toBeUndefined();
+    expect(s.properties.location_update).toBeDefined();
+  });
+
+  it('COMBAT still drops location_update — nobody relocates mid-exchange', () => {
+    const s: any = getResponseSchema('COMBAT');
+    expect(s.properties.location_update).toBeUndefined();
   });
 
   it('COMBAT keeps combat_context, drops montage', () => {

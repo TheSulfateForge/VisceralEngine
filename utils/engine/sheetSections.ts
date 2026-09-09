@@ -216,9 +216,13 @@ export const capSheetBySections = (
                 omitted.push(s.label);
             }
         }
-        // Never return an empty record: if even the first section overflows,
-        // keep it and accept the overrun. One section present in full beats a
-        // budget met with nothing in it.
+        // Never return an empty record. v1.42: but do not blow the budget
+        // either — the original "keep it whole and accept the overrun" rule
+        // meant a record whose Actual Core alone exceeded the cap rendered at
+        // 2-3x it. Measured on the 2026-09-09 roster: Ophelia Slattery returned
+        // 1291 chars against a 460 cap, Mirabel Calder 1019. The section is
+        // still emitted, trimmed at a sentence boundary and MARKED, so it is
+        // never mistaken for the whole of that section.
         if (kept.length === 0 && order.length > 0) kept.push(order[0]);
         return { kept, omitted };
     };
@@ -235,8 +239,27 @@ export const capSheetBySections = (
 
     // Re-emit in document order so the record still reads as the author wrote it.
     const inOrder = parsed.sections.filter(s => kept.includes(s));
-    const rendered = inOrder.map(s => `${s.label}: ${s.body}`).join(' ');
     const note = omitted.length > 0 ? `${NOTE_HEAD}${omitted.join(', ')}]` : '';
+
+    // v1.42: a single section longer than the whole budget is trimmed rather
+    // than emitted at multiples of it — and said to be trimmed, which is the
+    // part that matters. A partial section the model believes is whole is the
+    // failure this module exists to prevent.
+    if (inOrder.length === 1) {
+        const only = inOrder[0];
+        const mark = ` [SECTION TRIMMED — this is the opening of "${only.label}", not the whole of it]`;
+        // Budget the marker and the omission note explicitly; guessing at their
+        // length is how the previous version came back over its own cap.
+        const room = Math.max(120, cap - only.label.length - 2 - mark.length - note.length);
+        if (only.body.length > room) {
+            const window = only.body.slice(0, room);
+            const stop = Math.max(window.lastIndexOf('. '), window.lastIndexOf('! '), window.lastIndexOf('? '));
+            const cut = stop > room * 0.5 ? window.slice(0, stop + 1) : window.slice(0, window.lastIndexOf(' '));
+            return `${only.label}: ${cut.trim()}${mark}${note}`;
+        }
+    }
+
+    const rendered = inOrder.map(s => `${s.label}: ${s.body}`).join(' ');
     return `${rendered}${note}`;
 };
 

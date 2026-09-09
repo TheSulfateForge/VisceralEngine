@@ -37,6 +37,7 @@ import {
   RAGResult,
 } from './ragEngine';
 import { embeddingService } from '../services/embeddingService';
+import { profileSpan, profileNote } from './promptProfiler';
 import { embeddingsRepo } from '../db/repos/embeddings';
 import { EmbeddingRow, EmbeddingOwnerKind } from '../db/schema';
 import {
@@ -168,10 +169,18 @@ export async function buildHybridContext(
   let inputVector: Float32Array | null = null;
   let tailVector: Float32Array | null = null;
   try {
-    [inputVector, tailVector] = await Promise.all([
-      userInput.trim() ? embeddingService.encodeQuery(userInput) : Promise.resolve(null),
-      tail ? embeddingService.encodeQuery(tail) : Promise.resolve(null),
-    ]);
+    // v1.43: timed. Two transformers.js inferences per turn, and `encode()`
+    // silently falls back to IN-THREAD execution whenever the Worker is
+    // unavailable or has failed once — which is the difference between a few
+    // milliseconds and several seconds, on the UI thread.
+    [inputVector, tailVector] = await profileSpan(
+      'embed:encodeQuery',
+      () => Promise.all([
+        userInput.trim() ? embeddingService.encodeQuery(userInput) : Promise.resolve(null),
+        tail ? embeddingService.encodeQuery(tail) : Promise.resolve(null),
+      ]),
+      ([a, b]) => `${[a, b].filter(Boolean).length} vector(s)`,
+    );
   } catch (err) {
     console.warn('[hybridRagEngine] query encoding failed, falling back to lexical:', err);
     inputVector = null;
@@ -184,8 +193,19 @@ export async function buildHybridContext(
   //    in a different embedding space and comparing against them is noise —
   //    those items degrade gracefully to lexical-only instead.
   const modelId = embeddingService.getModelId();
-  const embeddings = (await embeddingsRepo.listForCampaign(campaignId))
-    .filter((r) => r.model_id === modelId);
+  // v1.43: timed and counted. This reads EVERY embedding row for the campaign
+  // out of IndexedDB on EVERY turn and filters by model in JS — so its cost
+  // grows with the campaign, not with what the turn needs, which is exactly the
+  // shape of a fixed per-turn cost that does not track prompt size.
+  const allRows = await profileSpan(
+    'embed:loadRows',
+    () => embeddingsRepo.listForCampaign(campaignId),
+    (rows) => `${rows.length} rows read from IndexedDB`,
+  );
+  const embeddings = allRows.filter((r) => r.model_id === modelId);
+  if (allRows.length !== embeddings.length) {
+    profileNote('embed:modelFilter', `${allRows.length - embeddings.length} row(s) dropped as stale-model`);
+  }
 
   return { campaignId, embeddings, inputVector, tailVector, queryText };
 }

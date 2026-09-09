@@ -4,6 +4,7 @@ import {
     updateSceneLedger,
     ingestPlayerAssertions,
     ingestNpcPositions,
+    expireSceneScopedDirectives,
     buildTurnDigest,
 } from '../../engine/sceneContinuity';
 import { generateUUID } from '../../../idUtils';
@@ -133,6 +134,28 @@ export const sceneContinuityStep: PipelineStep = {
                 message: `[NPC POSITION] ${line}`,
                 type: 'info'
             });
+        }
+
+        // --- 2d. Scene-scoped directive expiry (v1.42) -----------------------
+        // "Narrate the scene as taking place in the garden of the Verancourt
+        // Estate" is an instruction about ONE scene. Stored like every other
+        // directive it became binding on every turn for the rest of the
+        // campaign — in the 2026-09-09 save it was issued on turn 53 and was
+        // still standing at 67. Scene-scoped directives now end with the scene,
+        // on the same signal the ledger resets on.
+        const { directives: survivingDirectives, expired } = expireSceneScopedDirectives(
+            ctx.previousWorld.oocDirectives,
+            didSceneChange,
+        );
+        if (expired.length > 0) {
+            ctx.worldUpdate.oocDirectives = survivingDirectives;
+            for (const text of expired) {
+                ctx.debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    message: `[OOC DIRECTIVE] Expired with the scene — was scoped to the previous scene, not standing: "${text}"`,
+                    type: 'info'
+                });
+            }
         }
 
         // --- 3. Turn digest -------------------------------------------------

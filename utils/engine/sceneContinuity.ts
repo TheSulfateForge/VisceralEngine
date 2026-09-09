@@ -273,6 +273,54 @@ export const OOC_DIRECTIVE_MAX = 5;
 // Deliberately narrow: only reminders that DAMPEN are suppressible, only on an
 // unambiguous phrasing, and the suppression is logged.
 
+// ---------------------------------------------------------------------------
+// v1.42 — DIRECTIVE SCOPE
+// ---------------------------------------------------------------------------
+// A directive is stored forever and injected on every turn. That is right for
+// "do not use garden metaphors" and wrong for "narrate the scene as taking
+// place in the garden of the Verancourt Estate", which is an instruction about
+// ONE scene.
+//
+// From the 2026-09-09 save: that exact directive was issued on turn 53 and was
+// still standing and binding at turn 67, in a different beat, alongside a
+// separate turn-29 directive about pacing. Neither had any way to expire.
+//
+// A scene-scoped directive now expires when the scene changes — the same
+// `sceneChanged` signal the scene ledger already resets on.
+
+/** Directives that describe THIS scene rather than how to narrate in general. */
+const SCENE_SCOPED_RE =
+    /\b(?:this scene|the scene|current scene|right now|this turn|this beat|for now)\b|\bnarrate\b[^.]{0,40}\b(?:as taking place|as happening|set)\b|\b(?:move|relocate|shift)\b[^.]{0,30}\b(?:to|into)\b/i;
+
+/**
+ * Is this directive about one scene rather than the whole campaign?
+ *
+ * Conservative: an unrecognised directive stays permanent, which is the
+ * pre-v1.42 behaviour. Wrongly expiring a standing rule is worse than keeping a
+ * scene note one beat too long, because the player watched the standing rule
+ * being ignored for a whole session the last time that happened.
+ */
+export const isSceneScopedDirective = (text: string): boolean =>
+    SCENE_SCOPED_RE.test((text ?? '').trim());
+
+/**
+ * Drop scene-scoped directives when the scene changes.
+ *
+ * Returns the surviving list and the texts that expired, so the debug log can
+ * say what stopped applying and why.
+ */
+export const expireSceneScopedDirectives = (
+    directives: OocDirective[] | undefined,
+    sceneDidChange: boolean,
+): { directives: OocDirective[]; expired: string[] } => {
+    const current = directives ?? [];
+    if (!sceneDidChange || current.length === 0) return { directives: current, expired: [] };
+
+    const kept = current.filter(d => !d.sceneScoped);
+    const expired = current.filter(d => d.sceneScoped).map(d => d.text);
+    return { directives: kept, expired };
+};
+
 /** Reminder keys a standing directive is allowed to countermand. */
 const SUPPRESSIBLE: Record<string, RegExp[]> = {
     // The v1.29 dampeners. A player asking for escalation, predation, or
@@ -329,11 +377,13 @@ export const ingestOocDirective = (
     }
 
     const suppresses = directiveSuppressions(text);
+    const sceneScoped = isSceneScopedDirective(text);
     current.push({
         id: idFactory(),
         text,
         turn,
         ...(suppresses.length > 0 ? { suppresses } : {}),
+        ...(sceneScoped ? { sceneScoped: true } : {}),
     });
     const capped = current.length > OOC_DIRECTIVE_MAX
         ? current.slice(current.length - OOC_DIRECTIVE_MAX)
@@ -355,7 +405,9 @@ export const suppressedReminderKeys = (directives: OocDirective[] | undefined): 
  */
 export const buildOocDirectivesBlock = (directives: OocDirective[] | undefined): string => {
     if (!directives || directives.length === 0) return '';
-    const lines = directives.map(d => `- ${d.text}`).join('\n');
+    const lines = directives
+        .map(d => `- ${d.text}${d.sceneScoped ? '  (THIS SCENE — expires when the scene changes)' : ''}`)
+        .join('\n');
     return `[STANDING DIRECTIVES — from the player, binding, HIGHEST PRECEDENCE]
 The player gave these instructions about HOW to narrate, out of character.
 They apply to every turn from now on, not just the turn they were given.

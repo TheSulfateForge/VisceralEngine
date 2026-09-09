@@ -559,7 +559,24 @@ export const stripSchemaDescriptions = (
 export type SchemaMode = 'NARRATIVE' | 'SOCIAL' | 'TENSION' | 'COMBAT' | 'MONTAGE';
 
 const COMBAT_MODES: ReadonlySet<SchemaMode> = new Set(['COMBAT', 'TENSION']);
-const TRAVEL_MODES: ReadonlySet<SchemaMode> = new Set(['NARRATIVE', 'TENSION']);
+/**
+ * Modes in which the model may report a change of place.
+ *
+ * v1.42: SOCIAL ADDED. It was excluded on the reasoning that a conversation is
+ * not travel — but people walk to the next room mid-conversation, and SOCIAL is
+ * the mode this engine spends most of its time in. Measured on the 2026-09-09
+ * save: 47 of 65 turns ran SOCIAL, the scene sat at "Verancourt Estate Parlor"
+ * for 49 consecutive turns, and a standing player directive issued on turn 53 —
+ * "Narrate the scene as taking place in the garden or backyard of the Verancourt
+ * Estate" — was still unfulfilled at turn 67 with `location` unchanged.
+ *
+ * The model had no field in which to say the scene had moved. It could describe
+ * a garden all it liked; the engine's location, the [SINCE LAST TURN] diff, and
+ * the static-beat counters would all still read "Parlor". A scene that cannot
+ * report movement is a scene that cannot leave a room, and a location frozen for
+ * 49 turns is the exact condition the self-repetition guard exists to catch.
+ */
+const TRAVEL_MODES: ReadonlySet<SchemaMode> = new Set(['NARRATIVE', 'TENSION', 'SOCIAL']);
 
 /**
  * Returns a compacted, scene-mode-aware clone of RESPONSE_SCHEMA to send to the

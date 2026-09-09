@@ -1093,6 +1093,13 @@ export interface OocDirective {
      * back as suppressing nothing.
      */
     suppresses?: string[];
+    /**
+     * v1.42: this directive describes ONE scene ("narrate the scene as taking
+     * place in the garden") rather than how to narrate in general, and is
+     * dropped when the scene changes. Absent on directives stored before v1.42,
+     * which read back as permanent — the pre-v1.42 behaviour.
+     */
+    sceneScoped?: boolean;
 }
 
 /** v1.37: what the model reports about an NPC's stance this turn. */

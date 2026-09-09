@@ -139,6 +139,38 @@ export interface RAGResult {
  *   2. Role tokens of length ≥ 4 — but only when exactly one entity has
  *      that role (otherwise "I look at the guard" pulls in every guard).
  */
+/**
+ * v1.42 — role words that ordinary prose uses freely, and which therefore carry
+ * no evidence that the player meant a particular character.
+ *
+ * "house" alone matched 21 of 51 entities in the 2026-09-09 save because the
+ * player mentioned his own home. These are structural nouns of a noble setting,
+ * kinship terms, and generic occupations — the parts of a role that are shared
+ * vocabulary rather than an identifier.
+ */
+const ROLE_STOPWORDS = new Set([
+  'house', 'houses', 'lord', 'lady', 'lords', 'ladies', 'heir', 'heiress',
+  'noble', 'nobles', 'head', 'sons', 'daughter', 'daughters', 'brother',
+  'sister', 'mother', 'father', 'wife', 'husband', 'child', 'children',
+  'eldest', 'middle', 'youngest', 'elder', 'younger', 'second', 'third',
+  'first', 'formal', 'apparent', 'line', 'name', 'names', 'arms', 'clause',
+  'hall', 'court', 'estate', 'home', 'room', 'guard', 'guards', 'master',
+  'mistress', 'companion', 'servant', 'staff', 'member', 'keeper', 'holder',
+  'that', 'this', 'with', 'from', 'into', 'over', 'under', 'their', 'them',
+  'known', 'still', 'later', 'same', 'year', 'born', 'twins', 'twin',
+  'crown', 'king', 'queen', 'prince', 'princess', 'duke', 'duchess', 'count',
+  'countess', 'baron', 'baroness', 'matriarch', 'patriarch',
+]);
+
+/** Distinct qualifying role tokens needed before a role match counts. */
+const ROLE_MIN_TOKEN_HITS = 2;
+
+/**
+ * v1.42 — hard ceiling on force-active entities from one input. A backstop, not
+ * the primary defence: the gates above should keep ordinary turns well under it.
+ */
+export const ALIAS_MATCH_LIMIT = 8;
+
 export function findAliasMatchedEntities(
   userInput: string,
   recentUserHistory: ChatMessage[],
@@ -154,6 +186,8 @@ export function findAliasMatchedEntities(
   ).toLowerCase();
 
   const matched = new Map<string, KnownEntity>();
+  /** v1.42: ids matched by NAME, which outrank role-inferred ones at the cap. */
+  const nameTokenMatched = new Set<string>();
 
   // 1. Name token match
   for (const e of entities) {
@@ -164,12 +198,35 @@ export function findAliasMatchedEntities(
       const safe = tok.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       if (new RegExp(`\\b${safe}\\b`).test(lower)) {
         matched.set(e.id, e);
+        nameTokenMatched.add(e.id);
         break;
       }
     }
   }
 
   // 2. Unique-role match
+  //
+  // v1.42 — THIS BRANCH WAS FLOODING THE PROMPT.
+  //
+  // It matched ANY single token of >= 4 characters from a unique role. Roles in
+  // a noble-house setting read "matriarch of house calder", "eldest son of
+  // house verancourt", "king of house drevast", "licensed dancer and companion
+  // at a regulated pleasure house" — so the word "house" is in most of them.
+  //
+  // Measured on the 2026-09-09 save (roster of 51): the player writing
+  //
+  //     "Inside my home Aldwyn House, on my couch inside my common room"
+  //
+  // matched TWENTY-ONE entities on the single token "house" — every Blackmoor,
+  // Verancourt, Calder, Drevast and Kamenova, the King and Queen, three
+  // princesses, and a pleasure-house dancer. An alias match is force-active, so
+  // each rendered its FULL canonical record (~2000 chars) into a quiet scene
+  // containing two people. The entities block ran to a median of 23,804 chars
+  // and a maximum of 58,886, and 61% of turns carried more than 20,000.
+  //
+  // Two changes. Structural role words no longer count on their own, and a
+  // single distinctive token is no longer enough — a role match now needs a
+  // multi-word phrase hit, or two distinct qualifying tokens.
   const roleGroups = new Map<string, KnownEntity[]>();
   for (const e of entities) {
     if (!e.role) continue;
@@ -178,19 +235,51 @@ export function findAliasMatchedEntities(
     existing.push(e);
     roleGroups.set(r, existing);
   }
+
   for (const [role, group] of roleGroups) {
     if (group.length !== 1) continue;
-    const tokens = role.split(/\s+/).filter(t => t.length >= 4);
+
+    // The whole role as a phrase, or any two-word window of it, is a strong
+    // signal: "head of house calder" in the input really does mean that person.
+    const words = role.split(/[\s,;/()]+/).filter(Boolean);
+    const phrases: string[] = [];
+    if (words.length >= 2) {
+      for (let i = 0; i < words.length - 1; i++) {
+        const pair = `${words[i]} ${words[i + 1]}`;
+        if (pair.length >= 8 && !ROLE_STOPWORDS.has(words[i]) && !ROLE_STOPWORDS.has(words[i + 1])) {
+          phrases.push(pair);
+        }
+      }
+    }
+    const phraseHit = phrases.some(ph => lower.includes(ph));
+
+    // Otherwise: at least two DISTINCT qualifying tokens. A qualifying token is
+    // >= 4 chars and not a structural noun that ordinary prose uses freely.
+    const tokens = [...new Set(
+      words.filter(t => t.length >= 4 && !ROLE_STOPWORDS.has(t)),
+    )];
+    let tokenHits = 0;
     for (const tok of tokens) {
       const safe = tok.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      if (new RegExp(`\\b${safe}\\b`).test(lower)) {
-        matched.set(group[0].id, group[0]);
-        break;
-      }
+      if (new RegExp(`\\b${safe}\\b`).test(lower)) tokenHits++;
+      if (tokenHits >= ROLE_MIN_TOKEN_HITS) break;
+    }
+
+    if (phraseHit || tokenHits >= ROLE_MIN_TOKEN_HITS) {
+      matched.set(group[0].id, group[0]);
     }
   }
 
-  return [...matched.values()];
+  // v1.42: a hard ceiling on how many entities one turn can force-active.
+  // The gates above should make this unreachable in ordinary play; it exists so
+  // that a future over-matching rule degrades into a large prompt rather than an
+  // unusable one. Name-token matches (pass 1) are kept in preference to
+  // role-inferred ones, since the player naming someone is the stronger signal.
+  const all = [...matched.values()];
+  if (all.length <= ALIAS_MATCH_LIMIT) return all;
+  const named = all.filter(e => nameTokenMatched.has(e.id));
+  const inferred = all.filter(e => !nameTokenMatched.has(e.id));
+  return [...named, ...inferred].slice(0, ALIAS_MATCH_LIMIT);
 }
 
 export function retrieveRelevantContext(

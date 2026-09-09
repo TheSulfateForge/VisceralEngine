@@ -43,6 +43,12 @@ import {
     buildSinceLastTurnBlock,
 } from './engine/sceneContinuity';
 import { deriveTimePhase, getAmbientCue } from './engine/timeUtils';
+import {
+    beginPromptProfile,
+    endPromptProfile,
+    formatPromptProfile,
+    type PromptProfile,
+} from './promptProfiler';
 import { db } from '../db';
 
 /**
@@ -88,6 +94,14 @@ export interface PromptResult {
      * word. See `useGeminiClient`.
      */
     oocDirectivesBlock: string;
+    /**
+     * v1.43: where the ~20s of prompt-construction time actually went this turn.
+     * The caller logs it; see utils/promptProfiler for why this is measured in
+     * the app rather than benchmarked in Node.
+     */
+    profile: PromptProfile;
+    /** One-line, cost-ordered rendering of `profile`, ready for the debug log. */
+    profileLine: string;
     /** v1.26: Char count per dynamic block — token-diet instrumentation. */
     blockSizes: Record<string, number>;
     ragDebug: RAGResult['debugInfo'];
@@ -938,6 +952,9 @@ export const constructGeminiPrompt = async (
   modelName: string = 'gemini-3-flash-preview',        // v1.21
   historicalSummary?: string                             // v1.21: Moved from geminiClient
 ): Promise<PromptResult> => {
+  // v1.43: start this turn's build profile. Every phase below is timed.
+  const prof = beginPromptProfile();
+
   // v1.21: Resolve model-specific context limits
   const profile = getContextProfile(modelName);
 
@@ -948,11 +965,15 @@ export const constructGeminiPrompt = async (
   let hybridCtx: HybridContext | null = null;
   if (USE_HYBRID_RAG) {
     try {
-      hybridCtx = await buildHybridContext(
-        AUTOSAVE_ID,
-        userInput,
-        gameHistory.history,
-        profile.ragLookback,
+      hybridCtx = await prof.span(
+        'hybridContext',
+        () => buildHybridContext(
+          AUTOSAVE_ID,
+          userInput,
+          gameHistory.history,
+          profile.ragLookback,
+        ),
+        (ctx) => `${ctx.embeddings.length} usable vectors`,
       );
     } catch (e) {
       console.warn('[promptUtils] hybrid context build failed; falling back to lexical:', e);
@@ -962,7 +983,9 @@ export const constructGeminiPrompt = async (
 
   // 1. RAG Retrieval — use model-adaptive limits and lookback
   const activeThreatNames = (gameWorld.activeThreats || []).map(t => t.name);
-  const { relevantLore, relevantEntities, debugInfo } = hybridCtx
+  const { relevantLore, relevantEntities, debugInfo } = prof.sync(
+    hybridCtx ? 'rag:scoreHybrid' : 'rag:scoreLexical',
+    () => hybridCtx
     ? retrieveRelevantContextHybrid(
         hybridCtx,
         userInput,
@@ -985,17 +1008,19 @@ export const constructGeminiPrompt = async (
         profile.entityLimitOverride, // v1.21: model-adaptive
         profile.ragLookback,         // v1.21: wider lookback for better entity recall
         gameHistory.turnCount,       // v1.22: drives lore freshness boost
-      );
+      ),
+    (r) => `${r.relevantLore.length} lore, ${r.relevantEntities.length} entities from ${(gameWorld.lore ?? []).length}+${(gameWorld.knownEntities ?? []).length}`,
+  );
 
   // 2. Build Context Strings — v1.22: tiered memory injection (pinned + RAG + recent)
-  const memoryContext = buildMemoryContext(
+  const memoryContext = prof.sync('memory:select', () => buildMemoryContext(
     gameWorld.memory,
     userInput,
     gameHistory.history,
     gameHistory.turnCount,
     profile.memoryLimit,
     hybridCtx,
-  );
+  ));
   // ── v1.27: MENTION SENTINEL (zero AI tokens — pure code) ──────────────────
   // The previous model turn may have name-dropped a dormant NPC (world_tick,
   // rumor, offhand line). Hydrate them to full blocks THIS turn so the model
@@ -1147,7 +1172,7 @@ This world is fundamentally: ${gameWorld.worldTags.join(', ')}.
   let worldPrimerBlock = '';
   if (gameHistory.turnCount === 0 && gameWorld.worldSeedId) {
     try {
-      const seed = await db.loadWorldSeed(gameWorld.worldSeedId);
+      const seed = await prof.span('seed:load', () => db.loadWorldSeed(gameWorld.worldSeedId!));
       const brief = buildSeedBrief(seed);
       if (brief) {
         worldPrimerBlock = `[WORLD PRIMER — TURN 0 ONLY]\n${brief}`;
@@ -1202,13 +1227,13 @@ This world is fundamentally: ${gameWorld.worldTags.join(', ')}.
   // covering far more total history when older callbacks are relevant.
   const summarySegments = gameHistory.summarySegments;
   const isLite = (profile.memoryLimit ?? 40) <= 20;  // proxy for "lite" model
-  const summaryBlock = sanitise(buildSegmentedSummaryBlock(
+  const summaryBlock = sanitise(prof.sync('summary:select', () => buildSegmentedSummaryBlock(
       summarySegments,
       historicalSummary ?? gameHistory.lastActiveSummary,
       userInput,
       gameHistory.history,
       isLite ? 0 : 1,  // desktop = 2 older slots, lite = 1
-  ));
+  )));
 
   // 8. Assembly
   // v1.26: STRICT INPUT RULES removed — every rule was already covered by
@@ -1303,10 +1328,15 @@ ${sanitise(conditionLock ? `\n${conditionLock}\n` : '')}
       directives: oocDirectivesBlock.length,  // v1.35
   };
 
+  const builtProfile = prof.finish();
+  endPromptProfile();
+
   return {
       prompt: promptString,
       staticContext,
       oocDirectivesBlock,   // v1.37 — appended to the tail by the caller
+      profile: builtProfile,                          // v1.43
+      profileLine: formatPromptProfile(builtProfile), // v1.43
       blockSizes,
       ragDebug: debugInfo
   };

@@ -592,7 +592,7 @@ export const useGeminiClient = () => {
         // Phase 2: constructGeminiPrompt is async (encodes the query
         // embedding off-thread for hybrid retrieval). Awaits ~5–20ms warm,
         // a few seconds on the very first call while the model loads.
-        const { prompt: contextPrompt, staticContext, oocDirectivesBlock, blockSizes, ragDebug } = await constructGeminiPrompt(
+        const { prompt: contextPrompt, staticContext, oocDirectivesBlock, profileLine, blockSizes, ragDebug } = await constructGeminiPrompt(
             preCallState.gameHistory,
             preCallState.gameWorld,
             preCallState.character,
@@ -814,6 +814,19 @@ export const useGeminiClient = () => {
             restatementIssues: voiceLockFlagged
                 ? (preCallState.gameWorld.voiceLockRestatementIssues ?? [])
                 : [],
+            // v1.42: the scene-exhaustion signal. `staticBeatStreak` already
+            // counts consecutive turns in one location — v1.30 uses it to buy
+            // thinking budget, which helps the model write a DIFFERENT sentence
+            // but does nothing about a scene with no material left. Same
+            // counter, and now it also asks for a different scene.
+            //
+            // Computed rather than read: `staticBeatStreak` is incremented
+            // later in this turn, so reading it here would be one behind. This
+            // is the same arithmetic, evaluated without mutating.
+            sceneStaticTurns: (preCallState.gameWorld.location ?? '') === staticBeatLocation
+                ? staticBeatStreak + 1
+                : 0,
+            repeatedLastTurn: lastTurnRepeated,
             intimacyInScene,                              // v1.33
             violenceInScene,                              // v1.33
             // v1.35: only an ARMED report reaches the reminder. A single marker
@@ -905,6 +918,16 @@ export const useGeminiClient = () => {
                 type: 'info'
             });
         }
+        // v1.43: where the prompt-build time went. Logged here, next to
+        // [SYSTEM REFRESH], so a slow turn and its cause sit together in the
+        // panel — the gap between "Sending Request" and "[THINKING FLOOR]" is
+        // exactly this call, and until now nothing said what filled it.
+        requestLogs.push({
+            timestamp: new Date().toISOString(),
+            message: profileLine,
+            type: 'info'
+        });
+
         // v1.37: make the precedence order observable. From v1.33 the log could
         // answer "which reminders is this game getting?"; it could not answer
         // "and did the player's own instructions come after them?" — which is
