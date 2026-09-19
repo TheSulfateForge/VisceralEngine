@@ -20,6 +20,7 @@
 //                       "nothing changed" case.
 // ============================================================================
 
+import { significantWords } from '../contentValidation';
 import type {
     GameWorld,
     Character,
@@ -73,6 +74,110 @@ export const sceneChanged = (
     return locChanged || modeChanged;
 };
 
+/**
+ * v1.45: how much of a beat must be echoed by the player's own input before the
+ * ledger will accept a beat whose SUBJECT is the player.
+ */
+const PLAYER_BEAT_MIN_WORDS = 2;
+const PLAYER_BEAT_MIN_RATIO = 0.34;
+
+/**
+ * v1.45: when a ledger line looks like the thing the player is doing RIGHT NOW,
+ * it stops being covered ground and drops out of the block for that turn.
+ * Tuned to over-suppress rather than under-suppress: losing one "do not repeat
+ * this" line for a single turn is cheap, and leaving it in is what taught the
+ * engine to swallow the player's own beat.
+ */
+const LEDGER_SUPPRESS_MIN_WORDS = 2;
+const LEDGER_SUPPRESS_MIN_RATIO = 0.2;
+
+/** Significant words shared between two strings, exact match. */
+const sharedWords = (a: string, b: string): { matched: number; ratio: number } => {
+    const wa = significantWords(a);
+    const wb = significantWords(b);
+    if (wa.size === 0) return { matched: 0, ratio: 0 };
+    let matched = 0;
+    for (const w of wa) if (wb.has(w)) matched++;
+    return { matched, ratio: matched / wa.size };
+};
+
+/**
+ * Same, but matching on a 4-character prefix — the same trick voiceLockCheck
+ * uses to make "warm" match "warmth".
+ *
+ * Used only for ledger SUPPRESSION, where recall is what matters: a ledger line
+ * and the player's own phrasing of the same act rarely share whole words
+ * ("formally proposed marriage" against "will you marry me"), and the cost of a
+ * miss is the bug this version exists to fix. The engagement detector in
+ * playerActionCheck.ts deliberately stays on exact matching, because its
+ * thresholds are calibrated against measured turns.
+ */
+const PREFIX_MATCH_LEN = 4;
+const sharedWordsLoose = (a: string, b: string): { matched: number; ratio: number } => {
+    const wa = [...significantWords(a)];
+    const wb = [...significantWords(b)];
+    if (wa.length === 0) return { matched: 0, ratio: 0 };
+    const prefixes = new Set(wb.map(w => w.slice(0, PREFIX_MATCH_LEN)));
+    let matched = 0;
+    for (const w of wa) if (prefixes.has(w.slice(0, PREFIX_MATCH_LEN))) matched++;
+    return { matched, ratio: matched / wa.length };
+};
+
+/**
+ * True when a beat's grammatical subject is the player.
+ *
+ * Deliberately shallow — the clause forms the model actually emits are
+ * "Ryan <verb>ed ..." and "The player <verb>ed ...", both of which put the name
+ * at the front.
+ */
+const beatIsAboutPlayer = (beat: string, playerName: string | undefined): boolean => {
+    const head = beat.trim().slice(0, 48).toLowerCase();
+    if (/^(the\s+)?player\b/.test(head)) return true;
+    const name = (playerName ?? '').trim().toLowerCase();
+    if (!name) return false;
+    const first = name.split(/\s+/)[0];
+    return head.startsWith(name) || (first.length > 2 && head.startsWith(first));
+};
+
+/**
+ * v1.45: THE LEDGER WAS RECORDING BEATS THE PLAYER HAD NOT PERFORMED.
+ *
+ * In the 2026-09-19 Anwen save the ledger carries, at turn 13,
+ *
+ *     "Ryan formally proposed marriage to Anwen Drevast, bypassing the
+ *      Verancourts."
+ *
+ * The player proposed on turn 14. The model had written the clause a turn early
+ * — a reasonable inference about where the scene was heading, promoted into
+ * state as a fact. When the proposal actually arrived it hit a block that says
+ * "This ground is COVERED. Do not re-offer, re-propose", so the engine
+ * suppressed the very beat the player had just played, Anwen never answered,
+ * and the turn instead restated the player's turn-13 line back at him.
+ *
+ * A beat about the PLAYER is only real if the player's own input says so. NPC
+ * beats are unaffected: the model has authority over its own cast.
+ */
+const establishedIsGrounded = (
+    beat: string,
+    playerName: string | undefined,
+    playerInput: string | undefined,
+): boolean => {
+    if (!beatIsAboutPlayer(beat, playerName)) return true;
+    if (playerInput === undefined) return true;   // no input supplied — legacy callers
+    const { matched, ratio } = sharedWords(beat, playerInput);
+    return matched >= PLAYER_BEAT_MIN_WORDS
+        || (matched >= 1 && ratio >= PLAYER_BEAT_MIN_RATIO);
+};
+
+export interface SceneLedgerOptions {
+    /** PC name, so player-subject beats can be told apart from NPC beats. */
+    playerName?: string;
+    /** What the player actually typed this turn. Omit to disable grounding. */
+    playerInput?: string;
+    /** Called for each `established` clause dropped as ungrounded. */
+    onRejected?: (beat: string) => void;
+}
+
 export interface SceneLedgerUpdate {
     ledger: SceneLedgerEntry[];
     /** True when the previous ledger was discarded because the scene turned over. */
@@ -97,6 +202,7 @@ export const updateSceneLedger = (
     turn: number,
     didSceneChange: boolean,
     idFactory: (n: number) => string = (n) => `slg_${turn}_${n}`,
+    options: SceneLedgerOptions = {},   // v1.45
 ): SceneLedgerUpdate => {
     const base = didSceneChange ? [] : [...(previous ?? [])];
     const seen = new Set(base.map(e => beatKey(e.beat)));
@@ -112,7 +218,13 @@ export const updateSceneLedger = (
     for (const raw of (established ?? []).slice(0, ESTABLISHED_PER_TURN_MAX)) {
         if (typeof raw !== 'string') continue;
         const beat = trimBeat(raw);
-        if (beat) incoming.push({ beat, source: 'model' });
+        if (!beat) continue;
+        // v1.45: a beat about the player must be grounded in the player's input.
+        if (!establishedIsGrounded(beat, options.playerName, options.playerInput)) {
+            options.onRejected?.(beat);
+            continue;
+        }
+        incoming.push({ beat, source: 'model' });
     }
 
     let added = 0;
@@ -129,15 +241,39 @@ export const updateSceneLedger = (
     return { ledger, reset: didSceneChange, added };
 };
 
-/** Render the ledger for the prompt. Empty string when there is nothing to say. */
-export const buildSceneLedgerBlock = (ledger: SceneLedgerEntry[] | undefined): string => {
+/**
+ * Render the ledger for the prompt. Empty string when there is nothing to say.
+ *
+ * v1.45: `playerActionThisTurn` suppresses the suppression. A ledger line that
+ * describes what the player is doing RIGHT NOW is not covered ground — it is
+ * the turn — and leaving it in the block is what taught the model to answer a
+ * proposal, a question or a physical action one or two turns late.
+ */
+export const buildSceneLedgerBlock = (
+    ledger: SceneLedgerEntry[] | undefined,
+    playerActionThisTurn?: string,
+): string => {
     if (!ledger || ledger.length === 0) return '';
-    const lines = ledger.map(e => `- ${e.beat} (T${e.turn})`).join('\n');
+
+    const live = playerActionThisTurn?.trim()
+        ? ledger.filter(e => {
+              const { matched, ratio } = sharedWordsLoose(e.beat, playerActionThisTurn);
+              return !(matched >= LEDGER_SUPPRESS_MIN_WORDS && ratio >= LEDGER_SUPPRESS_MIN_RATIO);
+          })
+        : ledger;
+
+    if (live.length === 0) return '';
+
+    const lines = live.map(e => `- ${e.beat} (T${e.turn})`).join('\n');
     return `[SCENE LEDGER — already established in this scene]
 This ground is COVERED. Do not re-offer, re-propose, re-observe or restage any
 of it. If a line below is still unresolved, ADVANCE it — carry it out, have it
 refused, or have something interrupt it. Repeating it is the one thing it
 cannot do.
+
+This block does NOT outrank [PLAYER ACTION]. If the player has just done one of
+these things, they are doing it NOW: play it out and answer it. "Already
+covered" is never a reason to leave the player's own action unanswered.
 ${lines}`;
 };
 

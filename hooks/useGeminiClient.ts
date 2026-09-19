@@ -31,6 +31,7 @@ import {
     detectPrivateKnowledgeLeak,
 } from '../utils/engine/privateKnowledge';
 import { checkVoiceLock, isFocalCharacter } from '../utils/engine/voiceLockCheck';
+import { checkPlayerActionEngagement, buildPlayerActionReminder } from '../utils/engine/playerActionCheck';
 import { classifyRecordQuery, answerRecordQuery } from '../utils/engine/recordQuery';
 import { detectRecurringRhetoric } from '../utils/engine/npcRhetoric';
 
@@ -586,6 +587,22 @@ export const useGeminiClient = () => {
         const playerRemovedConditions = preCallState.playerRemovedConditions;
         useGameStore.getState().clearPlayerRemovedConditions();
 
+        // v1.45: THE PLAYER'S MESSAGE WAS BEING SENT TWICE.
+        //
+        // `setGameHistory` above is the Zustand setter — `set()` applies
+        // synchronously, so by the time `useGameStore.getState()` runs here
+        // `preCallState.gameHistory.history` ALREADY ends with `userMsg`.
+        // Every call site then appended it a second time, and geminiClient's
+        // `contextHistory = narrativeHistory.slice(0, -1)` — which exists
+        // precisely so the current message is NOT also sitting in the history
+        // window — dropped the duplicate and left the original. The request
+        // therefore ended with two consecutive `user` contents: the player's
+        // raw text, then the framed message containing the same text again.
+        //
+        // One snapshot, used by the initial send and by every resample below,
+        // so the two can never disagree about what the history is.
+        const turnHistory = preCallState.gameHistory.history;
+
         // v1.21: Pass modelName for model-adaptive context limits, and
         // historicalSummary so it can be positioned at the TOP of dynamic context
         // (moved from geminiClient.ts where it was buried after 63KB of instructions).
@@ -1088,7 +1105,7 @@ export const useGeminiClient = () => {
 
         let response: ModelResponseSchema = await service.sendMessage(
             fullSystemPrompt,
-            [...preCallState.gameHistory.history, userMsg],
+            turnHistory,
             preCallState.gameHistory.lastActiveSummary,
             preCallState.gameWorld.bannedNameMap ?? {},  // v1.7
             activeReminder,  // v1.19: Trailing reminder for recency-biased compliance
@@ -1101,6 +1118,87 @@ export const useGeminiClient = () => {
         if (latestRequestId.current !== requestId) {
             console.log("Discarding stale response", requestId);
             return;
+        }
+
+        // v1.45: PLAYER-ACTION ENGAGEMENT GATE — runs before every other
+        // check, because it is the only failure that makes the turn worthless
+        // to the player regardless of how well it scores on the rest.
+        //
+        // Four saves, 157 measurable turns: 50 produced a narrative with no
+        // lexical engagement with the input that triggered it, and the content
+        // surfaced one to three turns later — once the engine had promoted it
+        // into [PLAYER CANON] / [SCENE LEDGER] / [SINCE LAST TURN], where it
+        // finally had a label the model would read. The prompt-side causes are
+        // fixed in this same version; this is the enforcement layer, on the
+        // standing principle that a constraint living only in the prompt is a
+        // suggestion. See utils/engine/playerActionCheck.ts for the detector
+        // and its thresholds.
+        const previousPlayerInput = preCallState.gameHistory.history
+            .filter(m => m.role === Role.USER && isNarrativeMessage(m))
+            .slice(-2)[0]?.text ?? '';
+        const engagement = checkPlayerActionEngagement(
+            text,
+            response.narrative,
+            previousPlayerInput,
+            lastNarrative,
+        );
+        let playerActionResampled = false;
+        if (!engagement.engaged) {
+            playerActionResampled = true;
+            setGameHistory(prev => ({
+                ...prev,
+                debugLog: [
+                    ...prev.debugLog,
+                    {
+                        timestamp: new Date().toISOString(),
+                        message: `[PLAYER ACTION] Turn did not engage the player's input `
+                            + `(${engagement.matched}/${engagement.newWordCount} new words, `
+                            + `ratio ${engagement.ratio.toFixed(3)}) — resampling once. `
+                            + `Unanswered: ${engagement.sample.join(', ')}.`,
+                        type: 'warning',
+                    }
+                ]
+            }));
+
+            response = await service.sendMessage(
+                fullSystemPrompt,
+                turnHistory,
+                preCallState.gameHistory.lastActiveSummary,
+                preCallState.gameWorld.bannedNameMap ?? {},
+                buildTrailer(buildPlayerActionReminder(text)),
+                turnSchema,
+                contextPrompt,
+                staticContext,
+                escalateThinking(turnThinking),
+            );
+
+            if (latestRequestId.current !== requestId) {
+                console.log("Discarding stale player-action resample", requestId);
+                return;
+            }
+
+            const afterEngagement = checkPlayerActionEngagement(
+                text,
+                response.narrative,
+                previousPlayerInput,
+                lastNarrative,
+            );
+            setGameHistory(prev => ({
+                ...prev,
+                debugLog: [
+                    ...prev.debugLog,
+                    {
+                        timestamp: new Date().toISOString(),
+                        message: afterEngagement.engaged
+                            ? `[PLAYER ACTION] Resample engaged the input `
+                              + `(${afterEngagement.matched}/${afterEngagement.newWordCount} new words).`
+                            : `[PLAYER ACTION] Resample STILL did not engage the input `
+                              + `(${afterEngagement.matched}/${afterEngagement.newWordCount}) — accepting it; `
+                              + `a second re-roll is a prompt problem, not an attractor lapse.`,
+                        type: afterEngagement.engaged ? 'success' : 'warning',
+                    }
+                ]
+            }));
         }
 
         // v1.21: Sanitization-drift resample. If the model's thought_process
@@ -1183,8 +1281,28 @@ export const useGeminiClient = () => {
             }));
         }
 
-        let resampledThisTurn = false;
-        if (maskModeFindings.length > 0) {
+        let resampledThisTurn = playerActionResampled;
+        // v1.45: one re-roll per turn. The player-action gate above already
+        // spent this turn's generation, and a mask-mode finding is still
+        // logged and still arms the lock for the next turn — the same
+        // treatment a finding that fails the focal or cooldown gate gets.
+        if (playerActionResampled && maskModeFindings.length > 0) {
+            setGameHistory(prev => ({
+                ...prev,
+                debugLog: [
+                    ...prev.debugLog,
+                    {
+                        timestamp: new Date().toISOString(),
+                        message: `[VOICE LOCK] Mask-mode noted but NOT resampled — `
+                            + `${maskModeFindings.map(f => f.name).join(', ')} `
+                            + `(the player-action gate already resampled this turn). `
+                            + `Still logged and still armed for the next turn.`,
+                        type: 'info',
+                    }
+                ]
+            }));
+        }
+        if (!playerActionResampled && maskModeFindings.length > 0) {
             resampledThisTurn = true;
             const names = maskModeFindings.map(f => f.name);
             for (const n of names) maskResampleLastTurn.set(n, thisTurn);
@@ -1213,7 +1331,7 @@ turn is anything their Actual Core describes, you are writing the mask.`;
 
             response = await service.sendMessage(
                 fullSystemPrompt,
-                [...preCallState.gameHistory.history, userMsg],
+                turnHistory,
                 preCallState.gameHistory.lastActiveSummary,
                 preCallState.gameWorld.bannedNameMap ?? {},
                 buildTrailer(coreReminder),
@@ -1431,15 +1549,16 @@ turn is anything their Actual Core describes, you are writing the mask.`;
                 ]
             }));
         } else if (drift.drifted && resampledThisTurn) {
-            // v1.41: one resample per turn. The voice-lock path already spent
-            // it, and its reminder is the stronger correction of the two.
+            // v1.41: one resample per turn. An earlier gate (v1.45
+            // player-action, or voice-lock mask-mode) already spent it, and
+            // either reminder is the stronger correction of the two.
             setGameHistory(prev => ({
                 ...prev,
                 debugLog: [
                     ...prev.debugLog,
                     {
                         timestamp: new Date().toISOString(),
-                        message: `[DRIFT] Signals present but the voice-lock resample already ran this turn — not re-rolling twice. Matches: ${drift.matches.join(', ')}`,
+                        message: `[DRIFT] Signals present but a resample already ran this turn — not re-rolling twice. Matches: ${drift.matches.join(', ')}`,
                         type: 'info'
                     }
                 ]
@@ -1465,7 +1584,7 @@ turn is anything their Actual Core describes, you are writing the mask.`;
 
             response = await service.sendMessage(
                 fullSystemPrompt,
-                [...preCallState.gameHistory.history, userMsg],
+                turnHistory,
                 preCallState.gameHistory.lastActiveSummary,
                 preCallState.gameWorld.bannedNameMap ?? {},
                 reinforcedReminder,
@@ -1539,7 +1658,7 @@ turn is anything their Actual Core describes, you are writing the mask.`;
 
             const retry = await service.sendMessage(
                 fullSystemPrompt,
-                [...preCallState.gameHistory.history, userMsg],
+                turnHistory,
                 preCallState.gameHistory.lastActiveSummary,
                 preCallState.gameWorld.bannedNameMap ?? {},
                 antiRepeatReminder,

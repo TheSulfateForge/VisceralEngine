@@ -469,21 +469,50 @@ export class GeminiClient {
     });
 
     try {
-      // v1.19/v1.24: Final user message layout — the only volatile part of
-      // the request, so everything per-turn lives here:
+      // v1.19/v1.24/v1.45: Final user message layout — the only volatile part
+      // of the request, so everything per-turn lives here:
       //   [CURRENT STATE]   ← dynamic world context (was in systemInstruction,
       //                       where it invalidated the cache prefix every turn)
-      //   [PLAYER ACTION]   ← what the player actually typed
-      //   [SYSTEM REFRESH]  ← trailing reminders (recency-bias compliance)
+      //   [SYSTEM REFRESH]  ← trailing reminders + standing directives
+      //   [PLAYER ACTION]   ← what the player actually typed — LAST
+      //
+      // v1.45 — THE PLAYER WAS BURIED IN THE MIDDLE OF THE REQUEST.
+      //
+      // Measured on the 2026-09-19 saves: `turnContext` runs ~41,000 chars and
+      // `trailingReminder` up to ~14,000 (CANONICAL_VOICE_LOCK alone is 7.6KB).
+      // The player's actual input — 280 chars on the reviewed turn — sat
+      // between them at ~0.5% of the message, with the block explicitly
+      // labelled MANDATORY COMPLIANCE occupying the tail position. The model
+      // planned the turn around the reminders and answered the player's line
+      // one or two turns later, once the engine had promoted it into
+      // [PLAYER CANON] / [SCENE LEDGER] where it finally had a label.
+      //
+      // Same lever as v1.37 (OOC directives): on this family the tail wins.
+      // The player's action is the turn's ONLY obligation, so it goes last and
+      // it goes framed — a bare paste has no more standing than the 55KB in
+      // front of it.
       const parts: string[] = [];
       if (turnContext) {
           parts.push(`[CURRENT STATE — this turn's world context]\n${turnContext}`);
-          parts.push(`[PLAYER ACTION]\n${currentUserMsg.text}`);
-      } else {
-          parts.push(currentUserMsg.text);
       }
       if (trailingReminder) {
           parts.push(`[SYSTEM REFRESH — MANDATORY COMPLIANCE]\n${trailingReminder}`);
+      }
+      if (turnContext) {
+          parts.push(
+              `[PLAYER ACTION — THIS IS THE TURN. ANSWER IT.]\n`
+              + `Everything above is reference material describing the world as it`
+              + ` stands. The lines below are what the player just did, and they`
+              + ` are the only new event in this request. Your narrative must show`
+              + ` the world responding to THEM: if the player spoke, someone`
+              + ` answers what was said; if the player acted physically, the state`
+              + ` they changed is changed. Do not carry the previous beat forward`
+              + ` in place of this one, and do not treat this action as already`
+              + ` covered because a block above describes something similar.\n\n`
+              + currentUserMsg.text
+          );
+      } else {
+          parts.push(currentUserMsg.text);
       }
       const userMessageWithReminder = parts.join('\n\n');
 

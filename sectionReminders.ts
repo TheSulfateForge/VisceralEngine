@@ -827,9 +827,17 @@ At least one named entity in this scene has a CANONICAL personality field.
 Their canonical traits are authoritative — they outrank any social-class,
 genre, or scene-mode default the model would otherwise reach for.
 
+v1.45 — THIS REMINDER DOES NOT OWN THE FIRST SENTENCE. The first clause of
+thought_process is always the player-action clause required by §13 step 0
+("Player: [what they did] → [who answers it, how]"). Measured across four
+saves, 116 of 179 turns opened with the restatement below and only 16
+mentioned the player at all in their first 160 characters — the turn was
+being planned around NPC rendering while the player's line went unanswered.
+Restate the voice to render the answer, not instead of it.
+
 Before writing that character's first action or line of dialogue THIS
-TURN, the FIRST sentence of thought_process for that character must
-follow this exact form:
+TURN, and IMMEDIATELY AFTER the player-action clause, thought_process must
+carry this exact form for that character:
 
     "Rendering [Name] per canonical traits: [trait1, trait2, trait3].
      This turn those traits manifest as: [concrete action / word choice /

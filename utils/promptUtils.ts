@@ -1204,7 +1204,9 @@ This world is fundamentally: ${gameWorld.worldTags.join(', ')}.
           .map(e => e.fact)
       : [];
   const sinceLastTurnBlock = buildSinceLastTurnBlock(digest, gameWorld, character, canonFromLastTurn);
-  const sceneLedgerBlock = buildSceneLedgerBlock(gameWorld.sceneLedger);
+  // v1.45: the ledger is rendered against THIS turn's player action so a beat
+  // the player is playing right now is never listed as covered ground.
+  const sceneLedgerBlock = buildSceneLedgerBlock(gameWorld.sceneLedger, userInput);
   const playerCanonBlock = buildPlayerCanonBlock(gameWorld.playerCanon);
   // v1.35: standing OOC instructions.
   //

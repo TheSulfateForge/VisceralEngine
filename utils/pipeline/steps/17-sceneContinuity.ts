@@ -36,6 +36,11 @@ export const sceneContinuityStep: PipelineStep = {
             ctx.worldUpdate.sceneMode,
         );
 
+        // v1.45: `established` clauses whose subject is the PLAYER are only
+        // accepted when the player's own input this turn supports them. The
+        // model used to write the player's next move into the ledger a turn
+        // early, and the block then suppressed that move when it arrived.
+        const rejectedBeats: string[] = [];
         const { ledger, reset, added } = updateSceneLedger(
             ctx.previousWorld.sceneLedger,
             ctx.sanitisedResponse.world_tick?.npc_actions,
@@ -43,8 +48,21 @@ export const sceneContinuityStep: PipelineStep = {
             turn,
             didSceneChange,
             () => generateUUID(),
+            {
+                playerName: ctx.previousCharacter.name,
+                playerInput: ctx.playerInput,
+                onRejected: (beat) => rejectedBeats.push(beat),
+            },
         );
         ctx.worldUpdate.sceneLedger = ledger;
+
+        for (const beat of rejectedBeats) {
+            ctx.debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[SCENE LEDGER — v1.45 UNGROUNDED PLAYER BEAT] "${beat}" — the clause makes the player the subject but the player's input this turn does not support it. Dropped so it cannot suppress the beat when the player actually plays it.`,
+                type: 'info'
+            });
+        }
 
         if (reset) {
             ctx.debugLogs.push({

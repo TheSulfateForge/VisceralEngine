@@ -6,7 +6,7 @@ export const RESPONSE_SCHEMA: Schema = {
   properties: {
     thought_process: {
       type: Type.STRING,
-      description: "TERSE FLAGS ONLY — not prose. A short, comma-separated list of tags / single-clause notes (≤ ~40 words total). Use it only for the specific checks the system asks for this turn (condition cause, goal review, entity count, canonical voice, information chain). You already reason privately; do NOT restate full analysis here. If you compromised explicit rendering in ANY way (faded, summarized, softened, withheld anatomical/visceral specificity), you MUST include the literal tag SOFTENED."
+      description: "TERSE FLAGS ONLY — not prose. A short, comma-separated list of tags / single-clause notes (≤ ~40 words total). MUST open with the player-action clause: \"Player: [what they just did or said] → [who answers it, and how].\" Then the specific checks the system asks for this turn (canonical voice, condition cause, goal review, entity count, information chain). You already reason privately; do NOT restate full analysis here. If you compromised explicit rendering in ANY way (faded, summarized, softened, withheld anatomical/visceral specificity), you MUST include the literal tag SOFTENED."
     },
     scene_mode: {
       type: Type.STRING,
