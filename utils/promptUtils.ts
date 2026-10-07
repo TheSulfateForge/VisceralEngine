@@ -31,6 +31,7 @@ import { buildSeedBrief } from './seedBrief';
 import { buildSocialWebBlock } from './engine/socialGraph';
 import { isNarrativeMessage } from './engine/oocDetection';
 import { capSheetBySections, describeSheetSections } from './engine/sheetSections';
+import { isFigurativeVoiceSample } from './engine/npcRhetoric'; // v1.46
 import {
     splitPrivateBackstory,
     buildPrivateKnowledgeBlock,
@@ -422,7 +423,10 @@ export const buildEntityContext = (
             // v1.24: Voice sample — an exemplar of how this NPC actually
             // talks. Imitating a sample beats obeying adjectives; this is
             // the strongest anchor against voice drift.
-            const voiceLine = e.voice_sample?.trim()
+            // v1.46: a stored sample containing a figurative comparison is
+            // left out of the prompt (not deleted) — re-injected every turn,
+            // it teaches the NPC to talk in images.
+            const voiceLine = e.voice_sample?.trim() && !isFigurativeVoiceSample(e.voice_sample)
                 ? ` Voice sample (write their dialogue in THIS register): "${e.voice_sample.trim()}"\n`
                 : '';
             return (
@@ -457,7 +461,10 @@ export const buildEntityContext = (
                 // never be mistaken for a complete one.
                 ? ` Personality (CANONICAL — honor these traits): ${capSheetBySections(e.personality, MENTIONED_PERSONALITY_CAP)}\n`
                 : '';
-            const voiceLine = e.voice_sample?.trim()
+            // v1.46: a stored sample containing a figurative comparison is
+            // left out of the prompt (not deleted) — re-injected every turn,
+            // it teaches the NPC to talk in images.
+            const voiceLine = e.voice_sample?.trim() && !isFigurativeVoiceSample(e.voice_sample)
                 ? ` Voice sample (write their dialogue in THIS register): "${e.voice_sample.trim()}"\n`
                 : '';
             const impression = String(e.impression ?? '').trim();

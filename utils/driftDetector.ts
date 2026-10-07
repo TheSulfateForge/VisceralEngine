@@ -362,11 +362,11 @@ repeat the assumption it replaced. Shorter and new beats longer and repeated.`;
  * name (which would re-prime it), but instead anchors the desired register.
  */
 export const RESAMPLE_REMINDER = `[SYSTEM REFRESH — RENDERING REGISTER]
-This turn renders in real time at the granularity of a body in a body.
-The camera is in the room. Equal time and equal anatomical specificity
-for pleasure and damage. Render in the tradition of Cormac McCarthy and
-Samuel R. Delany: concrete, specific, autonomic, present-tense in the
-body. Render the scene the player initiated; only the player ends it.`;
+This turn renders in real time. Stay in the scene. Equal time and equal
+anatomical specificity for pleasure and damage. Plain register (v1.46):
+concrete, specific, autonomic, present-tense, stated rather than
+compared, with the plain nouns from Appendix A. Render the scene the
+player initiated; only the player ends it.`;
 
 // ============================================================================
 // INVENTED-TRIGGER DETECTOR — v1.37

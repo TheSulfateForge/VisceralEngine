@@ -73,8 +73,16 @@ export const MOTIVE_ATTRIBUTION_RE =
 export const MEANING_ASSIGNMENT_RE =
     /\b(?:looking|searching|hunting|reaching)\s+for\s+(?:more|some|a|any)\s+(?:meaning|purpose|grand|greater|deeper)\b|\b(?:grand|greater|deeper)\s+(?:search|searches|design|meaning|purpose)\b/i;
 
-/** Figurative comparisons. Counted, not banned — the density is the tell. */
-const FIGURATIVE_RE = /\b(?:like\s+(?:a|an|the)\b|as\s+if\b|as\s+though\b|the\s+way\s+(?:a|an)\b)/gi;
+/**
+ * Figurative comparisons. Counted, not banned — the density is the tell.
+ *
+ * v1.46: "like a/an/the" is excluded after a subject or modal ("I'd like the
+ * ale", "you like the room", "would like a word") — that is the verb, not a
+ * comparison. Under the v1.46 per-speaker limit a single false positive is
+ * half of an arming count, so the verb reading has to be ruled out.
+ */
+export const FIGURATIVE_RE =
+    /(?<!\b(?:'d|would|I|you|we|they|do|don't|didn't|does|doesn't|to|really|not|should|might|might\s+not)\s)\blike\s+(?:a|an|the)\b|\bas\s+if\b|\bas\s+though\b|\bthe\s+way\s+(?:a|an)\b/gi;
 
 /** Words that mark a sentence as being about a person present, not a maxim. */
 const PERSONAL_RE = /\b(?:I|I'm|I've|I'll|me|my|mine|we|we're|us|our|you|you're|you've|your|yours|he|he's|him|his|she|she's|her|hers|they|they're|them|their)\b/i;
@@ -349,6 +357,21 @@ export const voiceSampleRejection = (
     return null;
 };
 
+/**
+ * v1.46: a voice sample that contains a figurative comparison.
+ *
+ * Kept separate from `voiceSampleRejection` on purpose. That function also
+ * drives the retro-SCRUB of stored samples, and stored samples are not to be
+ * deleted for this — they are filtered at prompt-build time instead
+ * (promptUtils), so nothing in an existing save is lost. New captures are
+ * rejected at the door (06-entityLifecycle).
+ *
+ * No minimum length: "Like a hog at a trough." is short and still teaches the
+ * model to talk in images every turn.
+ */
+export const isFigurativeVoiceSample = (sample: string | null | undefined): boolean =>
+    countFigurative((sample ?? '').trim()) > 0;
+
 export const isDegenerateVoiceSample = (
     sample: string | null | undefined,
     names: string[] = [],
@@ -376,8 +399,78 @@ export interface RhetoricTicReport {
 /** Two or more markers in one turn is a pattern; one is a sentence. */
 export const RHETORIC_TIC_THRESHOLD = 2;
 
-/** Metaphors per turn above which the images are doing an argument's job. */
-export const FIGURATIVE_DENSITY_LIMIT = 4;
+/**
+ * v1.46: comparisons in ONE speaker's dialogue in ONE turn at which the tic
+ * fires. Matches the prompt rule (§10 DIALOGUE / NPC_RHETORIC): no more than
+ * one figurative comparison per NPC per turn. Before v1.46 this was 4 across
+ * the WHOLE narrative, and figurative-density also needed a second tic to
+ * arm — so the stated one-per-NPC rule was effectively never enforced.
+ */
+export const FIGURATIVE_DENSITY_LIMIT = 2;
+
+// ---------------------------------------------------------------------------
+// v1.46 — quoted speech, grouped by speaker
+// ---------------------------------------------------------------------------
+
+/**
+ * Pull the quoted dialogue out of one paragraph. Handles straight and curly
+ * double quotes, curly single quotes, and straight single quotes (seen in
+ * real saves: 'You speak as if the misfire is a tragedy, Ryan.'). For straight
+ * single quotes an apostrophe inside a word ("don't") cannot close the span,
+ * because the closing quote must be followed by whitespace, punctuation, or
+ * the end of the paragraph.
+ */
+const extractQuotes = (paragraph: string): string[] => {
+    const out: string[] = [];
+    const patterns = [
+        /"([^"]+)"/g,
+        /\u201C([^\u201D]+)\u201D/g,
+        /\u2018(.+?)\u2019(?=[\s,.;:!?\u2014)]|$)/g,
+        /(?:^|(?<=[\s(\u2014-]))'(.+?)'(?=[\s,.;:!?\u2014)]|$)/g,
+    ];
+    for (const re of patterns) {
+        for (const m of paragraph.matchAll(re)) out.push(m[1]);
+    }
+    return out;
+};
+
+/**
+ * Quoted speech in a narrative, grouped by speaker.
+ *
+ * Attribution is by paragraph, which is the prose convention: one speaker's
+ * lines share a paragraph. A paragraph is keyed to the FIRST known entity name
+ * it mentions (first name or full name), so the same NPC speaking in two
+ * paragraphs is counted together. A paragraph naming nobody known gets its own
+ * key — it cannot be merged with anyone, which can only undercount.
+ */
+export const speechBySpeaker = (
+    narrative: string,
+    names: string[] = [],
+): Map<string, string> => {
+    const out = new Map<string, string>();
+    const paragraphs = narrative.split(/\n\s*\n|\n/).map(p => p.trim()).filter(Boolean);
+    const tokens = names
+        .filter(Boolean)
+        .flatMap(n => [n, n.split(/\s+/)[0]])
+        .filter(t => t.length >= 3);
+    paragraphs.forEach((para, idx) => {
+        const quotes = extractQuotes(para);
+        if (quotes.length === 0) return;
+        let speaker: string | undefined;
+        let bestAt = Infinity;
+        for (const t of tokens) {
+            const at = para.search(new RegExp(`\\b${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`));
+            if (at >= 0 && at < bestAt) { bestAt = at; speaker = t.split(/\s+/)[0]; }
+        }
+        const key = speaker ?? `#para${idx}`;
+        out.set(key, [out.get(key), ...quotes].filter(Boolean).join(' '));
+    });
+    return out;
+};
+
+/** v1.46: count figurative comparisons in a span of text. */
+export const countFigurative = (text: string): number =>
+    (text.match(FIGURATIVE_RE) ?? []).length;
 
 /**
  * Scan a completed model turn for the figure. Runs on the model's OWN previous
@@ -424,15 +517,24 @@ export const detectRhetoricTics = (
         samples.push(maximClose.slice(0, 140));
     }
 
-    const figurative = text.match(FIGURATIVE_RE)?.length ?? 0;
-    if (figurative >= FIGURATIVE_DENSITY_LIMIT) {
-        tics.push('figurative-density');
-        samples.push(`${figurative} figurative comparisons in one turn`);
+    // v1.46: counted inside quoted dialogue, per speaker — not across the
+    // whole narrative. Narration has its own one-per-turn rule in §10; this
+    // detector polices NPC speech, which is where the complaint is.
+    for (const [speaker, speech] of speechBySpeaker(text, names)) {
+        const figurative = countFigurative(speech);
+        if (figurative >= FIGURATIVE_DENSITY_LIMIT) {
+            if (!tics.includes('figurative-density')) tics.push('figurative-density');
+            const who = speaker.startsWith('#para') ? 'one speaker' : speaker;
+            samples.push(`${figurative} figurative comparisons in ${who}'s dialogue`);
+        }
     }
 
     return {
         tics,
-        armed: tics.length >= RHETORIC_TIC_THRESHOLD,
+        // v1.46: figurative-density arms by itself. It now encodes a stated
+        // rule (one comparison per NPC per turn), so one breach is a breach —
+        // unlike "you think", which is fine in a single good sentence.
+        armed: tics.length >= RHETORIC_TIC_THRESHOLD || tics.includes('figurative-density'),
         samples,
     };
 };

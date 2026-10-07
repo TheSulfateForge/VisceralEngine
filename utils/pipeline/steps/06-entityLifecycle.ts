@@ -12,7 +12,7 @@ import {
 } from '../../engine';
 import { checkNameCollision, registerEntityName } from '../../nameResolver';
 import { detectPlayerFraming } from '../../engine/playerFraming';
-import { voiceSampleRejection } from '../../engine/npcRhetoric';
+import { voiceSampleRejection, isFigurativeVoiceSample } from '../../engine/npcRhetoric';
 import { RELATIONSHIP_LEVELS, type RelationshipLevel } from '../../../types';
 import { RELATIONSHIP_MAX_STEPS_PER_TURN } from '../../../config/engineConfig';
 
@@ -209,7 +209,12 @@ export const entityLifecycleStep: PipelineStep = {
         const entityNames = updatedKnownEntities.map(e => e.name).filter(Boolean);
         if (r.known_entity_updates) {
             for (const update of r.known_entity_updates) {
-                const reason = voiceSampleRejection(update.voice_sample, entityNames);
+                // v1.46: a comparison in the sample is rejected at capture too.
+                // Not added to voiceSampleRejection, because that also drives
+                // the retro-scrub below, and stored samples are filtered at
+                // prompt time rather than deleted (see promptUtils).
+                const reason = voiceSampleRejection(update.voice_sample, entityNames)
+                    ?? (isFigurativeVoiceSample(update.voice_sample) ? 'figurative' : null);
                 if (reason) {
                     ctx.debugLogs.push({
                         timestamp: new Date().toISOString(),
