@@ -1,7 +1,7 @@
 import { WorldTickEvent, DebugLogEntry, DormantHook, FactionExposure, ThreatArcHistory, LoreItem, LocationGraph } from '../../types';
 import { jaccardSimilarity, significantWords } from '../contentValidation';
 import {
-    THREAT_SEED_CAP, MAX_CONSECUTIVE_ETA_ONE, LORE_MATURATION_TURNS, EXPOSURE_THRESHOLD_FOR_THREAT,
+    THREAT_SEED_CAP, MAX_CONSECUTIVE_ETA_ONE, SLEEP_ETA_WINDOW_TICKS, LORE_MATURATION_TURNS, EXPOSURE_THRESHOLD_FOR_THREAT,
     UNVALIDATED_THREAT_CAP, UNVALIDATED_THREAT_MAX_TURNS,
 } from '../../config/engineConfig';
 import { resolveExposureEntry } from './factionExposure';
@@ -274,7 +274,13 @@ export const processThreatSeeds = (
     knownEntities: { name: string; location: string; relationship_level: string }[] = [],
     playerLocation: string = '',
     locationGraph?: LocationGraph,
-    minutesPerTurn: number = 10
+    minutesPerTurn: number = 10,
+    // v1.47: sleep turns. A night is one turn but many hours; the countdown
+    // advances `elapsedTicks` instead of 1, and on a sleep turn a threat that
+    // was inside the night window may land (ETA 0) when the narrator says it
+    // cut the sleep short.
+    elapsedTicks: number = 1,
+    isSleepTurn: boolean = false
 ): WorldTickEvent[] => {
     const log = (message: string, type: DebugLogEntry['type'] = 'warning') => {
         debugLogs.push({ timestamp: new Date().toISOString(), message, type });
@@ -406,7 +412,24 @@ export const processThreatSeeds = (
 
         if (existing && existing.turns_until_impact !== undefined && turnCreated !== currentTurn) {
             const previousEta = existing.turns_until_impact;
-            const expectedEta = Math.max(0, previousEta - 1);
+            const ticks = Math.max(1, Math.floor(elapsedTicks));
+            let expectedEta = Math.max(0, previousEta - ticks);
+
+            // v1.47: SLEEP AMBUSH. The narrator was told this threat reaches
+            // the sleeper during the night (previous ETA inside the window).
+            // If it wrote the arrival — ETA 0 — the night was cut short by it,
+            // so fewer hours were slept than the full window. Accept the 0
+            // rather than "blocking acceleration" against the shortened sleep.
+            if (isSleepTurn && currentEta === 0 && previousEta <= SLEEP_ETA_WINDOW_TICKS) {
+                if (expectedEta !== 0) {
+                    log(
+                        `[SLEEP AMBUSH — v1.47] "${threat.description.substring(0, 60)}" — ` +
+                        `ETA ${previousEta} was inside the night window; it reached the sleeper. ETA → 0.`,
+                        'info'
+                    );
+                }
+                expectedEta = 0;
+            }
 
             // v1.28: the countdown is now EXACT, not merely capped.
             //
@@ -433,7 +456,7 @@ export const processThreatSeeds = (
                 log(
                     `[THREAT ${violationType}] "${threat.description.substring(0, 60)}" — ` +
                     `AI submitted ETA ${currentEta}, previous was ${previousEta}. ` +
-                    `Forced to ${expectedEta} (a countdown advances exactly one turn per turn).` +
+                    `Forced to ${expectedEta} (a countdown advances exactly ${ticks === 1 ? 'one turn per turn' : `${ticks} ticks on this sleep turn`}).` +
                     (isIncrease
                         ? ` AI attempted to BUY TIME by increasing ETA — this is always blocked.`
                         : currentEta < expectedEta
@@ -573,7 +596,7 @@ export const processThreatSeeds = (
         .filter(t => t.status === 'unvalidated' && t.id && !matchedExistingIds.has(t.id))
         .map(t => ({
             ...t,
-            turns_until_impact: Math.max(0, (t.turns_until_impact ?? 1) - 1),
+            turns_until_impact: Math.max(0, (t.turns_until_impact ?? 1) - Math.max(1, Math.floor(elapsedTicks))),
         }));
 
     if (carriedAnchors.length > 0) {

@@ -13,7 +13,7 @@ import { partitionConditions } from './contentValidation';
 import { applyExistingMap } from './nameResolver';
 import {
     DOWNTIME_KEYWORDS, DENIAL_SUPPRESSION_THRESHOLD, getContextProfile,
-    SLEEP_KEYWORDS,
+    SLEEP_KEYWORDS, SLEEP_ETA_WINDOW_TICKS,
     PINNED_MEMORY_TAGS, PINNED_MEMORY_SALIENCE_THRESHOLD, DEFAULT_MEMORY_SALIENCE,
     SENTINEL_ENTITY_HYDRATION_LIMIT, SENTINEL_LORE_FORCE_LIMIT,
 } from '../config/engineConfig';
@@ -541,7 +541,37 @@ Lactation Rate: x${mods.lactation}
     `.trim();
 };
 
-const buildPacingInstruction = (tension: number, currentMode: string, isDowntime: boolean): string => {
+/**
+ * v1.47: live threats close enough to reach the character during one night of
+ * sleep. Unvalidated anchors are excluded for the same reason as the
+ * situation summary: they are rejected threats and must never be invited in.
+ */
+const getNightWindowThreats = (world: GameWorld) =>
+    (world.emergingThreats || [])
+        .filter(t => t.status !== 'unvalidated')
+        .filter(t => (t.turns_until_impact ?? 99) <= SLEEP_ETA_WINDOW_TICKS);
+
+const buildSleepPacing = (world: GameWorld): string => {
+    const nightThreats = getNightWindowThreats(world);
+    const threatBlock = nightThreats.length > 0
+        ? `
+
+THREATS THAT REACH THE CHARACTER TONIGHT (live, ETA ≤ ${SLEEP_ETA_WINDOW_TICKS} — inside one night):
+${nightThreats.map(t => `- ${t.description.slice(0, 140)} (ETA ${t.turns_until_impact ?? 0})`).join('\n')}
+Each of these arrives during the night unless the character's precautions stop it. Resolve every one: it arrives (report it in emerging_threats at ETA 0) or the precautions turn it away (say how, in world_tick).`
+        : '';
+    return `
+[PACING: SLEEP — THE CHARACTER IS VULNERABLE]
+The character is going to sleep. Sleep is NOT a safe zone; nothing protects a sleeper except what they did to protect themselves.
+1. RISK FOLLOWS PLACE. Open wilderness, a dungeon, a ruin, monster territory, a hostile district — that place's established dangers can find a sleeper. A house can be broken into.
+2. PRECAUTIONS COUNT. A locked or barred door, a watch kept, a hidden or warded camp, traps or alarms, a guard animal, allies on watch — whatever the character actually did lowers the odds and can give a chance to wake before contact (roll_request). No precautions, no such chance. Precautions the player did not state do not exist.
+3. DETERMINED HOSTILES USE THIS TIME. Any NPC or creature already hostile to the character, with motive and the means to reach them, can choose this moment to attack or assault.
+4. IF SOMETHING COMES: write the night up to that moment, then the waking (or the failure to wake). The sleep ends there — set sleep_hours to the hours actually slept, time_passed_minutes to match, scene_mode TENSION or COMBAT, and fill combat_context.
+5. IF NOTHING COMES: the night passes. Do not invent a threat to fill the turn.${threatBlock}
+    `.trim();
+};
+
+const buildPacingInstruction = (tension: number, currentMode: string, isDowntime: boolean, isSleeping: boolean, world: GameWorld): string => {
     if (tension > 70 || currentMode === 'COMBAT') {
         return `
 [PACING: HIGH TENSION / SURVIVAL]
@@ -550,6 +580,13 @@ const buildPacingInstruction = (tension: number, currentMode: string, isDowntime
 3. If the user hesitates, the threat advances.
         `.trim();
     } 
+
+    // v1.47: sleep used to fall into the downtime branch below and receive
+    // "NO COMBAT SPAWNS" — a hard no-threat-while-sleeping rule. It now has its
+    // own branch where sleep is a vulnerable state.
+    if (isSleeping) {
+        return buildSleepPacing(world);
+    }
     
     if (isDowntime || currentMode === 'SOCIAL') {
         return `
@@ -917,6 +954,10 @@ const buildDreamSeed = (
     const input = userInput.toLowerCase();
     const isSleeping = SLEEP_KEYWORDS.some(kw => input.includes(kw));
     if (!isSleeping) return '';
+    // v1.47: the dream protocol forbids emerging_threats and assumes an
+    // unbroken night. When a live threat is due to reach the sleeper tonight,
+    // the night is not unbroken — skip the dream rather than suppress the threat.
+    if (getNightWindowThreats(world).length > 0) return '';
 
     const pool = world.memory ?? [];
     if (pool.length === 0) return '';
@@ -1082,6 +1123,7 @@ export const constructGeminiPrompt = async (
   // 3. Narrative Intent & State
   const lowerInput = userInput.toLowerCase();
   const isDowntime = DOWNTIME_KEYWORDS.some(kw => lowerInput.includes(kw));
+  const isSleeping = SLEEP_KEYWORDS.some(kw => lowerInput.includes(kw)); // v1.47
   const tension = gameWorld.tensionLevel || 0;
   const currentMode = gameWorld.sceneMode || 'NARRATIVE';
   const timeDisplay = gameWorld.time?.display || "Day 1, 09:00";
@@ -1095,7 +1137,7 @@ export const constructGeminiPrompt = async (
 
   // 4. Build Instructions
   const bioStatus = buildBioStatus(character.bio, timeDisplay);
-  const pacingInstruction = buildPacingInstruction(tension, currentMode, isDowntime);
+  const pacingInstruction = buildPacingInstruction(tension, currentMode, isDowntime, isSleeping, gameWorld);
   // v1.26: identity (static, cached) vs state (volatile, per-turn)
   const characterIdentityBlock = buildCharacterIdentityBlock(character);
   const characterStateBlock = buildCharacterStateBlock(character);

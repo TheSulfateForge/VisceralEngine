@@ -53,6 +53,19 @@ export const THREAT_SEED_CAP = 3;
 /** Turns at ETA ~1 before auto-expiry triggers. */
 export const MAX_CONSECUTIVE_ETA_ONE = 3;
 
+/** v1.47: Sleep is not a safe zone. A threat ETA normally advances one per
+ *  turn, and a whole night of sleep is ONE turn — so a hostile three turns out
+ *  could never reach a sleeper; it arrived three turns after they woke. On a
+ *  sleep turn the countdown instead advances one tick per this many minutes
+ *  slept (an 8-hour night = 8 ticks). */
+export const SLEEP_MINUTES_PER_ETA_TICK = 60;
+
+/** v1.47: Ticks in a full night (TIME_CAPS.SLEEP_MAX / SLEEP_MINUTES_PER_ETA_TICK,
+ *  rounded down). A live threat at or under this ETA when the player goes to
+ *  sleep reaches them during the night; the prompt names it so the narrator can
+ *  cut the sleep short, and the engine accepts ETA 0 for it on that turn. */
+export const SLEEP_ETA_WINDOW_TICKS = 9;
+
 /** Minimum turns a lore entry must exist before threats can cite it. (v1.12 SE-6) */
 export const LORE_MATURATION_TURNS = 3;
 
@@ -406,9 +419,11 @@ export const SLEEP_KEYWORDS: readonly string[] = [
 /** v1.19: Minimum trauma value required to trigger a dream/nightmare. */
 export const DREAM_TRAUMA_THRESHOLD = 60;
 
-/** Keywords that indicate player downtime intent (skip threat escalation). */
+/** Keywords that indicate player downtime intent (slow/social pacing).
+ *  v1.47: 'sleep' removed — sleeping is checked first against SLEEP_KEYWORDS and
+ *  gets its own vulnerable-state pacing block, not the no-combat downtime one. */
 export const DOWNTIME_KEYWORDS = [
-    'sleep', 'rest', 'wait', 'camp', 'hide',
+    'rest', 'wait', 'camp', 'hide',
     'relax', 'craft', 'recover', 'read', 'eat',
     'drink', 'bath', 'wash', 'clean', 'sit',
     'meditate', 'heal', 'study', 'walk', 'travel',

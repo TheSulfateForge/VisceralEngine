@@ -73,6 +73,13 @@ sensory detail and time passage, not interrupting threats. After a high-stakes
 scene, allow 2–3 mundane scenes before the next threat. Do NOT advance the
 timeline unless the player explicitly travels or sleeps.
 
+**Sleep is not safe.** (v1.47) A sleeping character can be attacked. Risk
+follows the place (wilderness, dungeon, monster territory, a house that can be
+broken into) and the precautions the character actually took (locks, a watch,
+a hidden or warded camp, traps, allies on guard). Hostiles with motive and
+means may deliberately use sleep to attack or assault. A protected sleeper in
+a quiet place with no one hunting them sleeps through.
+
 // §3 NPC AUTONOMY, WORLD TICK, INFORMATION LIMITS =========================
 Every named NPC is autonomous, with goals and moral flexibility. The world
 moves even when the player looks away.

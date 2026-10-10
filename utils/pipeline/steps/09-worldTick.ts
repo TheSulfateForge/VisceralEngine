@@ -25,6 +25,7 @@ import {
 } from '../../engine/hookManager';
 import { jaccardSimilarity, significantWords } from '../../contentValidation';
 import { trimHiddenRegistry } from '../../engine/timeUtils';
+import { SLEEP_MINUTES_PER_ETA_TICK } from '../../../config/engineConfig';
 
 /**
  * Step 9: World Tick Pipeline (LARGEST STEP — ~700 lines from original)
@@ -163,6 +164,27 @@ export const worldTickStep: PipelineStep = {
         ctx.currentHooks = [...(ctx.previousWorld.dormantHooks ?? [])];
         ctx.currentThreatArcHistory = { ...(ctx.previousWorld.threatArcHistory ?? {}) };
 
+        // v1.47: a sleep turn covers hours, not minutes. Advance threat
+        // countdowns by hours slept so a hostile en route can reach a sleeper
+        // in the night instead of politely waiting until they wake.
+        const isSleepTurn =
+            (ctx.sanitisedResponse.biological_inputs?.sleep_hours ?? 0) > 0 ||
+            ctx.effectiveTimeMode === 'REST';
+        const minutesElapsed = Math.max(
+            0,
+            (ctx.newTime?.totalMinutes ?? 0) - (ctx.previousWorld.time?.totalMinutes ?? 0)
+        );
+        const etaTicks = isSleepTurn
+            ? Math.max(1, Math.floor(minutesElapsed / SLEEP_MINUTES_PER_ETA_TICK))
+            : 1;
+        if (etaTicks > 1) {
+            ctx.debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[SLEEP TICKS — v1.47] ${minutesElapsed}m slept → threat countdowns advance ${etaTicks} ticks this turn.`,
+                type: 'info'
+            });
+        }
+
         // Process incoming threat seeds with full validation
         ctx.processedThreats = processThreatSeeds(
             worldTick.emerging_threats ?? [],
@@ -180,7 +202,9 @@ export const worldTickStep: PipelineStep = {
             ctx.worldUpdate.knownEntities ?? [],
             ctx.newPlayerLocation,
             ctx.previousWorld.locationGraph,
-            10
+            10,
+            etaTicks,
+            isSleepTurn
         );
 
         // v1.28: processThreatSeeds already runs the full Origin Gate and now

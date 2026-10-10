@@ -125,7 +125,10 @@ export const DEFAULT_PIPELINE: PipelineStep[] = [
  *
  *   MONTAGE  days–years   — summary-only; per-tick bio/world/trauma/faction
  *                           effects are replaced by montage-scale summarisation.
- *   REST     sleep/idle   — bio + memory focus; no combat or faction conflict.
+ *   REST     sleep/idle   — bio + memory focus; no offscreen faction conflict.
+ *                           v1.47: combat context is NOT gated — a sleeper can
+ *                           be attacked, and the night attack's combat_context
+ *                           must reach state.
  *   ACTIVITY declared act. — mostly default; combat gated off (no train_combat
  *                            activity-type plumbing yet — that's System 4).
  *   TICK     combat round — no global world drift inside a ~30s beat.
@@ -137,7 +140,7 @@ export const TIME_MODE_SKIP_STEPS: Record<TimeMode, ReadonlySet<string>> = {
     TICK: new Set(['09-worldTick', '18-socialGraph']),
     SCENE: new Set(),
     ACTIVITY: new Set(['05-thoughtAndCombat']),
-    REST: new Set(['05-thoughtAndCombat', 'factionConflicts']),
+    REST: new Set(['factionConflicts']),
     MONTAGE: new Set(['03-bioTick', '09-worldTick', 'traumaEffects', 'factionConflicts']),
 };
 
