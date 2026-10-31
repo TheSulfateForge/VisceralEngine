@@ -1,3 +1,4 @@
+import { isRegenerateRequest } from './sceneFocus';
 // ============================================================================
 // OOC_DETECTION.TS — v1.31
 //
@@ -107,4 +108,18 @@ export const formatOocForDisplay = (body: string): string => `OOC: ${body}`;
  * meta-reply, the softening-tell baseline would be skewed by a two-sentence
  * message, and the summarizer would write meta-chatter into campaign history.
  */
-export const isNarrativeMessage = (m: { ooc?: boolean }): boolean => m.ooc !== true;
+export const isNarrativeMessage = (m: { ooc?: boolean; engineError?: boolean; text?: string; role?: string }): boolean => {
+    if (m.ooc === true) return false;
+    // v1.48: an engine failure notice is not fiction. Before v1.48 a failed
+    // generation came back as an ordinary MODEL message ("[SYSTEM ERROR]
+    // Neural Link Unstable...") and was sent to the model as story on every
+    // later turn; legacy saves still carry those, so match the text too.
+    if (m.engineError === true) return false;
+    if (m.role === 'model' && typeof m.text === 'string' && LEGACY_ENGINE_ERROR_RE.test(m.text)) return false;
+    // ...and the player's typed "Regenerate response" is not an action.
+    if (m.role === 'user' && typeof m.text === 'string' && isRegenerateRequest(m.text)) return false;
+    return true;
+};
+
+/** v1.48: the transport's pre-v1.48 failure strings. */
+export const LEGACY_ENGINE_ERROR_RE = /^\s*\[SYSTEM (?:ERROR|ALERT)\]/;

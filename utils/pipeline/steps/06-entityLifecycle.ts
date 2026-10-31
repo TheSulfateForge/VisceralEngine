@@ -312,6 +312,11 @@ export const entityLifecycleStep: PipelineStep = {
                     // Engine-owned fields: an absent/blank update never clears them.
                     if (!merged.personality?.trim()) merged.personality = existingEntity.personality;
                     if (!merged.voice_sample?.trim()) merged.voice_sample = existingEntity.voice_sample;
+                    // v1.48: bodies are author/engine-owned. The model reports
+                    // body changes through body_events, never by rewriting the record.
+                    merged.appearance = existingEntity.appearance;
+                    merged.body = existingEntity.body;
+                    merged.bodyState = existingEntity.bodyState;
                     // v1.28: relationship_level is now engine-anchored too. An
                     // omitted value keeps the established relationship instead
                     // of falling through to the schema default, and any value
@@ -332,6 +337,8 @@ export const entityLifecycleStep: PipelineStep = {
                     // v1.24: New entity — enforce the one-of-four archetype cap
                     // in code before the record enters the registry.
                     const newEntity = { ...update };
+                    // v1.48: tracked body state is engine-owned from birth.
+                    delete (newEntity as { bodyState?: unknown }).bodyState;
 
                     // v1.28: seed declared relationships. The character sheet
                     // already states who these people are ("Anwen Drevast (twin

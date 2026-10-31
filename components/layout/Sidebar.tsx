@@ -6,7 +6,9 @@ import { getConditionSeverity, getMakersMark } from '../../utils';
 import { ImageCarousel } from '../common/ImageCarousel';
 import { EnvironmentWidget } from '../sidebar/EnvironmentWidget';
 import { ThreatRadar } from '../sidebar/ThreatRadar';
-import { RelationshipLevel } from '../../types';
+import { RelationshipLevel, KnownEntity } from '../../types';
+import { BodyEditor, BodyStateView } from '../common/BodyEditor';
+import { resolveEntityBody } from '../../utils/engine/bodyModel';
 
 const RelationshipBadge: React.FC<{ level: RelationshipLevel }> = ({ level }) => {
     let colorClass = 'bg-gray-800 text-gray-400';
@@ -31,7 +33,8 @@ export const Sidebar: React.FC = () => {
         gameWorld, 
         gameHistory,
         ui,
-        setUI
+        setUI,
+        setGameWorld,
     } = useGameStore();
 
     const [expandedLedgerId, setExpandedLedgerId] = useState<string | null>(null);
@@ -46,6 +49,12 @@ export const Sidebar: React.FC = () => {
 
     const activeThreats = gameWorld.activeThreats || [];
     const knownEntities = gameWorld.knownEntities || [];
+    // v1.48: in-play edits to an NPC's appearance / body.
+    const updateEntity = (id: string, patch: Partial<KnownEntity>) =>
+        setGameWorld(prev => ({
+            ...prev,
+            knownEntities: (prev.knownEntities ?? []).map(e => (e.id === id ? { ...e, ...patch } : e)),
+        }));
     const environment = gameWorld.environment;
     const tension = gameWorld.tensionLevel || 0;
     const mode = gameWorld.sceneMode || 'NARRATIVE';
@@ -214,6 +223,32 @@ export const Sidebar: React.FC = () => {
                                                     ) : (
                                                         <p className="text-[8px] text-gray-500 italic">No significant memories.</p>
                                                     )}
+
+                                                    {/* v1.48: physical facts — editable in play */}
+                                                    <details className="mt-2 border-t border-gray-800 pt-2">
+                                                        <summary className="text-[7px] font-bold text-gray-500 uppercase tracking-widest cursor-pointer">Body</summary>
+                                                        <div className="pt-2 space-y-2">
+                                                            <textarea
+                                                                className="w-full bg-black border border-gray-800 text-gray-300 text-[9px] p-1.5 focus:outline-none"
+                                                                rows={2}
+                                                                placeholder="Appearance (kept separate from personality)"
+                                                                value={entity.appearance ?? ''}
+                                                                onChange={e => updateEntity(entity.id, { appearance: e.target.value || undefined })}
+                                                            />
+                                                            <BodyEditor
+                                                                compact
+                                                                value={entity.body}
+                                                                onChange={body => updateEntity(entity.id, { body })}
+                                                                parsed={resolveEntityBody({ ...entity, body: undefined }).profile}
+                                                                conflicts={resolveEntityBody({ ...entity, body: undefined }).conflicts}
+                                                            />
+                                                            <BodyStateView
+                                                                profile={resolveEntityBody(entity).profile}
+                                                                state={entity.bodyState}
+                                                                onReset={() => updateEntity(entity.id, { bodyState: undefined })}
+                                                            />
+                                                        </div>
+                                                    </details>
                                                 </div>
                                             )}
                                         </div>

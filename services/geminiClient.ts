@@ -2,10 +2,12 @@
 import { GoogleGenAI, GenerateContentResponse, Schema } from "@google/genai";
 import { GEMINI_SAFETY_SETTINGS, THINKING_DEFAULTS } from "../constants";
 import { ChatMessage, Role, ModelResponseSchema, SCENE_MODES, SceneMode, Lighting, LIGHTING_LEVELS,
-    MontageBlock, MontageType, ProposedMemory, ProposedTrauma, ProposedSkillUpdate, ProposedNpcDelta, TokenUsage } from "../types";
+    MontageBlock, MontageType, ProposedMemory, ProposedTrauma, ProposedSkillUpdate, ProposedNpcDelta, TokenUsage,
+    RELATIONSHIP_LEVELS, RelationshipLevel, DeclaredSocialUpdate } from "../types";
 import { getResponseSchema } from "../schemas/responseSchema";
 import { OOC_RESPONSE_SCHEMA, type OocResponse } from "../schemas/oocSchema";
 import { sanitiseHistory } from '../utils/nameResolver';
+import { isNarrativeMessage } from '../utils/engine/oocDetection';
 import { getContextProfile } from '../config/engineConfig';
 import { systemInstructionCache } from './geminiCache';
 import { SYSTEM_INSTRUCTIONS } from '../systemInstructions';
@@ -309,7 +311,57 @@ export class GeminiClient {
             proposed_npc_deltas: asArray<ProposedNpcDelta>(safeData.montage_block.proposed_npc_deltas),
             age_increment_years: asNumber(safeData.montage_block.age_increment_years, 0),
             season_delta: typeof safeData.montage_block.season_delta === 'string' ? safeData.montage_block.season_delta : undefined,
-        } as MontageBlock : undefined
+        } as MontageBlock : undefined,
+
+        // v1.48: THREE FIELDS THAT NEVER ARRIVED. This function builds a fresh
+        // object, so a schema field not named here is dropped on the floor.
+        // `player_correction` (v1.35), `npc_positions` (v1.37) and
+        // `social_updates` (v1.34) were in the response schema, read by
+        // steps 17 and 18 — and silently discarded here, so the features they
+        // feed never received a single value from the model.
+        player_correction: safeData.player_correction === true ? true : undefined,
+        npc_positions: Array.isArray(safeData.npc_positions)
+            ? safeData.npc_positions
+                .filter((p: unknown): p is Record<string, unknown> => isObject(p))
+                .map((p: Record<string, unknown>) => ({
+                    holder: asString(p.holder, ''),
+                    position: asString(p.position, ''),
+                    ...(typeof p.stance === 'string' && p.stance.trim() ? { stance: p.stance.trim() } : {}),
+                }))
+                .filter(p => p.holder.trim() && p.position.trim())
+            : undefined,
+        social_updates: Array.isArray(safeData.social_updates)
+            ? safeData.social_updates
+                .filter((u: unknown): u is Record<string, unknown> => isObject(u))
+                .map((u: Record<string, unknown>) => ({
+                    from: asString(u.from, ''),
+                    to: asString(u.to, ''),
+                    standing: (RELATIONSHIP_LEVELS as readonly string[]).includes(String(u.standing))
+                        ? (u.standing as RelationshipLevel)
+                        : undefined,
+                    ...(typeof u.basis === 'string' && u.basis.trim() ? { basis: u.basis.trim() } : {}),
+                }))
+                .filter((u): u is DeclaredSocialUpdate => !!u.from.trim() && !!u.to.trim() && u.standing !== undefined)
+            : undefined,
+
+        // v1.48: body events. Wired explicitly — this function returns a new
+        // object, so any field not named here is silently dropped.
+        body_events: Array.isArray(safeData.body_events)
+            ? safeData.body_events
+                .filter((e: unknown): e is Record<string, unknown> => isObject(e))
+                .map((e: Record<string, unknown>) => ({
+                    who: asString(e.who, ''),
+                    kind: asString(e.kind, ''),
+                    orifice: typeof e.orifice === 'string' && e.orifice.trim() ? e.orifice : undefined,
+                    with: typeof e.with === 'string' && e.with.trim() ? e.with : undefined,
+                    by: typeof e.by === 'string' && e.by.trim() ? e.by : undefined,
+                    site: typeof e.site === 'string' && e.site.trim() ? e.site : undefined,
+                    description: typeof e.description === 'string' && e.description.trim() ? e.description : undefined,
+                    severity: typeof e.severity === 'string' && e.severity.trim() ? e.severity : undefined,
+                    level: asOptionalNumber(e.level),
+                }))
+                .filter(e => e.who.trim() && e.kind.trim())
+            : undefined,
     };
   }
 
@@ -348,7 +400,9 @@ export class GeminiClient {
     // carried by [PLAYER CANON], so nothing is lost. As a bonus this keeps the
     // window quantization stable — an OOC exchange no longer shifts the cache
     // prefix for the whole history behind it.
-    const narrativeHistory = history.filter(m => m.ooc !== true);
+    // v1.48: also strips engine failure notices and typed regenerate requests
+    // — see isNarrativeMessage.
+    const narrativeHistory = history.filter(isNarrativeMessage);
     const contextHistory = narrativeHistory.length > 0 ? narrativeHistory.slice(0, -1) : [];
 
     // v1.24 CACHE-STABLE WINDOWING. Implicit caching is prefix-based: the
@@ -523,6 +577,11 @@ export class GeminiClient {
       // Review item 1: capture usageMetadata off the stream. The final
       // chunk carries the complete token counts; we keep the last non-null.
       let capturedUsage: TokenUsage | undefined;
+      // v1.48: why the generation stopped. Four turns of the 2026-10-31 save
+      // came back empty and the log could not say whether that was a block,
+      // a length cut-off, or a network fault.
+      let finishReason: string | undefined;
+      let blockReason: string | undefined;
       const runStream = async (): Promise<string> => {
           const chatAsStream = chat as unknown as {
               sendMessageStream: (args: { message: string }) =>
@@ -539,6 +598,10 @@ export class GeminiClient {
                       try { onChunk(accumulated); } catch { /* swallow UI errors */ }
                   }
               }
+              const cand = (p as unknown as { candidates?: Array<{ finishReason?: string }> }).candidates?.[0];
+              if (cand?.finishReason) finishReason = String(cand.finishReason);
+              const fb = (p as unknown as { promptFeedback?: { blockReason?: string } }).promptFeedback;
+              if (fb?.blockReason) blockReason = String(fb.blockReason);
               if (p.usageMetadata) {
                   const u = p.usageMetadata;
                   capturedUsage = {
@@ -560,7 +623,13 @@ export class GeminiClient {
           )
       ]));
 
-      if (!text) throw new Error("Empty response from model.");
+      if (!text) {
+          const why = [
+              blockReason ? `blockReason=${blockReason}` : '',
+              finishReason ? `finishReason=${finishReason}` : '',
+          ].filter(Boolean).join(', ');
+          throw new Error(`Empty response from model.${why ? ` (${why})` : ' (no finishReason reported)'}`);
+      }
 
       const jsonStr = this.cleanJsonOutput(text);
 
@@ -568,9 +637,26 @@ export class GeminiClient {
           const raw = JSON.parse(jsonStr);
           const validated = this.validateResponse(raw);
           if (capturedUsage) validated.usageMetadata = capturedUsage;
+          if (finishReason) validated.finishReason = finishReason;
           return validated;
       } catch (jsonError) {
           console.error("JSON Parse Error:", jsonError);
+          // v1.48: a response cut off mid-JSON (finishReason MAX_TOKENS, or a
+          // dropped stream) used to reach the player as raw JSON text. Salvage
+          // the narrative string itself when it can be found.
+          const salvaged = salvageNarrative(text);
+          if (salvaged && salvaged.length > 40) {
+              return {
+                  narrative: salvaged,
+                  thought_process: `JSON Structure Collapse (finishReason=${finishReason ?? 'unknown'}). Narrative salvaged from partial output.`,
+                  scene_mode: "NARRATIVE",
+                  tension_level: 50,
+                  time_passed_minutes: 0,
+                  world_tick: { npc_actions: [], environment_changes: [], emerging_threats: [] },
+                  usageMetadata: capturedUsage,
+                  finishReason,
+              };
+          }
           if (text.length > 20) {
                return {
                   narrative: text.replace(/^\[[\w\s/]+\]\.\s*/g, '').trim(),
@@ -595,6 +681,10 @@ export class GeminiClient {
           systemInstructionCache.invalidate(this.modelName);
       }
 
+      // v1.48: `engineError` marks these as FAILURES. Before v1.48 the caller
+      // could not tell them from fiction: they ran the pipeline, advanced the
+      // turn, and entered history as MODEL messages the model then read back
+      // as story on every later turn.
       if (errMsg.includes('503')) {
           return {
             narrative: `[SYSTEM ALERT] The neural lattice is currently overloaded (503). Retrying the connection usually resolves this. Please resubmit your command.`,
@@ -602,7 +692,8 @@ export class GeminiClient {
             scene_mode: "NARRATIVE",
             tension_level: 0,
             time_passed_minutes: 0,
-            world_tick: { npc_actions: [], environment_changes: [], emerging_threats: [] }
+            world_tick: { npc_actions: [], environment_changes: [], emerging_threats: [] },
+            engineError: errMsg,
           };
       }
       return { 
@@ -611,7 +702,8 @@ export class GeminiClient {
         scene_mode: "NARRATIVE",
         tension_level: 50,
         time_passed_minutes: 0,
-        world_tick: { npc_actions: [], environment_changes: [], emerging_threats: [] }
+        world_tick: { npc_actions: [], environment_changes: [], emerging_threats: [] },
+        engineError: errMsg,
       };
     }
   }
@@ -719,3 +811,22 @@ The \`directive\` is PERSISTED and injected into every future turn as a binding 
     }
   }
 }
+
+
+/**
+ * v1.48: pull the `narrative` string out of a response that was cut off before
+ * its JSON closed. Returns the decoded text, or null when no narrative field
+ * started.
+ */
+export const salvageNarrative = (raw: string): string | null => {
+    const m = raw.match(/"narrative"\s*:\s*"((?:[^"\\]|\\.)*)("|$)/s);
+    if (!m) return null;
+    let body = m[1];
+    // A cut can land inside an escape sequence; drop a dangling backslash.
+    body = body.replace(/\\u[0-9a-fA-F]{0,3}$|\\$/, '');
+    try {
+        return JSON.parse(`"${body}"`).trim() || null;
+    } catch {
+        return body.replace(/\\n/g, '\n').replace(/\\"/g, '"').trim() || null;
+    }
+};

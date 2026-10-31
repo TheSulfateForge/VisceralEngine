@@ -157,14 +157,96 @@ const beatIsAboutPlayer = (beat: string, playerName: string | undefined): boolea
  * A beat about the PLAYER is only real if the player's own input says so. NPC
  * beats are unaffected: the model has authority over its own cast.
  */
-const establishedIsGrounded = (
+// ---------------------------------------------------------------------------
+// v1.48 — THE GROUNDING CHECK WAS REJECTING BEATS THE PLAYER HAD PLAYED.
+// ---------------------------------------------------------------------------
+// The 2026-10-31 Nissa save logged 13 "UNGROUNDED PLAYER BEAT" rejections.
+// Replayed against the input that produced each one, three failure modes:
+//
+//   1. CONSEQUENCES, NOT ACTIONS. "Nissa is experiencing intense stretching and
+//      tearing", "Nissa is fully penetrated to the cervix", "Nissa is physically
+//      exhausted". These describe what HAPPENED TO the player — the narrator's
+//      authority, exactly like an NPC beat. v1.45 exists to stop the model
+//      writing the player's next DECISION a turn early ("Ryan formally proposed
+//      marriage"); a state is not a decision.
+//   2. NAMES. The beat says "Nissa ... Ivo"; first-person input says "I ...
+//      him". Both names counted as unmatched words and sank the ratio — "Nissa
+//      has presented her savings to Ivo" scored 1/4 against an input that put
+//      the savings pouch on the counter.
+//   3. WORDING. Exact matching: "squirted" ≠ "squirt", "climaxed" ≠ "cum".
+//
+// Fixes: state/passive beats and involuntary bodily reactions are accepted
+// as the narrator's; a name in the beat counts when the input uses it and is
+// ignored (not a miss) when it doesn't; matching is on 4-char prefixes plus a small synonym fold;
+// tokenising splits on any non-letter, so "wind-affinity" and line breaks
+// no longer glue words together.
+
+/** Copulas / passives right after the player's name: a state, not an act. */
+const CONSEQUENCE_HEAD_RE =
+    /^(?:'s\b|is|was|were|are|remains|remained|feels|felt|has\s+been|had\s+been|is\s+being|was\s+being|gets|got|becomes|became|lies|lay|lay|stays|stayed|looks|looked|seems|seemed)\b/i;
+
+/** Things a body does to its owner rather than things a person decides. */
+const INVOLUNTARY_RE =
+    /^(?:(?:has|had)\s+)?(?:(?:just|again|finally)\s+)?(?:climax\w*|came|cums?|cumming|orgasm\w*|squirt\w*|shudder\w*|trembl\w*|shak\w*|gasp\w*|flinch\w*|winc\w*|whimper\w*|sob\w*|scream\w*|cr(?:y|ies|ied)\s+out|moan\w*|keen\w*|bled|bleed\w*|faint\w*|passed\s+out|blush\w*|flush\w*)\b/i;
+
+const SYNONYMS: Record<string, string> = {
+    cum: 'orgasm', came: 'orgasm', cumming: 'orgasm', climax: 'orgasm', orgasm: 'orgasm',
+    squirt: 'squirt', gush: 'squirt',
+    jump: 'leap', leap: 'leap', vault: 'leap', hop: 'leap',
+};
+
+const tokens = (text: string, dropCapitalised: boolean): string[] =>
+    (text.match(/[A-Za-z0-9']+/g) ?? [])
+        .filter(w => !(dropCapitalised && /^[A-Z]/.test(w)))
+        .map(w => w.toLowerCase().replace(/'s$/, ''))
+        .filter(w => w.length > 2 && significantWords(w).size > 0);
+
+const fold = (w: string): string => {
+    const p = w.slice(0, PREFIX_MATCH_LEN);
+    for (const [k, v] of Object.entries(SYNONYMS)) if (w.startsWith(k) || p === k.slice(0, PREFIX_MATCH_LEN)) return v;
+    return p;
+};
+
+/** Shared predicate words between a player beat and the player's input. */
+const playerBeatOverlap = (beat: string, input: string, playerName?: string): { matched: number; ratio: number } => {
+    const wb = new Set(tokens(input, false).map(fold));
+    const playerParts = new Set(tokens(playerName ?? '', false));
+    // Names: a name the input uses is a match ("will you marry me, Anwen");
+    // a name it does not use is NOT a miss — first-person input says "him",
+    // never "Ivo". The player's own name never counts either way.
+    const names = [...new Set(tokens(beat, false).filter(w => !tokens(beat, true).includes(w)))]
+        .filter(w => !playerParts.has(w));
+    const words = [...new Set(tokens(beat, true))];
+    let matched = 0;
+    let considered = words.length;
+    for (const w of words) if (wb.has(fold(w))) matched++;
+    for (const n of names) if (wb.has(fold(n))) { matched++; considered++; }
+    if (considered === 0) return { matched: 0, ratio: 0 };
+    return { matched, ratio: matched / considered };
+};
+
+/** v1.48: the part of the beat after the player's name / "the player". */
+const predicateAfterSubject = (beat: string, playerName: string | undefined): string => {
+    const t = beat.trim();
+    const lower = t.toLowerCase();
+    const name = (playerName ?? '').trim().toLowerCase();
+    const first = name.split(/\s+/)[0] ?? '';
+    for (const head of ['the player', 'player', name, first].filter(Boolean)) {
+        if (lower.startsWith(head)) return t.slice(head.length).trim();
+    }
+    return t;
+};
+
+export const establishedIsGrounded = (
     beat: string,
     playerName: string | undefined,
     playerInput: string | undefined,
 ): boolean => {
     if (!beatIsAboutPlayer(beat, playerName)) return true;
     if (playerInput === undefined) return true;   // no input supplied — legacy callers
-    const { matched, ratio } = sharedWords(beat, playerInput);
+    const predicate = predicateAfterSubject(beat, playerName);
+    if (CONSEQUENCE_HEAD_RE.test(predicate) || INVOLUNTARY_RE.test(predicate)) return true;
+    const { matched, ratio } = playerBeatOverlap(beat, playerInput, playerName);
     return matched >= PLAYER_BEAT_MIN_WORDS
         || (matched >= 1 && ratio >= PLAYER_BEAT_MIN_RATIO);
 };
@@ -490,6 +572,64 @@ export const directiveSuppressions = (text: string): string[] => {
         .map(([key]) => key);
 };
 
+// ---------------------------------------------------------------------------
+// v1.48 — DEDUP BY MEANING, PINNING, AND NO SILENT EVICTION
+// ---------------------------------------------------------------------------
+// `beatKey` compares the first ten words. The OOC channel rewrites every
+// directive in its own words, so the same instruction sent twice comes back
+// phrased differently and sails past it. In the 2026-10-31 Nissa save "no
+// cold/calculating/predatory" was stored twice — two of five slots — and when
+// the player re-sent his three content rules at turn 36 the FIFO quietly
+// evicted the turn-2 and turn-4 originals. Nothing said so anywhere.
+//
+// Now: a directive whose content words overlap an existing one by at least
+// DIRECTIVE_SIMILARITY replaces it in place (newest wording wins, the slot and
+// any pin are kept); pinned directives are never evicted; and an eviction is
+// reported to the caller so it reaches the debug log.
+
+const DIRECTIVE_STOPWORDS = new Set([
+    'the', 'a', 'an', 'and', 'or', 'of', 'to', 'in', 'on', 'for', 'with', 'by', 'as', 'at', 'is', 'are',
+    'be', 'all', 'any', 'every', 'their', 'them', 'they', 'it', 'its', 'this', 'that', 'these', 'those',
+    'will', 'should', 'must', 'not', 'no', 'do', 'dont', 'never', 'always', 'ensure', 'maintain', 'avoid',
+    'using', 'use', 'from', 'into', 'than', 'such', 'regarding', 'during', 'including', 'remain', 'remains',
+    'character', 'characters', 'npc', 'npcs', 'player', 'narration', 'narrative', 'describe', 'portray',
+]);
+
+const directiveTokens = (s: string): Set<string> => new Set(
+    (s ?? '').toLowerCase().replace(/[^a-z0-9\s-]/g, ' ').split(/[\s-]+/)
+        .filter(w => w.length > 2 && !DIRECTIVE_STOPWORDS.has(w))
+        // crude stem so calculating/calculated, sexual/sexually collide
+        .map(w => w.replace(/(?:ingly|edly|ing|ed|ly|es|s)$/, '')),
+);
+
+/** Share of the SMALLER directive's content words that the other also has. */
+export const DIRECTIVE_SIMILARITY = 0.6;
+
+const overlap = (a: string, b: string): { shared: number; ratio: number } => {
+    const A = directiveTokens(a);
+    const B = directiveTokens(b);
+    if (A.size === 0 || B.size === 0) return { shared: 0, ratio: 0 };
+    let shared = 0;
+    for (const t of A) if (B.has(t)) shared++;
+    return { shared, ratio: shared / Math.min(A.size, B.size) };
+};
+
+export const directiveSimilarity = (a: string, b: string): number => overlap(a, b).ratio;
+
+/**
+ * Same instruction, different words? Either most of the shorter one's content
+ * words recur, or three or more specific words do and a good share of it.
+ * Measured on the Nissa save: the two "no cold/calculating/predatory" rewrites
+ * score 0.43–0.60 against each other; unrelated directives top out at 0.29.
+ */
+export const directivesAreSame = (a: string, b: string): boolean => {
+    const { shared, ratio } = overlap(a, b);
+    return ratio >= DIRECTIVE_SIMILARITY || (shared >= 3 && ratio >= 0.4);
+};
+
+/** Pinned directives are capped separately so a pin can never be evicted by traffic. */
+export const OOC_PINNED_MAX = 12;
+
 /**
  * Append a directive, de-duplicated against what is already standing.
  *
@@ -502,18 +642,33 @@ export const ingestOocDirective = (
     directive: string | undefined | null,
     turn: number,
     idFactory: () => string,
-): { directives: OocDirective[]; added: boolean } => {
+): { directives: OocDirective[]; added: boolean; replaced?: string; evicted: string[] } => {
     const text = (directive ?? '').trim();
     const current = existing ? [...existing] : [];
-    if (!text) return { directives: current, added: false };
+    if (!text) return { directives: current, added: false, evicted: [] };
 
     const key = beatKey(text);
     if (!key || current.some(d => beatKey(d.text) === key)) {
-        return { directives: current, added: false };
+        return { directives: current, added: false, evicted: [] };
     }
 
     const suppresses = directiveSuppressions(text);
     const sceneScoped = isSceneScopedDirective(text);
+
+    // v1.48: the same instruction in new words REPLACES the old one in place.
+    const twin = current.findIndex(d => directivesAreSame(d.text, text));
+    if (twin >= 0) {
+        const old = current[twin];
+        current[twin] = {
+            ...old,
+            text,
+            turn,
+            ...(suppresses.length > 0 ? { suppresses } : { suppresses: undefined }),
+            ...(sceneScoped ? { sceneScoped: true } : { sceneScoped: undefined }),
+        };
+        return { directives: current, added: true, replaced: old.text, evicted: [] };
+    }
+
     current.push({
         id: idFactory(),
         text,
@@ -521,10 +676,27 @@ export const ingestOocDirective = (
         ...(suppresses.length > 0 ? { suppresses } : {}),
         ...(sceneScoped ? { sceneScoped: true } : {}),
     });
-    const capped = current.length > OOC_DIRECTIVE_MAX
-        ? current.slice(current.length - OOC_DIRECTIVE_MAX)
-        : current;
-    return { directives: capped, added: true };
+    return { ...capDirectives(current), added: true };
+};
+
+/**
+ * v1.48: FIFO over the UNPINNED directives only, keeping list order. Returns
+ * what fell off so the caller can say so.
+ */
+export const capDirectives = (list: OocDirective[]): { directives: OocDirective[]; evicted: string[] } => {
+    const rolling = list.filter(d => !d.pinned);
+    const pinned = list.filter(d => d.pinned);
+    const evictIds = new Set<string>();
+    if (rolling.length > OOC_DIRECTIVE_MAX) {
+        for (const d of rolling.slice(0, rolling.length - OOC_DIRECTIVE_MAX)) evictIds.add(d.id);
+    }
+    if (pinned.length > OOC_PINNED_MAX) {
+        for (const d of pinned.slice(0, pinned.length - OOC_PINNED_MAX)) evictIds.add(d.id);
+    }
+    return {
+        directives: list.filter(d => !evictIds.has(d.id)),
+        evicted: list.filter(d => evictIds.has(d.id)).map(d => d.text),
+    };
 };
 
 /** Every reminder key countermanded by any standing directive. */
@@ -539,11 +711,17 @@ export const suppressedReminderKeys = (directives: OocDirective[] | undefined): 
  * so the player's instructions are the last thing the model reads. The
  * precedence sentence below is what makes that placement mean something.
  */
-export const buildOocDirectivesBlock = (directives: OocDirective[] | undefined): string => {
-    if (!directives || directives.length === 0) return '';
-    const lines = directives
-        .map(d => `- ${d.text}${d.sceneScoped ? '  (THIS SCENE — expires when the scene changes)' : ''}`)
-        .join('\n');
+export const buildOocDirectivesBlock = (
+    directives: OocDirective[] | undefined,
+    /** v1.48: content-policy lines from Settings, rendered first. */
+    policyLines: string[] = [],
+): string => {
+    if ((!directives || directives.length === 0) && policyLines.length === 0) return '';
+    const lines = [
+        ...policyLines.map(l => `- ${l}  (content policy — set in Settings)`),
+        ...(directives ?? [])
+            .map(d => `- ${d.text}${d.sceneScoped ? '  (THIS SCENE — expires when the scene changes)' : ''}`),
+    ].join('\n');
     return `[STANDING DIRECTIVES — from the player, binding, HIGHEST PRECEDENCE]
 The player gave these instructions about HOW to narrate, out of character.
 They apply to every turn from now on, not just the turn they were given.

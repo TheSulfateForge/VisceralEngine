@@ -1,4 +1,6 @@
 
+import { BodyEditor } from '../common/BodyEditor';
+import { resolveCharacterBody } from '../../utils/engine/bodyModel';
 import React, { useState } from 'react';
 import { Character, CharacterTemplate, WorldSeedId } from '../../types';
 import { ListEditor } from '../common/ListEditor';
@@ -113,6 +115,7 @@ export const CreatorView: React.FC = () => {
                     conditions: [...character.conditions],
                     goals: [...character.goals],
                     languagesKnown: [...(character.languagesKnown ?? [])],
+                    ...(character.body ? { body: { ...character.body } } : {}),   // v1.48
                 }
             };
 
@@ -141,6 +144,8 @@ export const CreatorView: React.FC = () => {
             conditions: [...t.conditions],
             goals: [...t.goals],
             languagesKnown: [...(t.languagesKnown ?? [])],
+            body: t.body ? { ...t.body } : undefined,   // v1.48
+            bodyState: undefined,                       // v1.48: a template is a fresh body
         }));
         setShowTemplateModal(false);
         setMode('manual'); // Switch to manual so they can edit
@@ -493,6 +498,26 @@ export const CreatorView: React.FC = () => {
                         </div>
                     </div>
                     
+                    {/* v1.48: structured body. Empty fields fall back to what the engine reads from Appearance. */}
+                    <details className="border border-gray-900 p-4">
+                        <summary className="text-[10px] font-bold text-gray-500 uppercase tracking-widest cursor-pointer">
+                            Body — measurements &amp; virginity (optional)
+                        </summary>
+                        <div className="pt-4">
+                            {(() => {
+                                const parsed = resolveCharacterBody({ ...character, body: undefined });
+                                return (
+                                    <BodyEditor
+                                        value={character.body}
+                                        onChange={body => setCharacter(prev => ({ ...prev, body }))}
+                                        parsed={parsed.profile}
+                                        conflicts={parsed.conflicts}
+                                    />
+                                );
+                            })()}
+                        </div>
+                    </details>
+
                     <div className={`space-y-6 ${fieldGlow('backstory')}`}>
                         <div className="flex items-start">
                             <div className="flex-1">

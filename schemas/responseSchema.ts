@@ -155,7 +155,7 @@ export const RESPONSE_SCHEMA: Schema = {
           name: { type: Type.STRING },
           role: { type: Type.STRING },
           location: { type: Type.STRING },
-          impression: { type: Type.STRING, description: "The PC's CURRENT situational read of this NPC: mood right now, stance toward the PC, what they appear to want this scene. NOT a personality summary — personality is canonical, engine-owned, and cannot be changed from here. Never compress a character into archetype adjectives (predatory/cold/calculating/clinical)." },
+          impression: { type: Type.STRING, description: "The PC's CURRENT situational read of this NPC: mood right now, stance toward the PC, what they appear to want this scene. NOT a personality summary — personality is canonical, engine-owned, and cannot be changed from here. Never compress a character into archetype adjectives (the threat-archetype register, SYSTEM_INSTRUCTIONS §10)." },
           relationship_level: { type: Type.STRING, enum: ['NEMESIS', 'HOSTILE', 'COLD', 'NEUTRAL', 'WARM', 'ALLIED', 'DEVOTED'] },
           leverage: { type: Type.STRING },
           ledger: { type: Type.ARRAY, items: { type: Type.STRING } },
@@ -303,6 +303,29 @@ export const RESPONSE_SCHEMA: Schema = {
           stance: { type: Type.STRING },
         },
         required: ["holder", "position"],
+      },
+    },
+    // v1.48: BODY EVENTS. Nothing tracked what happened to a body: conditions
+    // were single words, virginity was never marked lost, and the player had
+    // to re-ask for the aftermath. The engine folds these into BodyState and
+    // renders the result back in [BODIES IN CONTACT].
+    body_events: {
+      type: Type.ARRAY,
+      nullable: true,
+      description: "What happened to bodies THIS turn; omit if nothing. kind: penetration (orifice vaginal|anal|oral, with penis|fingers|tongue|object, by) | virginity_lost | orgasm | injury (site, severity minor|moderate|severe) | insemination (orifice, by) | stretch (orifice, level 1-3). who = exact name it happened TO.",
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          who: { type: Type.STRING },
+          kind: { type: Type.STRING },
+          orifice: { type: Type.STRING },
+          with: { type: Type.STRING },
+          by: { type: Type.STRING },
+          site: { type: Type.STRING },
+          severity: { type: Type.STRING },
+          level: { type: Type.INTEGER },
+        },
+        required: ["who", "kind"],
       },
     },
     // v1.26: legacy new_memory singleton removed from the schema — every
@@ -512,6 +535,7 @@ export const KEEP_DESCRIPTIONS: ReadonlySet<string> = new Set<string>([
   'established', 'player_assertions',   // v1.31 — both need their scope rules kept
   'player_correction',                  // v1.35
   'npc_positions', 'position',          // v1.37 — scope + concession rule
+  'body_events',                        // v1.48 — event vocabulary
   'new_lore', 'keyword', 'content',
   'biological_inputs',
   'location_update', 'traveled_from', 'travel_time_minutes', 'nearby_locations',
@@ -583,10 +607,19 @@ const TRAVEL_MODES: ReadonlySet<SchemaMode> = new Set(['NARRATIVE', 'TENSION', '
  * model. Drops mode-irrelevant branches and strips non-critical descriptions.
  * Always keeps biology / trauma / conditions (mature-consequence core).
  */
-export const getResponseSchema = (mode: SchemaMode = 'NARRATIVE'): Schema => {
+export const getResponseSchema = (
+  mode: SchemaMode = 'NARRATIVE',
+  /**
+   * v1.48: include `body_events`. Off by default — every property costs
+   * request tokens on every turn, and most turns change no body. The caller
+   * turns it on for sexual scenes and combat.
+   */
+  options: { bodyEvents?: boolean } = {},
+): Schema => {
   const clone = cloneSchema(RESPONSE_SCHEMA);
   const props = (clone as AnySchema).properties as Record<string, Schema>;
 
+  if (!options.bodyEvents) delete props.body_events;
   if (!COMBAT_MODES.has(mode)) delete props.combat_context;
   if (!TRAVEL_MODES.has(mode)) delete props.location_update;
   if (mode !== 'MONTAGE') delete props.montage_block;

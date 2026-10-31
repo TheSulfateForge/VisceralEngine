@@ -300,6 +300,8 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
       bio: character.bio,
       condition_timestamps: character.conditionTimestamps ?? null,
       languages_known: character.languagesKnown ?? null,
+      body: character.body ?? null,                 // v1.48
+      body_state: character.bodyState ?? null,      // v1.48
     };
     await vdb.characters.put(charRow);
 
@@ -375,6 +377,7 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
         world_tick: m.worldTick ?? null,
         metadata: m.metadata ?? null,
         ooc: m.ooc ?? null,          // v1.31
+        engine_error: m.engineError ?? null,   // v1.48
       }));
 
       // Best-effort turn_number assignment: increment on each USER message.
@@ -493,6 +496,9 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
           impression: e.impression,
           personality: e.personality?.trim() ? e.personality.trim() : null,
           voice_sample: e.voice_sample?.trim() ? e.voice_sample.trim() : null,
+          appearance: e.appearance?.trim() ? e.appearance.trim() : null,   // v1.48
+          body: e.body ?? null,                                             // v1.48
+          body_state: e.bodyState ?? null,                                  // v1.48
           relationship_level: e.relationship_level,
           leverage: e.leverage,
           status: (e.status ?? 'present') as typeof ENTITY_STATUSES[number],
@@ -944,6 +950,8 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
       ooc_directives: world.oocDirectives ?? null,                 // v1.35
       correction_flagged_turn: world.correctionFlaggedTurn ?? null, // v1.35
       npc_positions: world.npcPositions ?? null,                   // v1.37
+      content_policy: world.contentPolicy ?? null,                 // v1.48
+      scene_focus: world.sceneFocus ?? null,                       // v1.48
       voice_lock_flagged_turn: world.voiceLockFlaggedTurn ?? null,       // v1.37
       voice_lock_flagged_names: world.voiceLockFlaggedNames ?? null,     // v1.37
       voice_lock_flagged_direction: world.voiceLockFlaggedDirection ?? null, // v1.37
@@ -1077,6 +1085,8 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
           }))
         : undefined,
       languagesKnown: charRow.languages_known ?? undefined,
+      ...(charRow.body ? { body: charRow.body } : {}),              // v1.48
+      ...(charRow.body_state ? { bodyState: charRow.body_state } : {}), // v1.48
     };
 
     // ─── History ───
@@ -1093,6 +1103,7 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
       ...(m.world_tick ? { worldTick: m.world_tick } : {}),
       ...(m.metadata ? { metadata: m.metadata } : {}),
       ...(m.ooc ? { ooc: true } : {}),   // v1.31
+      ...(m.engine_error ? { engineError: true } : {}),   // v1.48
     }));
 
     const summarySegmentRows = await vdb.summary_segments
@@ -1207,6 +1218,9 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
       // absent on output), preserving round-trip equivalence.
       ...(e.personality ? { personality: e.personality } : {}),
       ...(e.voice_sample ? { voice_sample: e.voice_sample } : {}),
+      ...(e.appearance ? { appearance: e.appearance } : {}),   // v1.48
+      ...(e.body ? { body: e.body } : {}),                     // v1.48
+      ...(e.body_state ? { bodyState: e.body_state } : {}),    // v1.48
       ...(e.status ? { status: e.status } : {}),
       ...(e.last_seen_turn !== null ? { lastSeenTurn: e.last_seen_turn } : {}),
       ...(e.first_seen_turn !== null ? { firstSeenTurn: e.first_seen_turn } : {}),
@@ -1557,6 +1571,8 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
       ...(ws.ooc_directives?.length ? { oocDirectives: ws.ooc_directives } : {}),          // v1.35
       ...(ws.correction_flagged_turn != null ? { correctionFlaggedTurn: ws.correction_flagged_turn } : {}), // v1.35
       ...(ws.npc_positions?.length ? { npcPositions: ws.npc_positions } : {}),                                   // v1.37
+      ...(ws.content_policy ? { contentPolicy: ws.content_policy } : {}),                                        // v1.48
+      ...(ws.scene_focus ? { sceneFocus: ws.scene_focus } : {}),                                                 // v1.48
       ...(ws.voice_lock_flagged_turn != null ? { voiceLockFlaggedTurn: ws.voice_lock_flagged_turn } : {}),      // v1.37
       ...(ws.voice_lock_flagged_names?.length ? { voiceLockFlaggedNames: ws.voice_lock_flagged_names } : {}),   // v1.37
       ...(ws.voice_lock_flagged_direction ? { voiceLockFlaggedDirection: ws.voice_lock_flagged_direction } : {}), // v1.37

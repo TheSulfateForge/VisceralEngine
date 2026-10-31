@@ -2,6 +2,7 @@
 import React, { useRef, useState } from 'react';
 import { MODELS } from "../../constants";
 import { getTuning, setTuning, resetTuning, TUNING_DEFAULTS, TuningValues } from "../../config/tuning";
+import { ContentPolicyPanel } from "./ContentPolicyPanel";
 
 interface SettingsOverlayProps {
     currentModel: string;
@@ -164,6 +165,9 @@ export const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ currentModel, 
                     Pacing dials apply from the next turn. Dot marks a value changed from default.
                 </p>
             </div>
+
+            {/* v1.48: content policy + standing directives */}
+            <ContentPolicyPanel />
 
             <div className="space-y-3 pt-4 border-t border-gray-900">
                 <label className="text-[10px] font-bold text-gray-700 uppercase tracking-widest block">Data Preservation</label>

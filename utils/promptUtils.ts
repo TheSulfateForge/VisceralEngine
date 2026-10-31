@@ -1,4 +1,6 @@
-import { GameHistory, GameWorld, Character, SceneMode, MemoryItem, LoreItem, KnownEntity, BioMonitor, ActiveThreat, DormantHook, FactionExposure, ThreatDenialTracker, ChatMessage, SummarySegment, Role } from '../types';
+import { resolveCharacterBody, describeBodyState, vaginalVirginity, analVirginity } from './engine/bodyModel';
+import { contentPolicyLines, effectiveContentPolicy } from './engine/contentPolicy';
+import { GameHistory, GameWorld, Character, SceneMode, MemoryItem, LoreItem, KnownEntity, BioMonitor, ActiveThreat, DormantHook, FactionExposure, ThreatDenialTracker, ChatMessage, SummarySegment, Role, PlayerCanonEntry } from '../types';
 import { retrieveRelevantContext, retrieveRelevantMemories, retrieveRelevantSegments, findAliasMatchedEntities, RAGResult } from './ragEngine';
 import {
   buildHybridContext,
@@ -732,7 +734,11 @@ governed by [WHAT NPCS KNOW] below.
  * v1.26: Character state — the volatile half (inventory, conditions,
  * relationships, goals, skills). Stays in the per-turn dynamic prompt.
  */
-const buildCharacterStateBlock = (character: Character): string => {
+const buildCharacterStateBlock = (
+    character: Character,
+    nowMinute: number = 0,
+    canon: PlayerCanonEntry[] = [],
+): string => {
     // Partition conditions: long personality/trait paragraphs that leaked in from
     // character creation are separated from short mechanical game-states.
     // Traits go into the CHARACTER TRAITS section (read-only context for the AI).
@@ -745,12 +751,26 @@ const buildCharacterStateBlock = (character: Character): string => {
 
     const skillBlock = buildSkillPromptBlock(character.skills ?? []);
 
+    // v1.48: tracked body state rides EVERY turn, not only intimate ones, so
+    // aftermath (soreness, injuries, fluids, lost virginity) persists after the
+    // scene ends without the player asking for it.
+    const resolvedBody = resolveCharacterBody(character, canon).profile;
+    const bodyNow = describeBodyState(character.bodyState, nowMinute);
+    const virginityKnown = vaginalVirginity(resolvedBody, character.bodyState) !== 'unknown'
+        || analVirginity(resolvedBody, character.bodyState) !== 'unknown';
+    const bodyLines = [
+        virginityKnown
+            ? `- **Virginity:** vaginal — ${vaginalVirginity(resolvedBody, character.bodyState)}; anal — ${analVirginity(resolvedBody, character.bodyState)}`
+            : '',
+        bodyNow ? `- **Body (tracked):** ${bodyNow}` : '',
+    ].filter(Boolean).join('\n');
+
     return `
 **Player Character — Current State (identity canon is in the system preamble)**
 - **Inventory:** ${character.inventory.join(', ')}
 - **Active Conditions (mechanical game-states, may be updated):** ${activeConditions.length > 0 ? activeConditions.join(', ') : 'None'}${traitsSection}
 - **Relationships:** ${character.relationships.join(', ')}
-- **Goals:** ${character.goals.join(', ')}${skillBlock}
+- **Goals:** ${character.goals.join(', ')}${skillBlock}${bodyLines ? `\n${bodyLines}` : ''}
     `.trim();
 };
 
@@ -1140,7 +1160,11 @@ export const constructGeminiPrompt = async (
   const pacingInstruction = buildPacingInstruction(tension, currentMode, isDowntime, isSleeping, gameWorld);
   // v1.26: identity (static, cached) vs state (volatile, per-turn)
   const characterIdentityBlock = buildCharacterIdentityBlock(character);
-  const characterStateBlock = buildCharacterStateBlock(character);
+  const characterStateBlock = buildCharacterStateBlock(
+      character,
+      gameWorld.time?.totalMinutes ?? 0,
+      gameWorld.playerCanon ?? [],
+  );
 
   // v1.39: the GM-only half of the backstory, plus the rule that bounds what
   // NPCs know. Both are campaign-static, so they ride the cached prefix with
@@ -1264,7 +1288,11 @@ This world is fundamentally: ${gameWorld.worldTags.join(', ')}.
   // reminders. Rationale in the PromptResult doc comment: mid-prompt placement
   // put the player's binding instructions structurally BELOW the engine's own
   // reminders, and on Flash-Lite the tail wins.
-  const oocDirectivesBlock = sanitise(buildOocDirectivesBlock(gameWorld.oocDirectives));
+  // v1.48: the Settings content policy renders first inside this block.
+  const oocDirectivesBlock = sanitise(buildOocDirectivesBlock(
+      gameWorld.oocDirectives,
+      contentPolicyLines(effectiveContentPolicy(gameWorld)),
+  ));
 
   // v1.19: Dream/Nightmare seed — only injected when the player is sleeping
   // and trauma ≥ DREAM_TRAUMA_THRESHOLD. Empty string otherwise.

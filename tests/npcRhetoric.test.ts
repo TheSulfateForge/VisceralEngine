@@ -282,13 +282,26 @@ describe('ingestOocDirective', () => {
     });
 
     it('caps FIFO, keeping the most recent', () => {
-        let acc = ingestOocDirective(undefined, 'directive number zero here', 0, id).directives;
-        for (let i = 1; i <= OOC_DIRECTIVE_MAX + 2; i++) {
-            acc = ingestOocDirective(acc, `directive number ${i} here`, i, id).directives;
+        // v1.48: these must be genuinely different instructions — near-identical
+        // strings ("directive number 1 here" / "... 2 here") are now the same
+        // directive restated and replace each other in place.
+        const distinct = [
+            'Keep weather in the background unless it matters.',
+            'Use metric units for distances.',
+            'Name every tavern patron who speaks.',
+            'Write dialogue without dialect spelling.',
+            'Let shopkeepers haggle over prices.',
+            'Mention the time of day at scene openings.',
+            'Give horses names and temperaments.',
+            'Describe meals with the cost paid.',
+        ];
+        let acc = ingestOocDirective(undefined, distinct[0], 0, id).directives;
+        for (let i = 1; i < distinct.length; i++) {
+            acc = ingestOocDirective(acc, distinct[i], i, id).directives;
         }
         expect(acc).toHaveLength(OOC_DIRECTIVE_MAX);
-        expect(acc[acc.length - 1].text).toContain(`number ${OOC_DIRECTIVE_MAX + 2}`);
-        expect(acc.some(d => d.text.includes('number zero'))).toBe(false);
+        expect(acc[acc.length - 1].text).toBe(distinct[distinct.length - 1]);
+        expect(acc.some(d => d.text === distinct[0])).toBe(false);
     });
 });
 

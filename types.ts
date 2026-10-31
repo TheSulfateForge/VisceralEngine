@@ -156,6 +156,157 @@ export type EntityStatus = typeof ENTITY_STATUSES[number];
 export const RELATIONSHIP_LEVELS = ['NEMESIS', 'HOSTILE', 'COLD', 'NEUTRAL', 'WARM', 'ALLIED', 'DEVOTED'] as const;
 export type RelationshipLevel = typeof RELATIONSHIP_LEVELS[number];
 
+// --- v1.48: Bodies ----------------------------------------------------------
+
+/**
+ * v1.48: structured physical facts for a character, PC or NPC.
+ *
+ * Before this the body lived only in prose — the PC's `appearance` paragraph
+ * (cached in the static prefix 20K+ tokens from the turn) and, for NPCs, inside
+ * the `personality` sheet, where a 460-char cap for mentioned NPCs could cut it
+ * and the voice-lock checker read it as personality. In the 2026-10-31 Nissa
+ * save the player restated, over OOC, measurements that were already on both
+ * sheets, because nothing put them in front of the model when they mattered.
+ *
+ * Every field is optional. Unset numeric fields fall back to what
+ * `utils/engine/bodyModel.ts` can parse out of the prose sheets.
+ * Lengths are inches; weight is pounds. Girth is CIRCUMFERENCE.
+ */
+export interface BodyProfile {
+    heightIn?: number;
+    weightLb?: number;
+    build?: string;
+    penisLengthIn?: number;
+    penisGirthIn?: number;
+    /** Maximum aroused vaginal depth to the cervix. */
+    vaginalDepthIn?: number;
+    /** Free text: "virgin-tight", "tight", "average"... */
+    vaginalTightness?: string;
+    analTightness?: string;
+    breasts?: string;
+    /** Free-text genital description, verbatim from the author. */
+    genitals?: string;
+    /** Anything else physical the author wants honoured. */
+    notes?: string;
+    /**
+     * Starting virginity, as authored. The CURRENT status is this AND no
+     * matching entry in BodyState — the engine never edits the profile.
+     */
+    vaginalVirgin?: boolean;
+    analVirgin?: boolean;
+}
+
+export const BODY_INJURY_SEVERITIES = ['minor', 'moderate', 'severe'] as const;
+export type BodyInjurySeverity = typeof BODY_INJURY_SEVERITIES[number];
+
+export interface BodyInjury {
+    id: string;
+    /** Where on the body: "vaginal entrance", "cervix", "left wrist". */
+    site: string;
+    description: string;
+    severity: BodyInjurySeverity;
+    turnInflicted: number;
+    /** World-clock minute at which it is healed and dropped. */
+    healsAtMinute: number;
+}
+
+export interface BodyFluid {
+    id: string;
+    /** "Ivo Kerrick's semen", "blood". */
+    what: string;
+    /** "vagina", "anus", "thighs". */
+    where: string;
+    turn: number;
+    clearsAtMinute: number;
+}
+
+export interface VirginityLoss {
+    turn: number;
+    /** World-clock minute. */
+    atMinute: number;
+    /** Who or what took it. */
+    by: string;
+}
+
+/**
+ * v1.48: what has HAPPENED to a body. Engine-owned: written only by
+ * `applyBodyEvents` from the model's `body_events` and by the heal/clear tick.
+ */
+export interface BodyState {
+    vaginalVirginityLost?: VirginityLoss;
+    analVirginityLost?: VirginityLoss;
+    /** 0 none · 1 stretched · 2 badly stretched · 3 gaped. Decays with time. */
+    vaginalStretch?: number;
+    analStretch?: number;
+    /** World-clock minute of the last stretch change; decay counts from here. */
+    stretchUpdatedAtMinute?: number;
+    injuries?: BodyInjury[];
+    fluids?: BodyFluid[];
+    orgasmCount?: number;
+    lastOrgasmTurn?: number;
+}
+
+export const BODY_EVENT_KINDS = [
+    'penetration', 'virginity_lost', 'orgasm', 'injury', 'insemination', 'stretch',
+] as const;
+export type BodyEventKind = typeof BODY_EVENT_KINDS[number];
+
+/** v1.48: what the model reports happened to a body this turn. */
+export interface BodyEvent {
+    /** Exact name of the character the event happened TO. */
+    who: string;
+    kind: string;
+    /** 'vaginal' | 'anal' | 'oral' — for penetration / insemination / stretch. */
+    orifice?: string;
+    /** 'penis' | 'fingers' | 'tongue' | 'object' — only penis takes virginity on its own. */
+    with?: string;
+    /** Who did it. */
+    by?: string;
+    /** For injury: where. */
+    site?: string;
+    description?: string;
+    /** For injury: minor | moderate | severe. */
+    severity?: string;
+    /** For stretch: 1-3. */
+    level?: number;
+}
+
+// --- v1.48: Content policy ---------------------------------------------------
+
+/**
+ * v1.48: standing content rules the player sets ONCE, in Settings, instead of
+ * re-issuing them over OOC every session. In the 2026-10-31 Nissa save three of
+ * the five standing directives were exactly these, typed twice each, and the
+ * five-slot FIFO evicted the first copies when the player re-sent them.
+ */
+export interface ContentPolicy {
+    /** 'default' adds nothing; 'consensual' / 'any' state it outright. */
+    npcSexualInitiative: 'default' | 'consensual' | 'any';
+    /** 'explicit' = no euphemism, no softening, no fade-to-black. */
+    explicitness: 'default' | 'explicit';
+    /** Descriptors no character may be given. Enforced on the output. */
+    bannedDescriptors: string[];
+    /** Inject the [BODIES IN CONTACT] block in intimate scenes. */
+    anatomicalRealism: boolean;
+    /**
+     * Narration perspective. 'match' follows how the player writes. Optional
+     * so stored policies from before it existed read back as 'match'.
+     */
+    narrationPerson?: 'match' | 'first' | 'second' | 'third';
+}
+
+/** v1.48: a player-set focus for the current scene. */
+export interface SceneFocus {
+    text: string;
+    setTurn: number;
+    /** Location when it was set; cleared when the location changes. */
+    location: string;
+    /** Survives scene changes until cleared by hand. */
+    keepAcrossScenes?: boolean;
+    /** 'manual' (typed in the focus field) or 'bracket' (captured from a [..] note). */
+    source?: 'manual' | 'bracket';
+}
+
 export interface KnownEntity {
     id: string;
     name: string;
@@ -184,6 +335,13 @@ export interface KnownEntity {
      * defense against voice drift across long campaigns.
      */
     voice_sample?: string;
+
+    /** v1.48: physical description, separate from personality. Engine/author-owned. */
+    appearance?: string;
+    /** v1.48: structured body facts. Engine/author-owned. */
+    body?: BodyProfile;
+    /** v1.48: what has happened to this body. Engine-owned. */
+    bodyState?: BodyState;
 
     /**
      * v1.27: True for NPCs born from the WorldSeed (and anything else the
@@ -565,6 +723,10 @@ export interface WorldSeedNPC {
   description: string;
   personality: string;
   goals: string[];
+  /** v1.48: physical description. */
+  appearance?: string;
+  /** v1.48: structured body facts. */
+  body?: BodyProfile;
 }
 
 export interface WorldSeedRule {
@@ -943,6 +1105,19 @@ export interface ModelResponseSchema {
      */
     npc_positions?: NpcPositionUpdate[];
 
+    /** v1.48: what happened to bodies this turn — feeds BodyState. */
+    body_events?: BodyEvent[];
+
+    /**
+     * v1.48: runtime-only. Set by the transport when the generation FAILED and
+     * the returned narrative is an engine error string, not fiction. A failed
+     * turn must not run the pipeline, advance the turn, or enter history as a
+     * model message — it was being fed back to the model as story.
+     */
+    engineError?: string;
+    /** v1.48: runtime-only. The candidate's finishReason, when reported. */
+    finishReason?: string;
+
     time_passed_minutes?: number;
     biological_inputs?: BioInputs;
 
@@ -1020,6 +1195,12 @@ export interface ChatMessage {
      * softening-tell length baselines, summarization windows).
      */
     ooc?: boolean;
+    /**
+     * v1.48: an engine failure notice (empty response, timeout, block). Shown
+     * to the player, never sent to the model, never counted as narrative, and
+     * removed by Regenerate.
+     */
+    engineError?: boolean;
 }
 
 // --- v1.31: Player-authored canon -------------------------------------------
@@ -1100,6 +1281,11 @@ export interface OocDirective {
      * which read back as permanent — the pre-v1.42 behaviour.
      */
     sceneScoped?: boolean;
+    /**
+     * v1.48: pinned directives are never evicted by the FIFO cap. Set by the
+     * player in Settings → Standing Directives.
+     */
+    pinned?: boolean;
 }
 
 /** v1.37: what the model reports about an NPC's stance this turn. */
@@ -1184,13 +1370,17 @@ export interface Character {
      * only). Missing/empty ⇒ legacy behavior (all languages understood).
      */
     languagesKnown?: string[];
+    /** v1.48: structured body facts. */
+    body?: BodyProfile;
+    /** v1.48: what has happened to this body. Engine-owned. */
+    bodyState?: BodyState;
 }
 
 export interface CharacterTemplate {
     id: TemplateId;
     name: string;
     timestamp: string;
-    character: Omit<Character, 'bio' | 'trauma' | 'hiddenNotes'>;
+    character: Omit<Character, 'bio' | 'trauma' | 'hiddenNotes' | 'bodyState'>;
 }
 
 export interface GeneratedCharacterFields {
@@ -1447,6 +1637,15 @@ export interface GameWorld {
      * start empty and build a graph from their next turn.
      */
     socialGraph?: SocialTie[];
+
+    /**
+     * v1.48: campaign content policy. Absent ⇒ the global default from
+     * Settings (localStorage) applies — see utils/engine/contentPolicy.ts.
+     */
+    contentPolicy?: ContentPolicy;
+
+    /** v1.48: player-set focus for the current scene. */
+    sceneFocus?: SceneFocus;
 }
 
 export interface CalendarConfig {

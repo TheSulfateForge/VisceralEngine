@@ -1,3 +1,5 @@
+import { BodyEditor, BodyStateView } from '../common/BodyEditor';
+import { resolveCharacterBody } from '../../utils/engine/bodyModel';
 import React, { useState } from 'react';
 import { useGameStore } from '../../store';
 import { useGeminiClient } from '../../hooks/useGeminiClient';
@@ -253,6 +255,34 @@ export const CharacterView: React.FC = () => {
                     placeholder="No description recorded"
                     rows={5}
                 />
+
+                {/* v1.48: structured body + tracked state */}
+                <section>
+                    <label className="text-[11px] font-bold text-gray-400 uppercase tracking-[0.5em] block mb-8 border-l-4 border-red-900 pl-4">Body</label>
+                    {(() => {
+                        const resolved = resolveCharacterBody({ ...character, body: undefined }, gameWorld.playerCanon ?? []);
+                        const effective = resolveCharacterBody(character, gameWorld.playerCanon ?? []).profile;
+                        return (
+                            <div className="space-y-6">
+                                {isEditing ? (
+                                    <BodyEditor
+                                        value={character.body}
+                                        onChange={body => setCharacter(prev => ({ ...prev, body }))}
+                                        parsed={resolved.profile}
+                                        conflicts={character.body?.heightIn !== undefined ? resolved.conflicts.filter(c => !/height/.test(c)) : resolved.conflicts}
+                                    />
+                                ) : (
+                                    <p className="text-[10px] text-gray-500 font-mono">Edit Subject to set measurements. Empty fields use what the engine reads from the description and canon.</p>
+                                )}
+                                <BodyStateView
+                                    profile={effective}
+                                    state={character.bodyState}
+                                    onReset={isEditing ? () => setCharacter(prev => ({ ...prev, bodyState: undefined })) : undefined}
+                                />
+                            </div>
+                        );
+                    })()}
+                </section>
 
                 <EditableText
                     label="Neural Resonance"

@@ -7,6 +7,7 @@ import {
     ingestOocDirective,
     suppressedReminderKeys,      // v1.37
     buildNpcPositionsBlock,      // v1.37
+    directiveSuppressions,       // v1.48
 } from '../utils/engine/sceneContinuity';
 import { mapSystemErrorToNarrative } from '../utils';
 import { useToast } from '../components/providers/ToastProvider';
@@ -59,6 +60,33 @@ import { repairSeedPersonalities } from '../utils/worldSeedHydration';
 import { shouldNudgeHook, selectAmbientHook, markHookNudged } from '../utils/hookNudge';
 import { getTuning } from '../config/tuning';
 import { db } from '../db';
+import {
+    resolveCharacterBody,
+    resolveEntityBody,
+    hasBodyData,
+    describeBodyState,
+    buildBodiesInContactBlock,
+    containsSexualContent,
+    type BodyParticipant,
+} from '../utils/engine/bodyModel';
+import {
+    effectiveContentPolicy,
+    contentPolicyLines,
+    findDescriptorViolations,
+    buildDescriptorReminder,
+    lintSheetsForDescriptors,
+} from '../utils/engine/contentPolicy';
+import {
+    extractBracketFocus,
+    buildSceneFocusBlock,
+    isRegenerateRequest,
+} from '../utils/engine/sceneFocus';
+import {
+    resolveNarrationPerson,
+    buildNarrationPovBlock,
+    detectPovDrift,
+    buildPovResampleReminder,
+} from '../utils/engine/narrationPov';
 
 // ---------------------------------------------------------------------------
 // v1.24: Threat-pipeline instrumentation. The Origin Gate / cooldown machinery
@@ -117,9 +145,18 @@ const maskResampleLastTurn = new Map<string, number>();
 let staticBeatStreak = 0;
 let staticBeatLocation = '';
 let lastTurnRepeated = false;
+/** v1.48: last descriptor-lint finding set logged, so it is reported once per change. */
+let lastDescriptorLintKey = '';
 
 /** Bump a thinking level one notch. Used for resamples: re-rolling at the same
  *  budget that produced the bad turn tends to reproduce the bad turn. */
+/**
+ * v1.48: a resample that FAILED keeps the turn we already had. Before v1.48 a
+ * failed re-roll replaced a perfectly good first draft with the error string.
+ */
+const keepOnFailure = (current: ModelResponseSchema, retry: ModelResponseSchema): ModelResponseSchema =>
+    retry.engineError ? current : retry;
+
 const escalateThinking = (level: string): string =>
     level === 'high' ? 'high' : level === 'low' ? 'medium' : 'high';
 
@@ -408,13 +445,16 @@ export const useGeminiClient = () => {
           // world state and the prompt. Before this it went to the debug log
           // and nowhere else — the channel accepted the player's complaint,
           // replied promising a change, and then had no way to deliver one.
-          const { directives, added: directiveAdded } = ingestOocDirective(
+          const { directives, added: directiveAdded, replaced: directiveReplaced, evicted: directivesEvicted } = ingestOocDirective(
               state.gameWorld.oocDirectives,
               ooc.directive,
               turn,
               () => generateUUID(),
           );
 
+          if ((directivesEvicted ?? []).length > 0) {
+              showToast(`Directive limit reached — oldest unpinned directive dropped. Pin directives in Settings to keep them.`, 'info');
+          }
           if (accepted.length > 0 || rejected.length > 0 || directiveAdded) {
               setGameWorld(prev => ({
                   ...prev,
@@ -449,11 +489,19 @@ export const useGeminiClient = () => {
                   })),
                   ...(ooc.directive ? [{
                       timestamp: new Date().toISOString(),
-                      message: directiveAdded
+                      message: directiveReplaced
+                          ? `[OOC DIRECTIVE — v1.48] Same instruction as a standing one — replaced it in place (no new slot used). Was: "${directiveReplaced}" Now: "${ooc.directive}"`
+                          : directiveAdded
                           ? `[OOC DIRECTIVE — v1.35] Standing from turn ${turn}, now binding on every turn: ${ooc.directive}`
                           : `[OOC DIRECTIVE] Already standing (duplicate), not re-added: ${ooc.directive}`,
                       type: 'info' as const,
                   }] : []),
+                  // v1.48: eviction used to be silent.
+                  ...(directivesEvicted ?? []).map(t => ({
+                      timestamp: new Date().toISOString(),
+                      message: `[OOC DIRECTIVE] EVICTED to make room (limit reached; pin directives in Settings to keep them): "${t}"`,
+                      type: 'warning' as const,
+                  })),
                   // v1.38: name the records that were attached. When a lookup
                   // comes back wrong, the first question is whether the model
                   // had the record at all — that must be answerable from the log.
@@ -475,6 +523,10 @@ export const useGeminiClient = () => {
       }
   }, [getService, setGameHistory, setGameWorld, showToast]);
 
+  // v1.48: handleRegenerate is defined after handleSend and calls it; this ref
+  // lets handleSend route a typed "regenerate" to it without a cycle.
+  const regenerateRef = useRef<(() => Promise<void>) | null>(null);
+
   // Main Turn Orchestrator
   const handleSend = useCallback(async (text: string) => {
     if (!text.trim()) return;
@@ -483,6 +535,13 @@ export const useGeminiClient = () => {
     const ooc = parseOocInput(text);
     if (ooc.isOoc) {
         await handleOocSend(ooc.body, text);
+        return;
+    }
+
+    // v1.48: "Regenerate response" typed as a turn is a request, not an
+    // action — it used to be sent to the model as the player's move.
+    if (isRegenerateRequest(text) && regenerateRef.current) {
+        await regenerateRef.current();
         return;
     }
 
@@ -554,7 +613,9 @@ export const useGeminiClient = () => {
         if (!personalityRepairDone) {
             personalityRepairDone = true;
             const repairWorld = useGameStore.getState().gameWorld;
-            if (repairWorld.worldSeedId && (repairWorld.knownEntities ?? []).some(e => !e.personality?.trim())) {
+            // v1.48: also runs to backfill seed NPC bodies/appearance, so it
+            // no longer waits for a missing personality. Once per session.
+            if (repairWorld.worldSeedId && (repairWorld.knownEntities ?? []).length > 0) {
                 try {
                     const seed = await db.loadWorldSeed(repairWorld.worldSeedId);
                     if (seed) {
@@ -570,7 +631,7 @@ export const useGeminiClient = () => {
                                     ...prev.debugLog,
                                     {
                                         timestamp: new Date().toISOString(),
-                                        message: `[PERSONALITY REPAIR] Restored canonical personality on: ${repairedNames.join(', ')}`,
+                                        message: `[PERSONALITY REPAIR] Restored canonical seed fields (personality / appearance / body) on: ${repairedNames.join(', ')}`,
                                         type: 'success',
                                     },
                                 ],
@@ -580,6 +641,34 @@ export const useGeminiClient = () => {
                 } catch (e) {
                     console.warn('[PERSONALITY REPAIR] failed:', e);
                 }
+            }
+        }
+
+        // v1.48: a bracketed narration note ("[Continue with the anatomical
+        // realism ...]") is about the SCENE. Keep it as the scene focus so the
+        // player does not have to paste it into every turn.
+        const bracketFocus = extractBracketFocus(text);
+        if (bracketFocus) {
+            const before = useGameStore.getState();
+            if (before.gameWorld.sceneFocus?.text !== bracketFocus) {
+                setGameWorld(prev => ({
+                    ...prev,
+                    sceneFocus: {
+                        text: bracketFocus,
+                        setTurn: before.gameHistory.turnCount ?? 0,
+                        location: prev.location ?? '',
+                        source: 'bracket',
+                        keepAcrossScenes: prev.sceneFocus?.keepAcrossScenes,
+                    },
+                }));
+                setGameHistory(prev => ({
+                    ...prev,
+                    debugLog: [...prev.debugLog, {
+                        timestamp: new Date().toISOString(),
+                        message: `[SCENE FOCUS] Set from your bracketed note — stays until the scene moves: "${bracketFocus}"`,
+                        type: 'info',
+                    }],
+                }));
             }
         }
 
@@ -729,9 +818,14 @@ export const useGeminiClient = () => {
         // v1.37: reminders countermanded by a standing player directive. The
         // player's out-of-character instruction outranks the engine's own
         // standing guidance; classification happened once, at ingest.
-        const suppressedReminders = suppressedReminderKeys(
-            preCallState.gameWorld.oocDirectives,
-        ) as ReminderKey[];
+        // v1.48: content-policy lines countermand reminders exactly as the
+        // same sentence would if the player had typed it over OOC.
+        const contentPolicy = effectiveContentPolicy(preCallState.gameWorld);
+        const policyLines = contentPolicyLines(contentPolicy);
+        const suppressedReminders = Array.from(new Set([
+            ...suppressedReminderKeys(preCallState.gameWorld.oocDirectives),
+            ...policyLines.flatMap(l => directiveSuppressions(l)),
+        ])) as ReminderKey[];
 
         // v1.37: NPC positions already on the record in a running dispute.
         const npcPositionsBlock = buildNpcPositionsBlock(
@@ -894,6 +988,91 @@ export const useGeminiClient = () => {
         // engine spent the turn countermanding the player and won on position.
         //
         // The directives block now comes after everything, and says so.
+        // v1.48: [SCENE FOCUS] and [BODIES IN CONTACT] ride the tail, right
+        // before the standing directives — after everything the engine says,
+        // before what the player says.
+        const sceneFocusBlock = buildSceneFocusBlock(preCallState.gameWorld.sceneFocus);
+
+        // v1.48: who "I" is. Stated every turn; checked on the output below.
+        const recentPlayerInputs = [
+            ...preCallState.gameHistory.history
+                .filter(m => m.role === Role.USER && isNarrativeMessage(m))
+                .slice(-3)
+                .map(m => m.text),
+        ];
+        const narrationPerson = resolveNarrationPerson(
+            contentPolicy.narrationPerson,
+            recentPlayerInputs,
+            preCallState.character.name,
+        );
+        const inSceneNpcNames = (preCallState.gameWorld.knownEntities ?? [])
+            .filter(e => inScene(e))
+            .map(e => e.name);
+        const povBlock = buildNarrationPovBlock(narrationPerson, preCallState.character.name, inSceneNpcNames);
+
+        let bodiesBlock = '';
+        const sexualScene = intimacyInScene
+            || containsSexualContent(text)
+            || containsSexualContent(lastNarrative);
+        if (contentPolicy.anatomicalRealism && sexualScene) {
+            const now = preCallState.gameWorld.time?.totalMinutes ?? 0;
+            const pcBody = resolveCharacterBody(preCallState.character, preCallState.gameWorld.playerCanon ?? []);
+            const haystack = `${text}\n${lastNarrative}`.toLowerCase();
+            const mentioned = (n: string) => {
+                const parts = [n, ...n.split(/\s+/)].filter(p => p.length >= 3).map(p => p.toLowerCase());
+                return parts.some(p => haystack.includes(p));
+            };
+            const npcParticipants: BodyParticipant[] = (preCallState.gameWorld.knownEntities ?? [])
+                .filter(e => inScene(e) || mentioned(e.name))
+                .map(e => ({ e, r: resolveEntityBody(e) }))
+                .filter(({ e, r }) => hasBodyData(r.profile) || describeBodyState(e.bodyState, now))
+                // the people the scene is actually about come first
+                .sort((a, b) => Number(mentioned(b.e.name)) - Number(mentioned(a.e.name)))
+                .slice(0, 4)
+                .map(({ e, r }) => ({ name: e.name, isPlayer: false, profile: r.profile, state: e.bodyState, conflicts: r.conflicts }));
+            bodiesBlock = buildBodiesInContactBlock(
+                [
+                    { name: preCallState.character.name, isPlayer: true, profile: pcBody.profile, state: preCallState.character.bodyState, conflicts: pcBody.conflicts },
+                    ...npcParticipants,
+                ],
+                now,
+                contentPolicy.anatomicalRealism,
+            );
+            if (bodiesBlock) {
+                setGameHistory(prev => ({
+                    ...prev,
+                    debugLog: [...prev.debugLog, {
+                        timestamp: new Date().toISOString(),
+                        message: `[BODIES IN CONTACT] Injected for ${[preCallState.character.name, ...npcParticipants.map(p => p.name)].join(', ')} (${bodiesBlock.length}c)`
+                            + (pcBody.parsedFields.length ? ` — PC fields read from the prose sheet: ${pcBody.parsedFields.join(', ')}` : ''),
+                        type: 'info',
+                    }],
+                }));
+            }
+        }
+
+        // v1.48: banned words already written on the sheets prime the very
+        // word the player banned. Reported once per change, never edited.
+        if (contentPolicy.bannedDescriptors.length > 0) {
+            const findings = lintSheetsForDescriptors(
+                preCallState.character,
+                (preCallState.gameWorld.knownEntities ?? []).filter(e => inScene(e)),
+                contentPolicy.bannedDescriptors,
+            );
+            const key = findings.map(f => `${f.owner}|${f.field}|${f.term}`).join(';');
+            if (findings.length > 0 && key !== lastDescriptorLintKey) {
+                lastDescriptorLintKey = key;
+                setGameHistory(prev => ({
+                    ...prev,
+                    debugLog: [...prev.debugLog, ...findings.slice(0, 8).map(f => ({
+                        timestamp: new Date().toISOString(),
+                        message: `[DESCRIPTOR LINT] ${f.owner}'s ${f.field} contains banned "${f.term}": "${f.snippet}" — the model reads sheets as canon, so this primes the word you banned.`,
+                        type: 'warning' as const,
+                    }))],
+                }));
+            }
+        }
+
         const reminderParts = ambientHook
             ? [...activeReminders, ambientHook.block]
             : [...activeReminders];
@@ -908,7 +1087,7 @@ export const useGeminiClient = () => {
          * is exactly the turn where it matters most.
          */
         const buildTrailer = (...extra: (string | null | undefined)[]): string | null => {
-            const parts = [...reminderParts, ...extra, oocDirectivesBlock]
+            const parts = [...reminderParts, ...extra, povBlock, sceneFocusBlock, bodiesBlock, oocDirectivesBlock]
                 .filter((s): s is string => Boolean(s && s.trim()));
             return parts.length > 0 ? parts.join('\n\n---\n\n') : null;
         };
@@ -999,7 +1178,9 @@ export const useGeminiClient = () => {
         // so the schema for this turn follows the current sceneMode and drops
         // the combat / location / montage branches it doesn't need.
         const turnSchema = getResponseSchema(
-            (preCallState.gameWorld.sceneMode ?? 'NARRATIVE') as SchemaMode
+            (preCallState.gameWorld.sceneMode ?? 'NARRATIVE') as SchemaMode,
+            // v1.48: body_events only where bodies change.
+            { bodyEvents: sexualScene || preCallState.gameWorld.sceneMode === 'COMBAT' },
         );
 
         // Review item 4: only spend a second generation on sanitization drift
@@ -1120,6 +1301,50 @@ export const useGeminiClient = () => {
             return;
         }
 
+        // v1.48: A FAILED GENERATION IS NOT A TURN.
+        //
+        // The transport returns failures as a response object whose narrative
+        // is an error string. Until v1.48 that ran the whole pipeline: the turn
+        // counter advanced, the clock and bio ticked, and "[SYSTEM ERROR]
+        // Neural Link Unstable..." entered history as a MODEL message, which
+        // was then sent back to the model as story on every later turn. Four
+        // turns of the 2026-10-31 Nissa save did exactly that, and the player
+        // typed "Regenerate response" as an in-character action each time.
+        //
+        // Now: a failure notice the model never sees, nothing else changes,
+        // and the Regenerate button retries the same input.
+        if (response.engineError) {
+            const reason = response.engineError;
+            setGameHistory(gs => ({
+                ...gs,
+                isThinking: false,
+                history: [...gs.history, {
+                    id: generateMessageId(),
+                    role: Role.SYSTEM,
+                    text: `⚠ The model returned nothing usable for this turn (${reason}). Nothing in the world changed. Use Regenerate to try the same input again.`,
+                    timestamp: new Date().toISOString(),
+                    engineError: true,
+                }],
+                debugLog: [...gs.debugLog, {
+                    timestamp: new Date().toISOString(),
+                    message: `[GENERATION FAILED] ${reason} — turn not processed, turn counter unchanged.`,
+                    type: 'error',
+                }],
+            }));
+            showToast('Generation failed — use Regenerate.', 'error');
+            return;
+        }
+        if (response.finishReason && response.finishReason !== 'STOP') {
+            setGameHistory(gs => ({
+                ...gs,
+                debugLog: [...gs.debugLog, {
+                    timestamp: new Date().toISOString(),
+                    message: `[FINISH REASON] ${response.finishReason}${response.finishReason === 'MAX_TOKENS' ? ' — output was cut off at the length limit' : ''}.`,
+                    type: 'warning',
+                }],
+            }));
+        }
+
         // v1.45: PLAYER-ACTION ENGAGEMENT GATE — runs before every other
         // check, because it is the only failure that makes the turn worthless
         // to the player regardless of how well it scores on the rest.
@@ -1160,7 +1385,7 @@ export const useGeminiClient = () => {
                 ]
             }));
 
-            response = await service.sendMessage(
+            response = keepOnFailure(response, await service.sendMessage(
                 fullSystemPrompt,
                 turnHistory,
                 preCallState.gameHistory.lastActiveSummary,
@@ -1170,7 +1395,7 @@ export const useGeminiClient = () => {
                 contextPrompt,
                 staticContext,
                 escalateThinking(turnThinking),
-            );
+            ));
 
             if (latestRequestId.current !== requestId) {
                 console.log("Discarding stale player-action resample", requestId);
@@ -1329,7 +1554,7 @@ Write this turn again. Restate their canonical traits drawing on the WHOLE
 record, Actual Core included, and let that person act. If nothing they do this
 turn is anything their Actual Core describes, you are writing the mask.`;
 
-            response = await service.sendMessage(
+            response = keepOnFailure(response, await service.sendMessage(
                 fullSystemPrompt,
                 turnHistory,
                 preCallState.gameHistory.lastActiveSummary,
@@ -1339,7 +1564,7 @@ turn is anything their Actual Core describes, you are writing the mask.`;
                 contextPrompt,
                 staticContext,
                 escalateThinking(turnThinking),
-            );
+            ));
 
             if (latestRequestId.current !== requestId) {
                 console.log("Discarding stale voice-lock resample", requestId);
@@ -1582,7 +1807,7 @@ turn is anything their Actual Core describes, you are writing the mask.`;
             resampledThisTurn = true;
             const reinforcedReminder = buildTrailer(RESAMPLE_REMINDER);
 
-            response = await service.sendMessage(
+            response = keepOnFailure(response, await service.sendMessage(
                 fullSystemPrompt,
                 turnHistory,
                 preCallState.gameHistory.lastActiveSummary,
@@ -1596,7 +1821,7 @@ turn is anything their Actual Core describes, you are writing the mask.`;
                 // the same basin twice — observed in the reviewed save, where
                 // both resampled turns came back as near-verbatim repeats.
                 escalateThinking(turnThinking)
-            );
+            ));
 
             if (latestRequestId.current !== requestId) {
                 console.log("Discarding stale resample response", requestId);
@@ -1677,7 +1902,7 @@ turn is anything their Actual Core describes, you are writing the mask.`;
             // that repeats harder is worse than the turn we already had, and
             // silently swapping it in would make the guard actively harmful.
             const retryRepetition = detectSelfRepetition(retry.narrative, priorNarratives);
-            const improved = !retryRepetition.repeated || retryRepetition.overlap < repetition.overlap;
+            const improved = !retry.engineError && (!retryRepetition.repeated || retryRepetition.overlap < repetition.overlap);
             if (improved) response = retry;
 
             // Arm the thinking floor for the NEXT turn regardless of outcome —
@@ -1697,6 +1922,118 @@ turn is anything their Actual Core describes, you are writing the mask.`;
                     }
                 ]
             }));
+        }
+
+        // ------------------------------------------------------------------
+        // v1.48: BANNED-DESCRIPTOR GUARD
+        //
+        // The player's "no cold / calculating / clinical / predatory" rule was
+        // a prompt line, issued four times over OOC in one session. A prompt
+        // line is a suggestion; this is the enforcement. One resample, quoting
+        // the offending phrases back; the retry is kept only if it is cleaner.
+        // ------------------------------------------------------------------
+        if (contentPolicy.bannedDescriptors.length > 0) {
+            const descriptorNames = [preCallState.character.name, ...(preCallState.gameWorld.knownEntities ?? []).map(e => e.name)];
+            const violations = findDescriptorViolations(response.narrative, contentPolicy.bannedDescriptors, { names: descriptorNames });
+            if (violations.length > 0) {
+                setGameHistory(prev => ({
+                    ...prev,
+                    debugLog: [...prev.debugLog, {
+                        timestamp: new Date().toISOString(),
+                        message: `[DESCRIPTORS] ${violations.length} banned descriptor(s): ${violations.slice(0, 6).map(v => `"${v.term}"`).join(', ')} — resampling once.`,
+                        type: 'warning',
+                    }],
+                }));
+                const retry = await service.sendMessage(
+                    fullSystemPrompt,
+                    turnHistory,
+                    preCallState.gameHistory.lastActiveSummary,
+                    preCallState.gameWorld.bannedNameMap ?? {},
+                    buildTrailer(buildDescriptorReminder(violations)),
+                    turnSchema,
+                    contextPrompt,
+                    staticContext,
+                    turnThinking,
+                );
+                if (latestRequestId.current !== requestId) {
+                    console.log("Discarding stale descriptor resample", requestId);
+                    return;
+                }
+                const after = retry.engineError
+                    ? null
+                    : findDescriptorViolations(retry.narrative, contentPolicy.bannedDescriptors, { names: descriptorNames });
+                const accepted = after !== null && after.length < violations.length;
+                if (accepted) response = retry;
+                setGameHistory(prev => ({
+                    ...prev,
+                    debugLog: [...prev.debugLog, {
+                        timestamp: new Date().toISOString(),
+                        message: after === null
+                            ? `[DESCRIPTORS] Resample failed — keeping the original turn.`
+                            : accepted
+                                ? `[DESCRIPTORS] Resample accepted — ${violations.length} → ${after.length}.`
+                                : `[DESCRIPTORS] Resample was no cleaner (${after.length}) — keeping the original turn.`,
+                        type: accepted && after!.length === 0 ? 'success' : 'warning',
+                    }],
+                }));
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // v1.48: NARRATOR GUARD — 26 turns of the Nissa save were narrated
+        // from inside the NPC's head. One resample, kept only if it fixes it.
+        // ------------------------------------------------------------------
+        {
+            const pcResolved = resolveCharacterBody(preCallState.character, preCallState.gameWorld.playerCanon ?? []).profile;
+            const pcPov = {
+                name: preCallState.character.name,
+                gender: preCallState.character.gender,
+                hasPenis: pcResolved.penisLengthIn !== undefined || pcResolved.penisGirthIn !== undefined
+                    ? true
+                    : (/\b(?:female|woman)\b/i.test(preCallState.character.gender ?? '') ? false : undefined),
+                hasVagina: pcResolved.vaginalDepthIn !== undefined || pcResolved.vaginalVirgin !== undefined
+                    ? true
+                    : (/\b(?:male|man)\b/i.test(preCallState.character.gender ?? '') && !/female|woman/i.test(preCallState.character.gender ?? '') ? false : undefined),
+            };
+            const drift = detectPovDrift(response.narrative, narrationPerson, pcPov, inSceneNpcNames);
+            if (drift.drifted) {
+                setGameHistory(prev => ({
+                    ...prev,
+                    debugLog: [...prev.debugLog, {
+                        timestamp: new Date().toISOString(),
+                        message: `[NARRATOR] Wrong perspective (${narrationPerson} person required): ${drift.reason} — resampling once.`,
+                        type: 'warning',
+                    }],
+                }));
+                const retry = await service.sendMessage(
+                    fullSystemPrompt,
+                    turnHistory,
+                    preCallState.gameHistory.lastActiveSummary,
+                    preCallState.gameWorld.bannedNameMap ?? {},
+                    buildTrailer(buildPovResampleReminder(narrationPerson, preCallState.character.name, drift.reason)),
+                    turnSchema,
+                    contextPrompt,
+                    staticContext,
+                    turnThinking,
+                );
+                if (latestRequestId.current !== requestId) {
+                    console.log("Discarding stale narrator resample", requestId);
+                    return;
+                }
+                const retryDrift = retry.engineError ? null : detectPovDrift(retry.narrative, narrationPerson, pcPov, inSceneNpcNames);
+                const fixed = retryDrift !== null && !retryDrift.drifted;
+                if (fixed) response = retry;
+                setGameHistory(prev => ({
+                    ...prev,
+                    debugLog: [...prev.debugLog, {
+                        timestamp: new Date().toISOString(),
+                        message: fixed
+                            ? `[NARRATOR] Resample accepted — perspective restored.`
+                            : `[NARRATOR] Resample ${retryDrift === null ? 'failed' : 'still drifted'} — keeping the original turn.`,
+                        type: fixed ? 'success' : 'warning',
+                    }],
+                }));
+            }
         }
 
         // Review item 4: deterministic clock correction (replaces up to 2 full
@@ -1957,15 +2294,70 @@ turn is anything their Actual Core describes, you are writing the mask.`;
         setGameHistory(gs => ({
             ...gs,
             isThinking: false,
-            history: [...gs.history, { id: generateMessageId(), role: Role.SYSTEM, text: errText, timestamp: new Date().toISOString() }],
+            history: [...gs.history, { id: generateMessageId(), role: Role.SYSTEM, text: errText, timestamp: new Date().toISOString(), engineError: true }],
             debugLog: [...gs.debugLog, { timestamp: new Date().toISOString(), message: `Error [${requestId}]: ${rawErrorMessage}`, type: 'error' }]
         }));
         showToast("Signal Lost.", "error");
     }
   }, [getService, setGameHistory, setGameWorld, setCharacter, showToast, setUI, performSegmentSummarization, setPendingLore]);
 
+  /**
+   * v1.48: REGENERATE — retry the player's last input.
+   *
+   * Two cases:
+   *   - the last attempt FAILED (or nothing committed): drop the failure
+   *     notice and the input, then send the input again;
+   *   - the last attempt committed a turn: restore the pre-turn snapshot (the
+   *     same one Undo uses), drop the input, then send it again.
+   * Either way the retry is an ordinary turn from an unchanged world.
+   */
+  const handleRegenerate = useCallback(async () => {
+    const st = useGameStore.getState();
+    if (st.gameHistory.isThinking) return;
+    const hist = st.gameHistory.history;
+
+    let ui = -1;
+    for (let i = hist.length - 1; i >= 0; i--) {
+        const m = hist[i];
+        if (m.role === Role.USER && isNarrativeMessage(m)) { ui = i; break; }
+    }
+    if (ui < 0) {
+        showToast('Nothing to regenerate.', 'info');
+        return;
+    }
+    const userMsg = hist[ui];
+    const committed = hist.slice(ui + 1).some(m => m.role === Role.MODEL && isNarrativeMessage(m));
+    const logLine = (message: string) => ({ timestamp: new Date().toISOString(), message, type: 'info' as const });
+
+    if (committed) {
+        const snap = st.preTurnSnapshot;
+        const snapLast = snap?.history.history[snap.history.history.length - 1];
+        if (!snap || snapLast?.id !== userMsg.id) {
+            showToast('Only the most recent turn can be regenerated.', 'info');
+            return;
+        }
+        setGameWorld(snap.world);
+        setCharacter(snap.character);
+        setGameHistory({
+            ...snap.history,
+            history: snap.history.history.slice(0, -1),
+            debugLog: [...st.gameHistory.debugLog, logLine(`[REGENERATE] Reverted turn ${st.gameHistory.turnCount} and re-sent the same input.`)],
+        });
+        useGameStore.getState().setPreTurnSnapshot(null);
+    } else {
+        setGameHistory(prev => ({
+            ...prev,
+            history: prev.history.slice(0, ui),
+            debugLog: [...prev.debugLog, logLine(`[REGENERATE] Previous attempt produced no turn — re-sent the same input.`)],
+        }));
+    }
+    await handleSend(userMsg.text);
+  }, [handleSend, setGameHistory, setGameWorld, setCharacter, showToast]);
+  regenerateRef.current = handleRegenerate;
+
   return {
     handleSend,
+    handleRegenerate,   // v1.48
     handleVisualize,
     handleKeyLink,
     handleGenerateScenarios,

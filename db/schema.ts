@@ -46,6 +46,10 @@ import type {
   MontageProposal,
   OocDirective,
   NpcPosition,
+  BodyProfile,
+  BodyState,
+  ContentPolicy,
+  SceneFocus,
   PlayerCanonEntry,
   SceneLedgerEntry,
   TurnDigest,
@@ -84,6 +88,9 @@ export interface CharacterRow {
   bio: BioMonitor;                                       // JSON
   condition_timestamps: Record<string, number> | null;   // JSON
   languages_known: string[] | null;                      // JSON
+  /** v1.48: structured body + tracked body state. Non-indexed JSON. */
+  body?: BodyProfile | null;
+  body_state?: BodyState | null;
 }
 
 export interface CharacterInventoryRow {
@@ -158,6 +165,8 @@ export interface MessageRow {
    * absent on rows written before v1.31, which read back as not-OOC.
    */
   ooc: boolean | null;
+  /** v1.48: engine failure notice — never sent to the model. */
+  engine_error?: boolean | null;
 }
 
 export interface SummarySegmentRow {
@@ -245,6 +254,10 @@ export interface EntityRow {
    * no schema version bump is needed.
    */
   voice_sample: string | null;
+  /** v1.48: physical description, structured body, tracked body state. Non-indexed. */
+  appearance?: string | null;
+  body?: BodyProfile | null;
+  body_state?: BodyState | null;
   relationship_level: RelationshipLevel;
   leverage: string;
   status: EntityStatus;
@@ -560,6 +573,9 @@ export interface WorldStateRow {
    * with it absent and start empty.
    */
   npc_positions: NpcPosition[] | null;
+  /** v1.48 */
+  content_policy?: ContentPolicy | null;
+  scene_focus?: SceneFocus | null;
   /** v1.37: one-turn voice-lock flag. Unindexed; absent on older saves. */
   voice_lock_flagged_turn: number | null;
   voice_lock_flagged_names: string[] | null;

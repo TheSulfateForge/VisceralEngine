@@ -26,12 +26,27 @@ export function repairSeedPersonalities(
 ): { entities: KnownEntity[]; repairedNames: string[] } {
   const repairedNames: string[] = [];
   const seedId = (name: string) => `npc_${name.toLowerCase().replace(/\s+/g, '_')}`;
-  const out = entities.map(e => {
-    if (e.personality?.trim()) return e;
+  const out = entities.map(raw => {
     const npc = seed.npcs.find(n =>
-      seedId(n.name) === e.id ||
-      n.name.toLowerCase() === e.name.toLowerCase()
+      seedId(n.name) === raw.id ||
+      n.name.toLowerCase() === raw.name.toLowerCase()
     );
+    // v1.48: backfill physical facts added to the seed after the campaign
+    // started. Never overwrites what the entity already has.
+    let e = raw;
+    if (npc) {
+      const fillAppearance = !e.appearance?.trim() && npc.appearance?.trim();
+      const fillBody = !e.body && npc.body;
+      if (fillAppearance || fillBody) {
+        e = {
+          ...e,
+          ...(fillAppearance ? { appearance: npc.appearance!.trim() } : {}),
+          ...(fillBody ? { body: npc.body } : {}),
+        };
+        if (!repairedNames.includes(e.name)) repairedNames.push(e.name);
+      }
+    }
+    if (e.personality?.trim()) return e;
     if (npc?.personality?.trim()) {
       repairedNames.push(e.name);
       // v1.27: retrofit the canonical flag while we're here — pre-v1.27
@@ -93,6 +108,9 @@ export function hydrateWorldSeed(seed: WorldSeed): Partial<GameWorld> {
     location: npc.location,
     impression: npc.description,
     personality: npc.personality?.trim() || undefined,
+    // v1.48: physical facts travel separately from personality.
+    ...(npc.appearance?.trim() ? { appearance: npc.appearance.trim() } : {}),
+    ...(npc.body ? { body: npc.body } : {}),
     relationship_level: 'NEUTRAL' as const,
     leverage: '',
     ledger: [],

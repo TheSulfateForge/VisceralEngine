@@ -17,7 +17,7 @@ export const ChatView: React.FC = () => {
         triggerScreenEffect 
     } = useGameStore();
 
-    const { handleSend, handleVisualize, handleUndo } = useGeminiClient();
+    const { handleSend, handleVisualize, handleUndo, handleRegenerate } = useGeminiClient();
     const { playSound, triggerHaptic } = useSensoryFX();
     const scrollRef = useRef<HTMLDivElement>(null);
     const rollSystem = useRollSystem();
@@ -25,6 +25,10 @@ export const ChatView: React.FC = () => {
     const { history, isThinking, turnCount } = gameHistory;
     const { isGeneratingVisual } = gameWorld;
     const hasUndoSnapshot = useGameStore(state => state.preTurnSnapshot !== null);
+    // v1.48: Regenerate is offered after a committed turn (it reverts and
+    // retries) and after a failed one (it just retries).
+    const lastFailed = history.length > 0 && history[history.length - 1].engineError === true;
+    const canRegenerate = hasUndoSnapshot || lastFailed;
 
     const { 
         displayHistory, 
@@ -138,14 +142,25 @@ export const ChatView: React.FC = () => {
                 )}
             </div>
             
-            {hasUndoSnapshot && !isThinking && (
-                <div className="flex justify-center pb-2 relative z-10 -mt-10">
-                    <button
-                        onClick={handleUndo}
-                        className="text-[8px] font-mono uppercase tracking-[0.3em] text-gray-600 hover:text-yellow-500 border border-gray-800 hover:border-yellow-900/40 px-3 py-1.5 transition-all bg-[#0a0a0a]"
-                    >
-                        Undo Last Turn (Ctrl+Z)
-                    </button>
+            {(hasUndoSnapshot || canRegenerate) && !isThinking && (
+                <div className="flex justify-center gap-2 pb-2 relative z-10 -mt-10">
+                    {hasUndoSnapshot && (
+                        <button
+                            onClick={handleUndo}
+                            className="text-[8px] font-mono uppercase tracking-[0.3em] text-gray-600 hover:text-yellow-500 border border-gray-800 hover:border-yellow-900/40 px-3 py-1.5 transition-all bg-[#0a0a0a]"
+                        >
+                            Undo Last Turn (Ctrl+Z)
+                        </button>
+                    )}
+                    {canRegenerate && (
+                        <button
+                            onClick={() => { void handleRegenerate(); }}
+                            title="Retry your last input from the same world state"
+                            className={`text-[8px] font-mono uppercase tracking-[0.3em] border px-3 py-1.5 transition-all bg-[#0a0a0a] ${lastFailed ? 'text-red-500 border-red-900/50 hover:bg-red-900 hover:text-white' : 'text-gray-600 border-gray-800 hover:text-red-400 hover:border-red-900/40'}`}
+                        >
+                            Regenerate
+                        </button>
+                    )}
                 </div>
             )}
 

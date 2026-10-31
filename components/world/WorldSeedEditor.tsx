@@ -1,3 +1,5 @@
+import { BodyEditor } from '../common/BodyEditor';
+import { parseBodyFromText } from '../../utils/engine/bodyModel';
 import React, { useEffect, useMemo, useState } from 'react';
 import type {
   WorldSeed,
@@ -478,6 +480,28 @@ const NPCForm: React.FC<{ value: WorldSeedNPC; onChange: (v: WorldSeedNPC) => vo
         onChange={e => onChange({ ...value, personality: e.target.value })}
       />
     </div>
+    {/* v1.48: physical facts live apart from personality */}
+    <div>
+      <label className={fieldLabel}>Appearance</label>
+      <textarea
+        className={textareaCls}
+        rows={2}
+        value={value.appearance ?? ''}
+        onChange={e => onChange({ ...value, appearance: e.target.value })}
+        placeholder="Physical description — kept separate from personality"
+      />
+    </div>
+    <details className="border border-gray-800 p-3">
+      <summary className={`${fieldLabel} cursor-pointer`}>Body (optional)</summary>
+      <div className="pt-3">
+        <BodyEditor
+          compact
+          value={value.body}
+          onChange={body => onChange({ ...value, body })}
+          parsed={parseBodyFromText(`${value.appearance ?? ''}\n${value.personality ?? ''}`).profile}
+        />
+      </div>
+    </details>
     <div>
       <label className={fieldLabel}>Goals</label>
       <TagChips

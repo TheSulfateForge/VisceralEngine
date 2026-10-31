@@ -1,3 +1,4 @@
+import { shouldClearSceneFocus } from '../../engine/sceneFocus';
 import type { PipelineStep, TurnContext } from '../types';
 import {
     sceneChanged,
@@ -174,6 +175,20 @@ export const sceneContinuityStep: PipelineStep = {
                     type: 'info'
                 });
             }
+        }
+
+        // --- 2e. Scene focus expiry (v1.48) ----------------------------------
+        // A scene focus is about the place it was set in. It is NOT cleared on
+        // a scene-MODE change — SOCIAL→NARRATIVE flips constantly mid-scene,
+        // and in the Nissa save that would have wiped it every few turns.
+        const focus = ctx.previousWorld.sceneFocus;
+        if (shouldClearSceneFocus(focus, ctx.worldUpdate.location)) {
+            ctx.worldUpdate.sceneFocus = undefined;
+            ctx.debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[SCENE FOCUS] Cleared — the scene moved from "${focus?.location ?? ''}" to "${ctx.worldUpdate.location ?? ''}". Was: "${focus?.text ?? ''}"`,
+                type: 'info'
+            });
         }
 
         // --- 3. Turn digest -------------------------------------------------

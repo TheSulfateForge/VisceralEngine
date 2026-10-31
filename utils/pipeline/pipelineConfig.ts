@@ -31,6 +31,7 @@ import { aiSkillUpdatesStep } from './steps/15-aiSkillUpdates';
 import { usageAdvancementStep } from './steps/16-usageAdvancement';
 import { sceneContinuityStep } from './steps/17-sceneContinuity';
 import { socialGraphStep } from './steps/18-socialGraph';
+import { bodyStateStep } from './steps/19-bodyState';
 
 /**
  * Builds the initial TurnContext from inputs.
@@ -109,6 +110,8 @@ export const DEFAULT_PIPELINE: PipelineStep[] = [
     factionConflictsStep,
     aiSkillUpdatesStep,
     usageAdvancementStep,
+    // v1.48: after 12 so the final entity list and clock are in place.
+    bodyStateStep,
     // v1.34: after 12 (entity status/location) and 14 (faction membership and
     // disposition) so the social pass reads final state, not a half-updated one.
     socialGraphStep,

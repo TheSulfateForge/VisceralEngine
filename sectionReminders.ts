@@ -384,7 +384,7 @@ Before writing any NPC encounter or world_tick NPC action, apply the population 
 
 ENCOUNTER GENERATION RULE: Start from the 70% baseline, not the 10%.
 → A traveler on a road is a traveler on a road.
-→ Suspicion, hostility, and predatory behavior must be EARNED by established context.
+→ Suspicion and hostility must be EARNED by established context.
 → If the player is moving quietly with no flags, default is ordinary human interaction.
 
 Threat seeds must not treat every NPC as a latent enemy or faction operative.`,
@@ -476,16 +476,16 @@ names them; absent that, allies act like allies.
 VOICE PERSISTS — DO NOT FLIP CHARACTERIZATION:
 This reminder governs ACTIONS, not VOICE. The personality field on
 each entity remains authoritative. A warm character betraying the
-player still sounds warm-but-conflicted, not "icy operator." A bawdy
-character killing an enemy still sounds bawdy and savage, not
-"clinical." A devout character coercing the player still sounds
-devout-but-rationalising, not "calculating." See SYSTEM_INSTRUCTIONS
+player still sounds warm-but-conflicted. A bawdy character killing an
+enemy still sounds bawdy and savage. A devout character coercing the
+player still sounds devout-but-rationalising. See SYSTEM_INSTRUCTIONS
 §10 "Personality persists through context" and "Characterization
 diversity" rules — those override default characterization impulses
 even (especially) in hostile scenes.
 
-If you find yourself reaching for predatory/cold/calculating/clinical
-voice because this reminder is active, you have misread it. The
+If you find yourself reaching for the threat-archetype register
+(SYSTEM_INSTRUCTIONS §10) because this reminder is active, you have
+misread it. The
 reminder activates threat ACTIONS, not threat VOICE.`,
 
     /**
@@ -528,7 +528,7 @@ WHAT STRAIN IS NOT:
 - A personality change. A warm ally under strain is still warm; they
   are warm and hurt, or warm and angry. See the canonical personality
   field.
-- An excuse to have every ally in the scene turn cold at once.
+- An excuse to have every ally in the scene turn on the player at once.
 
 The player must be able to name the reason. If you cannot point at the
 specific ledger entry that justifies what the ally just did, the ally
@@ -716,7 +716,7 @@ manner, not simply continuing as if nothing was said. Either way the refusal
 is answered on the page.
 
 This reminder never softens a character. It does not ask you to make a
-predator hesitate, a possessive NPC apologise, or a cruel one reconsider.
+cruel NPC hesitate, a possessive one apologise, or a sadist reconsider.
 It asks that the player's "no" exist in the scene and get a real reply.`,
 
     /**
@@ -914,13 +914,13 @@ the person — and both are forbidden. Both lists below are real; neither
 is the "true" one.
 
 NEGATIVE EXAMPLES — SOFTENING (must NOT make these substitutions):
-- Canonical = "predatory, exploitative, commodifying" → rendered as
+- Canonical = "exploitative, commodifying, cruel" → rendered as
   "aristocratic, charming, courteous." FORBIDDEN.
 - Canonical = "cruel, contemptuous, mercenary" → rendered as
   "businesslike, professional, reserved." FORBIDDEN.
 - Canonical = "sadistic, indifferent, possessive" → rendered as
   "stern, formal, distant." FORBIDDEN.
-- Canonical = "doting, loving" (surface) + "predatory, exploitative"
+- Canonical = "doting, loving" (surface) + "exploitative, possessive"
   (core, trigger = target in his territory), trigger ACTIVE → rendered
   as "intense, formal." FORBIDDEN — render the core at full register.
 - Canonical = "Performed Surface: warm, socially fluent, maternal.
@@ -938,7 +938,7 @@ more frequent failure):
 - Canonical = "calm voice, decides fast, never raises it, makes a bad
   situation feel survivable just by sounding bored during it" →
   rendered as "gruff, dismissive, testing the newcomer's resolve."
-  FORBIDDEN. Steady is not curt. Competent is not cold.
+  FORBIDDEN. Steady is not curt. Competent is not unfriendly.
 - Canonical = "eager, cheerful, endlessly game, first to volunteer" →
   rendered as "guarded, wary, sizing the player up." FORBIDDEN.
 - Canonical = "brisk, chatty, mildly officious, genuinely delighted by a

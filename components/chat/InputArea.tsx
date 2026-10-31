@@ -1,6 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { DeclaredActionPicker } from './DeclaredActionPicker';
+import { SceneFocusControl } from './SceneFocusControl';
 
 interface InputAreaProps {
     onSend: (text: string) => void;
@@ -53,6 +54,7 @@ export const InputArea: React.FC<InputAreaProps> = ({ onSend, handleVisualize, i
         <>
             <div className="absolute bottom-0 left-0 right-0 p-6 md:p-12 bg-gradient-to-t from-black via-black/95 to-transparent flex flex-col items-center">
                 <div className="max-w-3xl w-full flex justify-end items-center gap-3 mb-4">
+                    <SceneFocusControl disabled={isThinking} />
                     <DeclaredActionPicker disabled={isThinking} />
                     <button
                         onClick={handleVisualize}
