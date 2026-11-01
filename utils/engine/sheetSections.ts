@@ -64,6 +64,8 @@ const LABEL_ALIASES: Record<string, string> = {
 export const CORE_LABEL = 'Actual Core';
 export const SURFACE_LABEL = 'Performed Surface';
 export const KINKS_LABEL = 'The Kinks';
+/** v1.48: labels that continue The Kinks rather than starting a new section. */
+const KINKS_SUBLABEL_RE = /^(?:extreme|extremes|extreme kinks)$/i;
 
 /**
  * A label is 1-4 TITLE-CASED words followed by a colon, at a line start or after
@@ -138,6 +140,15 @@ export const parseSheetSections = (personality: string | undefined | null): Pars
             .trim();
         if (!body) continue;
         const { label, known } = normalise(marks[i].raw);
+        // v1.48: "Extreme:" is a sub-label OF The Kinks (Format Spec Rule 7E),
+        // not a section of its own. Split off, it was answered separately by
+        // record lookups ("her kinks" came back without it) and could be kept
+        // or dropped independently of The Kinks by the space cap.
+        const prev = sections[sections.length - 1];
+        if (prev && prev.label === KINKS_LABEL && KINKS_SUBLABEL_RE.test(marks[i].raw.trim())) {
+            prev.body = `${prev.body} ${marks[i].raw.trim()}: ${body}`;
+            continue;
+        }
         sections.push({ label, rawLabel: marks[i].raw.trim(), body, known });
     }
 

@@ -523,3 +523,17 @@ describe('v1.48 — seed NPC bodies', () => {
         expect(resolveEntityBody(ent).profile.weightLb).toBe(140);
     });
 });
+
+// v1.48 — Rule 7E: "Extreme:" belongs to The Kinks
+import { parseSheetSections } from '../utils/engine/sheetSections';
+describe('v1.48 — Extreme: stays inside The Kinks', () => {
+    it('folds Extreme into The Kinks instead of making a section of its own', () => {
+        const p = 'Actual Core: Sells to anyone. The Kinks: Submissive. Wearing her own gear, being displayed. Extreme: enchanted restraint gear.';
+        const s = parseSheetSections(p).sections;
+        expect(s.map(x => x.label)).toEqual(['Actual Core', 'The Kinks']);
+        expect(s[1].body).toMatch(/being displayed\. Extreme: enchanted restraint gear\.$/);
+    });
+    it('a stray Extreme: with no Kinks before it is left alone', () => {
+        expect(parseSheetSections('Actual Core: x. Extreme: y.').sections.map(x => x.label)).toContain('Extreme');
+    });
+});
