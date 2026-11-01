@@ -9,6 +9,7 @@ import { useImageLoader } from '../../hooks/useImageLoader';
 import { useToast } from '../providers/ToastProvider';
 import { useErrorHandler } from '../../hooks/useErrorHandler';
 import { useGeminiClient } from '../../hooks/useGeminiClient';
+import { useAiProviderStore, isImageGenerationAvailable } from '../../config/aiProvider';
 import { AttributeInput, TextAreaInput } from '../ui/Inputs';
 import { db } from '../../db';
 import { generateTemplateId } from '../../idUtils';
@@ -59,6 +60,8 @@ type CreatorMode = 'manual' | 'neural';
 export const CreatorView: React.FC = () => {
     const { character, setCharacter, setUI, gameWorld, setGameWorld } = useGameStore();
     const { handleGenerateScenarios, handleVisualize, handleGenerateCharacter, handleGenerateField } = useGeminiClient();
+    // v1.49: image generation is Google-only — hidden on OpenRouter.
+    const imageGenEnabled = isImageGenerationAvailable(useAiProviderStore(s => s.provider));
     const { showToast } = useToast();
     const { handleError } = useErrorHandler();
     
@@ -563,6 +566,7 @@ export const CreatorView: React.FC = () => {
                         <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Neural Manifest Preview</label>
                         <PreviewImage id={gameWorld.visualUrl} />
                         <div className="flex justify-center gap-4">
+                            {imageGenEnabled && (
                             <button 
                                 onClick={handleVisualize}
                                 disabled={gameWorld.isGeneratingVisual || !character.name || !character.appearance}
@@ -574,6 +578,7 @@ export const CreatorView: React.FC = () => {
                             >
                                 {gameWorld.isGeneratingVisual ? 'Rendering...' : 'Visualize Subject'}
                             </button>
+                            )}
                         </div>
                     </div>
                 </>

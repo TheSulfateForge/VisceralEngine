@@ -3,9 +3,12 @@ import { GoogleGenAI } from "@google/genai";
 import { GEMINI_SAFETY_SETTINGS } from "../constants";
 
 export class ImageService {
-    constructor(private ai: GoogleGenAI) {}
+    // v1.49: `enabled` is false when OpenRouter is the active provider —
+    // image generation is a Google-only feature.
+    constructor(private ai: GoogleGenAI, private enabled: boolean = true) {}
 
     async generateImage(prompt: string): Promise<string | null> {
+        if (!this.enabled) return null;
         const stylePrompt = `Visceral realism, gritty, high contrast, cinematic lighting, 35mm film grain, dark atmosphere. ${prompt}`;
         try {
             const response = await this.ai.models.generateContent({

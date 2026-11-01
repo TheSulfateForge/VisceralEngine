@@ -11,17 +11,26 @@ import { isNarrativeMessage } from '../utils/engine/oocDetection';
 import { getContextProfile } from '../config/engineConfig';
 import { systemInstructionCache } from './geminiCache';
 import { SYSTEM_INSTRUCTIONS } from '../systemInstructions';
+import { OpenRouterGenAI } from './openRouterGenAI';
+import { OPENROUTER_ALLOWED_PROVIDERS, type AiProvider } from '../config/aiProvider';
 
 const REQUEST_TIMEOUT_MS = 60000;
 
 export class GeminiClient {
   public readonly ai: GoogleGenAI;
   public readonly modelName: string;
+  /** v1.49: which backend `ai` talks to. */
+  public readonly provider: AiProvider;
 
-  constructor(apiKey: string, modelName: string) {
+  constructor(apiKey: string, modelName: string, provider: AiProvider = 'gemini') {
     if (!apiKey) throw new Error("API Key is required for GeminiClient");
     this.modelName = modelName;
-    this.ai = new GoogleGenAI({ apiKey });
+    this.provider = provider;
+    // v1.49: OpenRouter is a drop-in for the SDK surface every service uses
+    // (models.generateContent + chats.create), so no call site changes.
+    this.ai = provider === 'openrouter'
+      ? new OpenRouterGenAI({ apiKey, allowedProviders: OPENROUTER_ALLOWED_PROVIDERS }).asGoogleGenAI()
+      : new GoogleGenAI({ apiKey });
   }
 
   public async withRetry<T>(fn: () => Promise<T>, maxRetries: number = 1): Promise<T> {
@@ -101,7 +110,9 @@ export class GeminiClient {
   // the most expensive tokens in the request — and a quiet dialogue beat
   // doesn't need combat-grade deliberation. Callers pass 'low' for
   // NARRATIVE/SOCIAL turns and 'high' for COMBAT/TENSION.
-  private buildThinkingConfig(levelOverride?: string | null): Record<string, unknown> | undefined {
+  // v1.49: public so the summary / world-pulse services use the same
+  // model-family rules as the narrator instead of hardcoded budgets.
+  public buildThinkingConfig(levelOverride?: string | null): Record<string, unknown> | undefined {
     const defaults = THINKING_DEFAULTS[this.modelName];
     if (!defaults) return undefined; // 2.5 models + unknown models — omit entirely
 
@@ -475,7 +486,9 @@ export class GeminiClient {
 
     let cachedContentName: string | null = null;
     let effectiveSystemInstruction = staticBlock;
-    if (staticBlock.startsWith(SYSTEM_INSTRUCTIONS)) {
+    // v1.49: explicit caching is a Google API feature. OpenRouter providers
+    // cache the stable prefix automatically, so send the block inline.
+    if (this.provider === 'gemini' && staticBlock.startsWith(SYSTEM_INSTRUCTIONS)) {
         const cacheResult = await systemInstructionCache.getOrCreate(
             this.ai,
             this.modelName,

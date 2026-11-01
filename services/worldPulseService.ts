@@ -88,13 +88,20 @@ const buildPulseBrief = (world: GameWorld, turn: number): string => {
 };
 
 export class WorldPulseService {
-    constructor(private ai: GoogleGenAI) {}
+    // v1.49: model + thinking config come from the active client. These
+    // calls were hardcoded to gemini-2.5-flash-lite; they now use whatever
+    // model is selected (and work on OpenRouter).
+    constructor(
+        private ai: GoogleGenAI,
+        private modelName: string,
+        private thinkingConfig?: Record<string, unknown>,
+    ) {}
 
     async pulse(world: GameWorld, turn: number): Promise<WorldPulseResult | null> {
         try {
             const brief = buildPulseBrief(world, turn);
             const response = await this.ai.models.generateContent({
-                model: "gemini-2.5-flash-lite",
+                model: this.modelName,
                 contents: `You are the OFFSCREEN WORLD SIMULATOR for a sandbox RPG. The player is not watching; you advance the world anyway.
 
 RULES:
@@ -107,7 +114,7 @@ RULES:
 WORLD BRIEF:
 ${brief}`,
                 config: {
-                    thinkingConfig: { thinkingBudget: 256 },
+                    ...(this.thinkingConfig ? { thinkingConfig: this.thinkingConfig } : {}),
                     responseMimeType: "application/json",
                     responseSchema: PULSE_SCHEMA,
                 },

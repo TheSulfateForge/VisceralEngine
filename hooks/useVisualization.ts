@@ -6,6 +6,7 @@ import { useToast } from '../components/providers/ToastProvider';
 import { useErrorHandler } from './useErrorHandler';
 import { db } from '../db';
 import { UI_CONFIG } from '../constants';
+import { isImageGenerationAvailable } from '../config/aiProvider';
 
 export const useVisualization = () => {
     const { setGameWorld, setUI } = useGameStore();
@@ -14,6 +15,12 @@ export const useVisualization = () => {
     const { handleError } = useErrorHandler();
 
     const handleVisualize = useCallback(async () => {
+        // v1.49: image generation is Google-only; off while OpenRouter is active.
+        // Covers the buttons and the keyboard shortcut.
+        if (!isImageGenerationAvailable()) {
+            showToast("Image generation is disabled while OpenRouter is the active provider.", "error");
+            return;
+        }
         try {
             const service = await getService();
             if (!service) return;
@@ -54,7 +61,7 @@ export const useVisualization = () => {
                 }
             }
         }
-    }, [getService, setGameWorld, handleError, setUI]);
+    }, [getService, setGameWorld, handleError, setUI, showToast]);
 
     return { handleVisualize };
 };

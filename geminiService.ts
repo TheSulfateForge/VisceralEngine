@@ -6,6 +6,7 @@ import { CharacterService } from "./services/characterService";
 import { SummaryService } from "./services/summaryService";
 import { WorldPulseService } from "./services/worldPulseService";
 import { ChatMessage, Scenario, Character, GeneratedCharacterFields, GameWorld } from "./types";
+import { isImageGenerationAvailable, type AiProvider } from "./config/aiProvider";
 
 export class GeminiService extends GeminiClient {
     private imageService: ImageService;
@@ -14,13 +15,15 @@ export class GeminiService extends GeminiClient {
     private summaryService: SummaryService;
     private worldPulseService: WorldPulseService;
 
-    constructor(apiKey: string, modelName: string) {
-        super(apiKey, modelName);
-        this.imageService = new ImageService(this.ai);
+    constructor(apiKey: string, modelName: string, provider: AiProvider = 'gemini') {
+        super(apiKey, modelName, provider);
+        this.imageService = new ImageService(this.ai, isImageGenerationAvailable(provider));
         this.scenarioService = new ScenarioService(this);
         this.characterService = new CharacterService(this);
-        this.summaryService = new SummaryService(this.ai);
-        this.worldPulseService = new WorldPulseService(this.ai);
+        // v1.49: summary + world pulse run on the selected model, not a
+        // hardcoded gemini-2.5-flash-lite. 'low' keeps them cheap on 3.x.
+        this.summaryService = new SummaryService(this.ai, modelName, this.buildThinkingConfig('low'));
+        this.worldPulseService = new WorldPulseService(this.ai, modelName, this.buildThinkingConfig('low'));
     }
 
     // v1.24: offscreen world simulation (background, cheap model)

@@ -2,6 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { DeclaredActionPicker } from './DeclaredActionPicker';
 import { SceneFocusControl } from './SceneFocusControl';
+import { useAiProviderStore, isImageGenerationAvailable } from '../../config/aiProvider';
 
 interface InputAreaProps {
     onSend: (text: string) => void;
@@ -11,6 +12,8 @@ interface InputAreaProps {
 }
 
 export const InputArea: React.FC<InputAreaProps> = ({ onSend, handleVisualize, isGeneratingVisual, isThinking }) => {
+    // v1.49: image generation is Google-only — hidden on OpenRouter.
+    const imageGenEnabled = isImageGenerationAvailable(useAiProviderStore(s => s.provider));
     const [input, setInput] = useState('');
     const [isExpanded, setIsExpanded] = useState(false);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -56,6 +59,7 @@ export const InputArea: React.FC<InputAreaProps> = ({ onSend, handleVisualize, i
                 <div className="max-w-3xl w-full flex justify-end items-center gap-3 mb-4">
                     <SceneFocusControl disabled={isThinking} />
                     <DeclaredActionPicker disabled={isThinking} />
+                    {imageGenEnabled && (
                     <button
                         onClick={handleVisualize}
                         disabled={isGeneratingVisual || isThinking}
@@ -63,6 +67,7 @@ export const InputArea: React.FC<InputAreaProps> = ({ onSend, handleVisualize, i
                     >
                         {isGeneratingVisual ? 'Synthesizing...' : 'Capture Visual Fragment'}
                     </button>
+                    )}
                 </div>
                 <div className="max-w-3xl mx-auto w-full relative group">
                     <textarea

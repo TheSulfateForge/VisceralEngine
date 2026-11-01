@@ -378,6 +378,16 @@ export const MODEL_CONTEXT_PROFILES: Record<string, ModelContextProfile> = {
     compressedMessageLength: 500,
     ragLookback: 5,
   },
+  // v1.49: OpenRouter — 1M context, full-strength model; same budget as
+  // gemini-3-flash-preview.
+  'deepseek/deepseek-v4.1-flash': {
+    maxHistory: 30,
+    summarizationInterval: 20,
+    memoryLimit: 40,
+    recentFullMessages: 10,
+    compressedMessageLength: 500,
+    ragLookback: 5,
+  },
   'gemini-2.5-flash-lite': {
     maxHistory: 14,
     summarizationInterval: 10,

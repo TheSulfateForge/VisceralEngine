@@ -3,6 +3,7 @@ import { resolveCharacterBody } from '../../utils/engine/bodyModel';
 import React, { useState } from 'react';
 import { useGameStore } from '../../store';
 import { useGeminiClient } from '../../hooks/useGeminiClient';
+import { useAiProviderStore, isImageGenerationAvailable } from '../../config/aiProvider';
 import { ImageCarousel } from '../common/ImageCarousel';
 import { Character, PROFICIENCY_MODIFIERS } from '../../types';
 import { getTraumaTierLabel } from '../../utils/traumaSystem';
@@ -137,6 +138,8 @@ const EditableText: React.FC<{
 export const CharacterView: React.FC = () => {
     const { character, setCharacter, gameWorld, setUI } = useGameStore();
     const { handleVisualize } = useGeminiClient();
+    // v1.49: image generation is Google-only — hidden on OpenRouter.
+    const imageGenEnabled = isImageGenerationAvailable(useAiProviderStore(s => s.provider));
     const [isEditing, setIsEditing] = useState(false);
 
     const traumaPercent = character.trauma || 0;
@@ -160,6 +163,7 @@ export const CharacterView: React.FC = () => {
                     >
                         {isEditing ? 'Lock Fields' : 'Edit Subject'}
                     </button>
+                    {imageGenEnabled && (
                     <button 
                         onClick={handleVisualize} 
                         disabled={gameWorld.isGeneratingVisual}
@@ -171,6 +175,7 @@ export const CharacterView: React.FC = () => {
                     >
                         {gameWorld.isGeneratingVisual ? 'Rendering...' : 'Generate Portrait'}
                     </button>
+                    )}
                 </div>
             </div>
 

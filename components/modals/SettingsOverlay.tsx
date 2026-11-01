@@ -3,6 +3,7 @@ import React, { useRef, useState } from 'react';
 import { MODELS } from "../../constants";
 import { getTuning, setTuning, resetTuning, TUNING_DEFAULTS, TuningValues } from "../../config/tuning";
 import { ContentPolicyPanel } from "./ContentPolicyPanel";
+import { useAiProviderStore, OPENROUTER_MODELS, OPENROUTER_ALLOWED_PROVIDERS } from "../../config/aiProvider";
 
 interface SettingsOverlayProps {
     currentModel: string;
@@ -24,6 +25,19 @@ export const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ currentModel, 
     const [fontSize, setFontSize] = useState(() =>
         localStorage.getItem('visceral_font_size') || 'xl'
     );
+    // v1.49: AI provider toggle + OpenRouter key (saved locally)
+    const { provider, setProvider, openRouterKey, setOpenRouterKey, openRouterModel, setOpenRouterModel } = useAiProviderStore();
+    const [keyDraft, setKeyDraft] = useState('');
+    const [showKey, setShowKey] = useState(false);
+    const maskedKey = openRouterKey ? `${openRouterKey.slice(0, 8)}…${openRouterKey.slice(-4)}` : '';
+
+    const handleSaveKey = () => {
+        if (!keyDraft.trim()) return;
+        setOpenRouterKey(keyDraft);
+        setKeyDraft('');
+        setShowKey(false);
+    };
+
     // v1.26: Simulation tone dials (runtime, no recompile)
     const [tuning, setTuningState] = useState<TuningValues>(() => getTuning());
 
@@ -71,8 +85,72 @@ export const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ currentModel, 
             <p className="text-[10px] text-gray-600 font-mono uppercase tracking-[0.5em]">Neural Pulse & Matrix Synchronization</p>
           </div>
           <div className="space-y-6">
+            {/* v1.49: AI PROVIDER */}
+            <div className="space-y-3">
+              <label className="text-[10px] font-bold text-gray-700 uppercase tracking-widest block">AI Provider</label>
+              <div className="flex gap-2">
+                {([['gemini', 'Google Gemini'], ['openrouter', 'OpenRouter']] as const).map(([id, label]) => (
+                  <button
+                    key={id}
+                    onClick={() => setProvider(id)}
+                    className={`flex-1 py-3 text-[10px] font-mono uppercase tracking-widest border transition-all ${provider === id ? 'bg-red-950/20 border-red-900 text-red-500' : 'bg-black border-gray-900 text-gray-500 hover:border-gray-700'}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {provider === 'openrouter' && (
+                <div className="space-y-3 border border-gray-900 p-4">
+                  <label className="text-[9px] text-gray-600 font-mono uppercase tracking-widest block">OpenRouter API Key</label>
+                  {openRouterKey && (
+                    <div className="flex items-center justify-between text-[10px] font-mono">
+                      <span className="text-green-700">Saved: {maskedKey}</span>
+                      <button onClick={() => setOpenRouterKey('')} className="text-[8px] text-gray-600 hover:text-red-900 uppercase tracking-widest underline underline-offset-2">
+                        Remove Key
+                      </button>
+                    </div>
+                  )}
+                  <div className="flex gap-2">
+                    <input
+                      type={showKey ? 'text' : 'password'}
+                      value={keyDraft}
+                      onChange={e => setKeyDraft(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && handleSaveKey()}
+                      placeholder={openRouterKey ? 'Enter a new key to replace' : 'sk-or-v1-…'}
+                      autoComplete="off"
+                      spellCheck={false}
+                      className="flex-1 bg-black border border-gray-800 px-3 py-2 text-[11px] font-mono text-gray-300 focus:border-red-900 outline-none"
+                    />
+                    <button onClick={() => setShowKey(v => !v)} className="px-3 text-[9px] font-mono uppercase border border-gray-800 text-gray-500 hover:text-gray-300">
+                      {showKey ? 'Hide' : 'Show'}
+                    </button>
+                    <button onClick={handleSaveKey} disabled={!keyDraft.trim()} className="px-4 text-[9px] font-bold uppercase tracking-widest border border-red-900/40 text-red-600 hover:bg-red-900 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent">
+                      Save
+                    </button>
+                  </div>
+                  <p className="text-[8px] text-gray-700 font-mono leading-relaxed">
+                    Stored only in this browser. Routed to {OPENROUTER_ALLOWED_PROVIDERS.join(', ')} — cheapest total cost first, falling back down the list. Image generation is disabled on OpenRouter.
+                  </p>
+                </div>
+              )}
+            </div>
+
             <div className="space-y-3">
               <label className="text-[10px] font-bold text-gray-700 uppercase tracking-widest block">Neural Model Selection</label>
+              {provider === 'openrouter' ? (
+              <div className="grid grid-cols-1 gap-2">
+                {OPENROUTER_MODELS.map(m => (
+                  <button
+                    key={m}
+                    onClick={() => setOpenRouterModel(m)}
+                    className={`w-full py-3 px-4 text-left text-[11px] font-mono border transition-all ${openRouterModel === m ? 'bg-red-950/20 border-red-900 text-red-500' : 'bg-black border-gray-900 text-gray-500 hover:border-gray-700'}`}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+              ) : (
               <div className="grid grid-cols-1 gap-2">
                 {MODELS.map(m => (
                   <button 
@@ -84,6 +162,7 @@ export const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ currentModel, 
                   </button>
                 ))}
               </div>
+              )}
             </div>
 
             {/* AI CREATIVITY */}

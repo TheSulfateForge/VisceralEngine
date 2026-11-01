@@ -45,7 +45,14 @@ const SALVAGE_SCHEMA = {
 };
 
 export class SummaryService {
-    constructor(private ai: GoogleGenAI) {}
+    // v1.49: model + thinking config come from the active client. These
+    // calls were hardcoded to gemini-2.5-flash-lite; they now use whatever
+    // model is selected (and work on OpenRouter).
+    constructor(
+        private ai: GoogleGenAI,
+        private modelName: string,
+        private thinkingConfig?: Record<string, unknown>,
+    ) {}
 
     /** Legacy string-only path — kept for any remaining callers. */
     async summarizeHistory(history: ChatMessage[]): Promise<string> {
@@ -62,7 +69,7 @@ export class SummaryService {
         try {
             const textContent = history.map(h => `${h.role}: ${h.text}`).join('\n');
             const response = await this.ai.models.generateContent({
-                model: "gemini-2.5-flash-lite",
+                model: this.modelName,
                 contents: `You are the archival subsystem of an RPG simulation engine. Process the session logs below.
 
 1. Write a concise narrative summary (max 300 words): key events, injuries, location changes, relationship shifts.
@@ -71,7 +78,7 @@ export class SummaryService {
 LOGS:
 ${textContent}`,
                 config: {
-                    thinkingConfig: { thinkingBudget: 512 },
+                    ...(this.thinkingConfig ? { thinkingConfig: this.thinkingConfig } : {}),
                     responseMimeType: "application/json",
                     responseSchema: SALVAGE_SCHEMA,
                 },
