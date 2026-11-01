@@ -84,6 +84,144 @@ export interface ParsedBody {
 
 const fmtHeight = (inches: number): string => `${Math.floor(inches / 12)}'${Math.round(inches % 12)}"`;
 
+// ---------------------------------------------------------------------------
+// v1.48: the labeled "Body:" block (World Seed Format Spec, Rule 7D)
+// ---------------------------------------------------------------------------
+//
+//   Body:
+//   Height: 5'4"
+//   Weight: 140 lbs
+//   Build: curvy
+//   Breasts: 34DD
+//   Penis: 7 in long, 6 in around
+//   Vaginal Depth: 6 in
+//   Vaginal Tightness: tight
+//   Anal Tightness: tight
+//   Vaginal Virgin: Yes
+//   Anal Virgin: Yes
+//
+// Read with plain string matching — exact, free, and not at the mercy of an
+// extraction model. Labeled values always win over anything read from prose.
+
+const LABELS: Record<string, keyof BodyProfile | 'penis' | 'virgin'> = {
+    'height': 'heightIn',
+    'weight': 'weightLb',
+    'build': 'build',
+    'breasts': 'breasts',
+    'breast size': 'breasts',
+    'cup': 'breasts',
+    'penis': 'penis',
+    'penis length': 'penisLengthIn',
+    'length': 'penisLengthIn',
+    'penis girth': 'penisGirthIn',
+    'girth': 'penisGirthIn',
+    'vaginal depth': 'vaginalDepthIn',
+    'depth': 'vaginalDepthIn',
+    'vaginal tightness': 'vaginalTightness',
+    'anal tightness': 'analTightness',
+    'genitals': 'genitals',
+    'body notes': 'notes',
+    'vaginal virgin': 'vaginalVirgin',
+    'anal virgin': 'analVirgin',
+    'virgin': 'virgin',
+};
+
+const parseYesNo = (v: string): boolean | undefined => {
+    const t = v.trim().toLowerCase();
+    if (/^(?:yes|y|true|virgin|intact)\b/.test(t)) return true;
+    if (/^(?:no|n|false|not)\b/.test(t)) return false;
+    return undefined;
+};
+
+const parseHeightValue = (v: string): number | undefined => {
+    const t = v.trim();
+    const ftIn = t.match(/^(\d)\s*['′]\s*(\d{1,2})?/);
+    if (ftIn) return parseInt(ftIn[1], 10) * 12 + (ftIn[2] ? parseInt(ftIn[2], 10) : 0);
+    const W = Object.keys(NUMBER_WORDS).join('|');
+    const words = t.match(new RegExp(`^(\\d|${W})[-\\s]+(?:foot|feet|ft)(?:[-\\s]+(\\d{1,2}|${W}))?`, 'i'));
+    if (words) return (toNumber(words[1]) ?? 0) * 12 + (toNumber(words[2]) ?? 0);
+    const cm = t.match(/^(\d{2,3})\s*cm\b/i);
+    if (cm) return Math.round(parseInt(cm[1], 10) / 2.54);
+    const inches = t.match(/^(\d{2,3})\s*(?:in|inches|")?\b/i);
+    if (inches) return parseInt(inches[1], 10);
+    return undefined;
+};
+
+const parseInches = (v: string): number | undefined => {
+    const m = v.trim().match(new RegExp(`^${NUM}`, 'i'));
+    if (!m) return undefined;
+    const n = toNumber(m[1], m[2]);
+    return /^\s*[\d.]+\s*cm\b/i.test(v) && n !== undefined ? Math.round((n / 2.54) * 10) / 10 : n;
+};
+
+/**
+ * The labeled Body block, if the text has one. Only lines after a "Body:"
+ * header are read, so "Height:" elsewhere in a sheet (or an unrelated
+ * "Length:" in lore) is never mistaken for a body field. The block ends at the
+ * first line whose label is not a body label.
+ */
+export const parseLabeledBody = (text: string): BodyProfile => {
+    const out: BodyProfile = {};
+    if (!text) return out;
+    const lines = text.split(/\r?\n/);
+    let inBlock = false;
+    for (const raw of lines) {
+        const line = raw.trim();
+        if (/^body\s*:\s*$/i.test(line)) { inBlock = true; continue; }
+        // "Body: Height: 5'4" | Weight: 140 lbs" on one line is accepted too.
+        const inline = line.match(/^body\s*:\s*(.+)$/i);
+        const candidates = inline ? inline[1].split(/\s*[|;]\s*/) : inBlock ? [line] : [];
+        if (inline) inBlock = true;
+        if (!inBlock) continue;
+        if (!line) continue;
+        let anyLabel = false;
+        for (const c of candidates) {
+            const m = c.match(/^([A-Za-z][A-Za-z ]{1,24}?)\s*:\s*(.+)$/);
+            if (!m) continue;
+            const key = LABELS[m[1].trim().toLowerCase()];
+            if (!key) continue;
+            anyLabel = true;
+            const val = m[2].trim();
+            switch (key) {
+                case 'heightIn': { const h = parseHeightValue(val); if (h) out.heightIn = h; break; }
+                case 'weightLb': {
+                    const w = val.match(/^(\d{2,3})\s*(kg)?/i);
+                    if (w) out.weightLb = w[2] ? Math.round(parseInt(w[1], 10) * 2.2046) : parseInt(w[1], 10);
+                    break;
+                }
+                case 'penisLengthIn': { const n = parseInches(val); if (n) out.penisLengthIn = n; break; }
+                case 'penisGirthIn': { const n = parseInches(val); if (n) out.penisGirthIn = n; break; }
+                case 'vaginalDepthIn': { const n = parseInches(val); if (n) out.vaginalDepthIn = n; break; }
+                case 'penis': {
+                    const len = val.match(new RegExp(`${NUM}${INCH}?\\s*(?:long|length)`, 'i'));
+                    const gir = val.match(new RegExp(`${NUM}${INCH}?\\s*(?:around|girth|circumference)`, 'i'));
+                    if (len) out.penisLengthIn = toNumber(len[1], len[2]);
+                    if (gir) out.penisGirthIn = toNumber(gir[1], gir[2]);
+                    // "7 x 6" / "7 by 6"
+                    const by = val.match(new RegExp(`^${NUM}\\s*(?:in\\.?|")?\\s*(?:x|×|by)\\s*${NUM}`, 'i'));
+                    if (!len && !gir && by) { out.penisLengthIn = toNumber(by[1], by[2]); out.penisGirthIn = toNumber(by[3], by[4]); }
+                    break;
+                }
+                case 'vaginalVirgin': case 'analVirgin': {
+                    const b = parseYesNo(val); if (b !== undefined) out[key] = b; break;
+                }
+                case 'virgin': {
+                    // "Virgin: Yes" = both; "Virgin: vaginal only" / "anal only"
+                    const t = val.toLowerCase();
+                    if (/vaginal only/.test(t)) { out.vaginalVirgin = true; out.analVirgin = false; }
+                    else if (/anal only/.test(t)) { out.analVirgin = true; out.vaginalVirgin = false; }
+                    else { const b = parseYesNo(val); if (b !== undefined) { out.vaginalVirgin = b; out.analVirgin = b; } }
+                    break;
+                }
+                case 'breasts': out.breasts = val; break;
+                default: (out as Record<string, unknown>)[key] = val;
+            }
+        }
+        if (!inline && !anyLabel) inBlock = false;   // left the block
+    }
+    return out;
+};
+
 /**
  * Pull whatever measurable body facts the prose states. Conservative: a number
  * is only taken when it sits in the same sentence as the body part it measures.
@@ -183,7 +321,20 @@ export const parseBodyFromText = (text: string, options: { excerptGenitals?: boo
         profile.analVirgin = true;
     }
 
-    return { profile, conflicts };
+    // v1.48: the labeled Body block wins over prose. A prose figure that
+    // disagrees with it is still worth reporting, but the "first one stated"
+    // wording no longer applies.
+    const labeled = parseLabeledBody(text);
+    const finalConflicts = conflicts.filter(c =>
+        !(labeled.heightIn !== undefined && /height/.test(c)) &&
+        !(labeled.weightLb !== undefined && /weight/.test(c)));
+    if (labeled.heightIn !== undefined && heights.some(h => h !== labeled.heightIn)) {
+        finalConflicts.push(`a height in the prose (${heights.filter(h => h !== labeled.heightIn).map(fmtHeight).join(', ')}) that disagrees with the Body block (${fmtHeight(labeled.heightIn)}) — the Body block is used`);
+    }
+    if (labeled.weightLb !== undefined && weights.some(w => w !== labeled.weightLb)) {
+        finalConflicts.push(`a weight in the prose (${weights.filter(w => w !== labeled.weightLb).map(w => `${w} lb`).join(', ')}) that disagrees with the Body block (${labeled.weightLb} lb) — the Body block is used`);
+    }
+    return { profile: { ...profile, ...labeled }, conflicts: finalConflicts };
 };
 
 // ---------------------------------------------------------------------------
@@ -663,7 +814,7 @@ export const buildBodiesInContactBlock = (
         if (as !== 'unknown' || p.isPlayer) lines.push(fmtLoss('Anal virginity', as, p.state?.analVirginityLost));
         const now = describeBodyState(p.state, nowMinute);
         if (now) lines.push(`RIGHT NOW: ${now}.`);
-        for (const c of p.conflicts) lines.push(`⚠ The sheet contradicts itself — it gives ${c}. The first one stated is used above.`);
+        for (const c of p.conflicts) lines.push(/Body block is used/.test(c) ? `⚠ The sheet has ${c}.` : `⚠ The sheet contradicts itself — it gives ${c}. The first one stated is used above.`);
         sections.push(`${p.name.toUpperCase()}${p.isPlayer ? ' (player character)' : ''}\n${lines.map(l => `  - ${l}`).join('\n')}`);
     }
 

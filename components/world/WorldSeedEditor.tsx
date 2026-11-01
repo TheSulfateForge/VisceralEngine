@@ -488,7 +488,7 @@ const NPCForm: React.FC<{ value: WorldSeedNPC; onChange: (v: WorldSeedNPC) => vo
         rows={2}
         value={value.appearance ?? ''}
         onChange={e => onChange({ ...value, appearance: e.target.value })}
-        placeholder="Physical description — kept separate from personality"
+        placeholder="Optional — leave empty to use Description"
       />
     </div>
     <details className="border border-gray-800 p-3">
@@ -498,7 +498,8 @@ const NPCForm: React.FC<{ value: WorldSeedNPC; onChange: (v: WorldSeedNPC) => vo
           compact
           value={value.body}
           onChange={body => onChange({ ...value, body })}
-          parsed={parseBodyFromText(`${value.appearance ?? ''}\n${value.personality ?? ''}`).profile}
+          parsed={parseBodyFromText(`${value.description ?? ''}\n${value.appearance ?? ''}\n${value.personality ?? ''}`).profile}
+          conflicts={parseBodyFromText(`${value.description ?? ''}\n${value.appearance ?? ''}`).conflicts}
         />
       </div>
     </details>

@@ -433,3 +433,93 @@ describe('v1.48 — validateResponse no longer drops three schema fields', () =>
         expect(r.social_updates).toEqual([{ from: 'Ivo Kerrick', to: 'Maribel', standing: 'WARM', basis: 'covered for her' }]);
     });
 });
+
+// ===========================================================================
+// v1.48 — World seed NPC bodies (Format Spec Rule 7D)
+// ===========================================================================
+import { parseLabeledBody } from '../utils/engine/bodyModel';
+import { attachNpcBodies, splitSeedSections } from '../utils/worldSeedBodies';
+import { hydrateWorldSeed } from '../utils/worldSeedHydration';
+import type { WorldSeed, WorldSeedNPC } from '../types';
+
+const ELSABET_SOURCE = `=== Elsabet Hartwell ===
+Role: Youngest daughter of House Hartwell; enchanter-crafter
+Race: Human  |  Gender: Female
+Location: Hartwell Keep (her workshop off the smithy)
+Faction: House Hartwell
+Description: Nineteen, human, five-foot-four and curvy, with full breasts, a narrow waist, and round hips. Naked, she is soft and smooth, with heavy breasts, pink nipples, a soft stomach, full hips and thighs. She keeps a small dark-blonde patch over a soft, plump pussy: puffy outer labia, short inner labia of bright pink, a small hood over a sensitive clit, and a tight hole. Her asshole is a tight, bright-pink pucker. Measurements: height 5'4", weight 140 lbs; 38-26-40; 34DD cup.
+Personality:
+Performed Surface: Sweet, shy, and absorbed in her craft.
+Subtext Bleed-through: She never asks where a buyer's coin comes from.
+Actual Core: She sells her monster-part gear to anyone with coin.
+Goals: Become a master enchanter in her own right.
+===`;
+
+const ELSABET_WITH_BODY = ELSABET_SOURCE.replace('Personality:', `Body:
+Height: 5'4"
+Weight: 140 lbs
+Build: curvy
+Breasts: 34DD
+Vaginal Depth: 5.5 in
+Vaginal Tightness: tight
+Anal Tightness: tight
+Vaginal Virgin: Yes
+Anal Virgin: Yes
+Personality:`);
+
+const npc = (over: Partial<WorldSeedNPC> = {}): WorldSeedNPC => ({
+    name: 'Elsabet Hartwell', role: 'enchanter-crafter', location: 'Hartwell Keep', faction: 'House Hartwell',
+    description: ELSABET_SOURCE.split('Description: ')[1].split('\nPersonality')[0],
+    personality: 'Performed Surface: Sweet, shy.', goals: [], ...over,
+});
+
+describe('v1.48 — seed NPC bodies', () => {
+    it("Elsabet's current-format Description already yields height, weight and cup", () => {
+        const p = parseBodyFromText(npc().description).profile;
+        expect(p.heightIn).toBe(64);
+        expect(p.weightLb).toBe(140);
+        expect(p.breasts).toBe('34DD cup');
+        expect(p.genitals).toMatch(/plump pussy/);
+    });
+
+    it('reads the labeled Body block, including both virginities', () => {
+        const b = parseLabeledBody(ELSABET_WITH_BODY);
+        expect(b).toMatchObject({ heightIn: 64, weightLb: 140, build: 'curvy', breasts: '34DD', vaginalDepthIn: 5.5, vaginalVirgin: true, analVirgin: true });
+    });
+
+    it('reads penis forms and a one-line block', () => {
+        expect(parseLabeledBody('Body:\nPenis: 10 in long, 9 in around')).toMatchObject({ penisLengthIn: 10, penisGirthIn: 9 });
+        expect(parseLabeledBody('Body:\nPenis: 7 x 6')).toMatchObject({ penisLengthIn: 7, penisGirthIn: 6 });
+        expect(parseLabeledBody('Body: Height: 6\'2" | Weight: 260 lbs | Virgin: No')).toMatchObject({ heightIn: 74, weightLb: 260, vaginalVirgin: false, analVirgin: false });
+    });
+
+    it('ignores labels outside a Body block', () => {
+        expect(parseLabeledBody('Description: Height: 9\'0" giant\nGoals: none')).toEqual({});
+    });
+
+    it('the Body block wins over prose and says so when they disagree', () => {
+        const r = parseBodyFromText('A woman four-foot-five.\nBody:\nHeight: 5\'5"');
+        expect(r.profile.heightIn).toBe(65);
+        expect(r.conflicts[0]).toMatch(/Body block is used/);
+    });
+
+    it('the seed builder attaches the block from the SOURCE even if the extractor dropped it', () => {
+        const { npcs, attached } = attachNpcBodies([npc()], ELSABET_WITH_BODY);
+        expect(attached).toEqual(['Elsabet Hartwell']);
+        expect(npcs[0].body).toMatchObject({ vaginalVirgin: true, analVirgin: true, vaginalDepthIn: 5.5 });
+        expect(splitSeedSections(ELSABET_WITH_BODY).has('elsabet hartwell')).toBe(true);
+    });
+
+    it('an expand pass keeps bodies the seed already had; editor edits win', () => {
+        const previous = [npc({ body: { analVirgin: false } })];
+        const { npcs } = attachNpcBodies([npc()], 'no sections here', previous);
+        expect(npcs[0].body).toEqual({ analVirgin: false });
+    });
+
+    it('hydration puts the Description on the entity as appearance, so the body survives play', () => {
+        const seed = { id: 's', name: 'w', description: '', timestamp: '', lastModified: '', locations: [], factions: [], lore: [], rules: [], tags: [], npcs: [npc()] } as unknown as WorldSeed;
+        const ent = hydrateWorldSeed(seed).knownEntities![0];
+        expect(ent.appearance).toMatch(/five-foot-four/);
+        expect(resolveEntityBody(ent).profile.weightLb).toBe(140);
+    });
+});

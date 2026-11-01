@@ -35,12 +35,13 @@ export function repairSeedPersonalities(
     // started. Never overwrites what the entity already has.
     let e = raw;
     if (npc) {
-      const fillAppearance = !e.appearance?.trim() && npc.appearance?.trim();
+      const seedAppearance = npc.appearance?.trim() || npc.description?.trim();
+      const fillAppearance = !e.appearance?.trim() && seedAppearance;
       const fillBody = !e.body && npc.body;
       if (fillAppearance || fillBody) {
         e = {
           ...e,
-          ...(fillAppearance ? { appearance: npc.appearance!.trim() } : {}),
+          ...(fillAppearance ? { appearance: seedAppearance } : {}),
           ...(fillBody ? { body: npc.body } : {}),
         };
         if (!repairedNames.includes(e.name)) repairedNames.push(e.name);
@@ -109,7 +110,11 @@ export function hydrateWorldSeed(seed: WorldSeed): Partial<GameWorld> {
     impression: npc.description,
     personality: npc.personality?.trim() || undefined,
     // v1.48: physical facts travel separately from personality.
-    ...(npc.appearance?.trim() ? { appearance: npc.appearance.trim() } : {}),
+    // v1.48: the spec's NPC "Description:" IS the appearance ("appearance +
+    // what's externally observable"). It used to go only to `impression`,
+    // which the model rewrites every turn — so the physical description was
+    // gone from the entity after the first update.
+    ...((npc.appearance?.trim() || npc.description?.trim()) ? { appearance: (npc.appearance?.trim() || npc.description.trim()) } : {}),
     ...(npc.body ? { body: npc.body } : {}),
     relationship_level: 'NEUTRAL' as const,
     leverage: '',

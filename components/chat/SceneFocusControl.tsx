@@ -54,26 +54,44 @@ export const SceneFocusControl: React.FC<{ disabled?: boolean }> = ({ disabled }
                 {active ? 'Focus ●' : 'Scene Focus'}
             </button>
             {open && (
-                <div className="absolute bottom-full right-0 mb-2 w-[min(90vw,420px)] bg-[#0a0a0a] border border-gray-800 p-4 space-y-3 z-30 shadow-2xl">
-                    <p className="text-[9px] text-gray-500 font-mono leading-relaxed">
-                        How this scene should be written. Sent every turn until the scene moves away from
-                        {' '}<span className="text-gray-300">{sceneFocus?.location || location || 'here'}</span>.
-                        A [bracketed instruction] in your input sets this automatically.
-                    </p>
-                    <textarea
-                        value={draft}
-                        onChange={e => setDraft(e.target.value)}
-                        rows={4}
-                        placeholder="e.g. Full anatomical realism — what he does, what he says, how her body responds."
-                        className="w-full bg-black border border-gray-800 focus:border-red-900/60 text-gray-200 text-sm p-3 focus:outline-none resize-y"
-                    />
-                    <label className="flex items-center gap-2 text-[9px] text-gray-500 uppercase tracking-widest">
-                        <input type="checkbox" checked={keep} onChange={e => setKeep(e.target.checked)} className="accent-red-900" />
-                        Keep across scene changes
-                    </label>
-                    <div className="flex justify-end gap-2">
-                        <button type="button" onClick={clear} className="text-[9px] font-bold uppercase tracking-widest px-3 py-2 border border-gray-800 text-gray-500 hover:text-gray-200">Clear</button>
-                        <button type="button" onClick={save} className="text-[9px] font-bold uppercase tracking-widest px-4 py-2 border border-red-900/60 text-red-400 hover:bg-red-900 hover:text-white">Save</button>
+                // v1.48: same overlay pattern as MontageProposalModal — fixed,
+                // centred, padded, height-capped and scrollable — so it fits a
+                // portrait phone (was anchored to the button and ran off the
+                // left edge) and a landscape phone (was opening upward off the
+                // top of the screen).
+                <div
+                    className="fixed inset-0 z-[150] flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 animate-fade-in"
+                    onClick={() => setOpen(false)}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="Scene focus"
+                >
+                    <div
+                        className="w-full max-w-lg max-h-[90vh] overflow-y-auto bg-[#0a0a0a] border border-red-900/40 p-6 space-y-3 shadow-2xl rounded-sm"
+                        onClick={e => e.stopPropagation()}
+                    >
+                        <h3 className="text-sm font-bold uppercase tracking-[0.2em] text-red-400">Scene Focus</h3>
+                        <p className="text-[9px] text-gray-500 font-mono leading-relaxed">
+                            How this scene should be written. Sent every turn until the scene moves away from
+                            {' '}<span className="text-gray-300">{sceneFocus?.location || location || 'here'}</span>.
+                            A [bracketed instruction] in your input sets this automatically.
+                        </p>
+                        <textarea
+                            value={draft}
+                            onChange={e => setDraft(e.target.value)}
+                            rows={5}
+                            placeholder="e.g. Full anatomical realism — what he does, what he says, how her body responds."
+                            className="w-full bg-black border border-gray-800 focus:border-red-900/60 text-gray-200 text-sm p-3 focus:outline-none resize-y"
+                        />
+                        <label className="flex items-center gap-2 text-[9px] text-gray-500 uppercase tracking-widest">
+                            <input type="checkbox" checked={keep} onChange={e => setKeep(e.target.checked)} className="accent-red-900" />
+                            Keep across scene changes
+                        </label>
+                        <div className="flex justify-end gap-2">
+                            <button type="button" onClick={() => setOpen(false)} className="text-[9px] font-bold uppercase tracking-widest px-3 py-2 border border-gray-800 text-gray-500 hover:text-gray-200">Cancel</button>
+                            <button type="button" onClick={clear} className="text-[9px] font-bold uppercase tracking-widest px-3 py-2 border border-gray-800 text-gray-500 hover:text-gray-200">Clear</button>
+                            <button type="button" onClick={save} className="text-[9px] font-bold uppercase tracking-widest px-4 py-2 border border-red-900/60 text-red-400 hover:bg-red-900 hover:text-white">Save</button>
+                        </div>
                     </div>
                 </div>
             )}

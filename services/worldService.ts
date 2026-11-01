@@ -8,6 +8,7 @@ import type {
 import { GeminiService } from '../geminiService';
 import { WORLD_DECOMPOSITION_SCHEMA } from '../schemas/worldSchema';
 import { GEMINI_SAFETY_SETTINGS } from '../constants';
+import { attachNpcBodies } from '../utils/worldSeedBodies';
 
 /* ────────────────────────────────────────────────────────────────────────────
  * Constants
@@ -73,6 +74,7 @@ HEADER CONVENTION:
 - The source uses "=== Name ===" as a header for each entity. Every header MUST become an entry. Do not skip any.
 - Classify each "=== Name ===" section by the metadata fields in its body:
     • "Role:" / "Personality:" / "Goals:" → NPC
+    • Inside an NPC: a "Body:" block (Height / Weight / Build / Breasts / Penis / Vaginal Depth / Tightness / Virgin lines) and a "Race: ... | Gender: ..." line are physical data — keep them OUT of "personality"; append them verbatim to the END of that NPC's "description". Never turn them into lore or rules.
     • "Territory:" / "Influence:" / "Dispositions:" / "Leader:" → Faction
     • "Connections:" / "Population" / "Controlling Faction:" → Location
     • Explicit "Rule:" or mechanical "must / cannot / always" wording with no other typed fields → Rule
@@ -119,6 +121,7 @@ HEADER CONVENTION:
 - The source uses "=== Name ===" as a header. Every header that is a Location, Faction, or NPC MUST become an entry. Do not skip any.
 - Classify each "=== Name ===" section by its body fields:
     • "Role:" / "Personality:" / "Goals:" → NPC
+    • Inside an NPC: a "Body:" block (Height / Weight / Build / Breasts / Penis / Vaginal Depth / Tightness / Virgin lines) and a "Race: ... | Gender: ..." line are physical data — keep them OUT of "personality"; append them verbatim to the END of that NPC's "description". Never turn them into lore or rules.
     • "Territory:" / "Influence:" / "Dispositions:" / "Leader:" → Faction
     • "Connections:" / "Population" / "Controlling Faction:" → Location
     • Other headers → ignore in this pass (they are lore/rules, handled in Pass 2)
@@ -629,7 +632,13 @@ export class WorldService {
       });
 
       // Step 2: Validate and supplement if under-extracted
-      const finalResult = await this.validateAndSupplement(description, rawResult);
+      const supplemented = await this.validateAndSupplement(description, rawResult);
+
+      // Step 3 (v1.48): NPC Body blocks are read from the SOURCE by code, not
+      // trusted to the extractor — see utils/worldSeedBodies.
+      const { npcs: npcsWithBodies, attached } = attachNpcBodies(supplemented.npcs, description);
+      if (attached.length > 0) console.log(`[WorldService] Body blocks attached: ${attached.join(', ')}`);
+      const finalResult = { ...supplemented, npcs: npcsWithBodies };
 
       console.log('[WorldService] Final result:', {
         locations: finalResult.locations.length,
@@ -659,12 +668,17 @@ export class WorldService {
       const existingContext = JSON.stringify(existingData, null, 2);
       const prompt = buildExpandPrompt(existingContext, additionalDescription);
 
-      return await this.callStructured(
+      const expanded = await this.callStructured(
         prompt,
         SYSTEM_INSTRUCTION_EXPAND,
         0.5,
         EXPAND_MAX_OUTPUT_TOKENS
       );
+      // v1.48: new NPCs get their Body blocks from the added text; existing
+      // NPCs keep the bodies (and appearance) they already had — the expand
+      // pass returns fresh records that would otherwise drop them.
+      const { npcs } = attachNpcBodies(expanded.npcs, additionalDescription, existingData.npcs ?? []);
+      return { ...expanded, npcs };
     } catch (e) {
       console.error('[WorldService] expandWorld failed:', e);
       throw e;
