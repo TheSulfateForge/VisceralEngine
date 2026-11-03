@@ -17,7 +17,7 @@ describe('deriveTimePhase', () => {
   it('handles out-of-range / negative hours defensively', () => {
     expect(deriveTimePhase(24)).toBe('deep_night');
     expect(deriveTimePhase(-1)).toBe('night');
-    expect(deriveTimePhase(26)).toBe('dawn');
+    expect(deriveTimePhase(26)).toBe('deep_night');  // 26 wraps to 02:00
   });
 });
 
