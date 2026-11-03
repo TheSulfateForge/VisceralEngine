@@ -502,6 +502,22 @@ export const buildEntityContext = (
     return context;
 };
 
+/**
+ * v1.50: one line stating the exact clock and what it binds. Exported for tests.
+ */
+export const buildClockLine = (
+    time: { hour?: number; minute?: number; day?: number } | undefined,
+): string => {
+    const hour = time?.hour ?? 9;
+    const minute = time?.minute ?? 0;
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const nextHour = (hour + 1) % 24;
+    const untilNext = minute === 0 ? 60 : 60 - minute;
+    return `Clock: ${pad(hour)}:${pad(minute)}, Day ${time?.day ?? 1} — the next hour (${pad(nextHour)}:00) is ${untilNext} minute(s) away.\n`
+        + `Anything in the narrative that marks time — a bell or chime, the light, a character saying how long something has taken — must agree with this clock. `
+        + `Nothing strikes or announces an hour that has not arrived.`;
+};
+
 const buildBioStatus = (bio: BioMonitor | undefined, timeDisplay: string): string => {
     const safeBio = bio || {
         metabolism: { calories: 80, hydration: 80, stamina: 100, libido: 5 },
@@ -1154,6 +1170,12 @@ export const constructGeminiPrompt = async (
   const currentPhase = deriveTimePhase(gameWorld.time?.hour ?? 9);
   const seasonLabel = gameWorld.time?.season ?? '';
   const ambientCue = getAmbientCue(currentPhase);
+  // v1.50: the exact clock, in the atmosphere block. Until now the minute-level
+  // time reached the model only inside [BIOLOGICAL STATUS], which reads as a
+  // stats line; the atmosphere block said "morning" and nothing more. On the
+  // 2026-11-03 save (deepseek-v4.1-flash) an NPC said "I've watched you for an
+  // hour" twenty-one minutes into the scene.
+  const clockLine = buildClockLine(gameWorld.time);
 
   // 4. Build Instructions
   const bioStatus = buildBioStatus(character.bio, timeDisplay);
@@ -1339,6 +1361,7 @@ Mode: ${currentMode}
 Tension Level: ${tension}/100
 Time Phase: ${currentPhase}${seasonLabel ? ` (${seasonLabel})` : ''} — ${ambientCue}
 Set \`scene_time_phase\` to "${currentPhase}" unless your narrative explicitly advances the clock across a phase boundary.
+${clockLine}
 
 ${sanitise(bioStatus)}
 

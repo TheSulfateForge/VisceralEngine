@@ -32,6 +32,8 @@ import {
     detectPrivateKnowledgeLeak,
 } from '../utils/engine/privateKnowledge';
 import { checkVoiceLock, isFocalCharacter } from '../utils/engine/voiceLockCheck';
+import { checkKinkEvasion, buildKinkEvasionReminder } from '../utils/engine/kinkEvasionCheck';
+import { guardRecordDismissal, RECORD_IS_AUTHORITATIVE_DIRECTIVE } from '../utils/engine/oocDirectiveGuard';
 import { checkPlayerActionEngagement, buildPlayerActionReminder } from '../utils/engine/playerActionCheck';
 import { classifyRecordQuery, answerRecordQuery } from '../utils/engine/recordQuery';
 import { detectRecurringRhetoric } from '../utils/engine/npcRhetoric';
@@ -142,6 +144,9 @@ const STATIC_BEAT_THINKING_FLOOR = 3;
 // harmless.
 const MASK_RESAMPLE_COOLDOWN_TURNS = 5;
 const maskResampleLastTurn = new Map<string, number>();
+// v1.50: kink-evasion resample cooldown — same reasoning as the mask-mode one.
+const KINK_RESAMPLE_COOLDOWN_TURNS = 3;
+const kinkResampleLastTurn = new Map<string, number>();
 let staticBeatStreak = 0;
 let staticBeatLocation = '';
 let lastTurnRepeated = false;
@@ -429,6 +434,11 @@ export const useGeminiClient = () => {
 
           if (latestRequestId.current !== requestId) return;
 
+          // v1.50: a directive may not override an authored record unless the
+          // player explicitly asked to change it. See oocDirectiveGuard.ts.
+          const directiveGuard = guardRecordDismissal(ooc.directive, body);
+          const oocDirective = directiveGuard.directive;
+
           // Player canon. The turn number is the CURRENT turn — an OOC exchange
           // does not advance it, so the assertion is stamped to the turn it
           // actually clarifies.
@@ -447,7 +457,7 @@ export const useGeminiClient = () => {
           // replied promising a change, and then had no way to deliver one.
           const { directives, added: directiveAdded, replaced: directiveReplaced, evicted: directivesEvicted } = ingestOocDirective(
               state.gameWorld.oocDirectives,
-              ooc.directive,
+              oocDirective,
               turn,
               () => generateUUID(),
           );
@@ -466,7 +476,9 @@ export const useGeminiClient = () => {
           const replyMsg: ChatMessage = {
               id: generateMessageId(),
               role: Role.MODEL,
-              text: ooc.reply,
+              text: directiveGuard.blocked
+                  ? `${ooc.reply}\n\n[Engine: that would have told the narrator to disregard a written record. The record stays authoritative — the standing rule saved instead is: ${RECORD_IS_AUTHORITATIVE_DIRECTIVE} To actually change a record, say so explicitly or edit the world seed.]`
+                  : ooc.reply,
               timestamp: new Date().toISOString(),
               ooc: true,
           };
@@ -487,14 +499,19 @@ export const useGeminiClient = () => {
                       message: `[PLAYER CANON] REJECTED (outside the player's own character): "${f}"`,
                       type: 'warning' as const,
                   })),
-                  ...(ooc.directive ? [{
+                  ...(oocDirective ? [{
                       timestamp: new Date().toISOString(),
                       message: directiveReplaced
-                          ? `[OOC DIRECTIVE — v1.48] Same instruction as a standing one — replaced it in place (no new slot used). Was: "${directiveReplaced}" Now: "${ooc.directive}"`
+                          ? `[OOC DIRECTIVE — v1.48] Same instruction as a standing one — replaced it in place (no new slot used). Was: "${directiveReplaced}" Now: "${oocDirective}"`
                           : directiveAdded
-                          ? `[OOC DIRECTIVE — v1.35] Standing from turn ${turn}, now binding on every turn: ${ooc.directive}`
-                          : `[OOC DIRECTIVE] Already standing (duplicate), not re-added: ${ooc.directive}`,
+                          ? `[OOC DIRECTIVE — v1.35] Standing from turn ${turn}, now binding on every turn: ${oocDirective}`
+                          : `[OOC DIRECTIVE] Already standing (duplicate), not re-added: ${oocDirective}`,
                       type: 'info' as const,
+                  }] : []),
+                  ...(directiveGuard.blocked ? [{
+                      timestamp: new Date().toISOString(),
+                      message: `[OOC DIRECTIVE — v1.50] BLOCKED a directive that dismissed a written record (the player did not ask to change the record): "${directiveGuard.blocked}" — saved the record-is-authoritative rule instead.`,
+                      type: 'warning' as const,
                   }] : []),
                   // v1.48: eviction used to be silent.
                   ...(directivesEvicted ?? []).map(t => ({
@@ -1588,6 +1605,88 @@ turn is anything their Actual Core describes, you are writing the mask.`;
                     }
                 ]
             }));
+        }
+
+        // v1.50: KINK EVASION RESAMPLE.
+        //
+        // The player asked an NPC about desire and the NPC's part of the turn
+        // contains nothing from their own kink list — the 2026-11-03 Carissa
+        // save answered "what are your flavors" with a trade negotiation and a
+        // bribed Warden. Same gates as the mask-mode resample: one re-roll per
+        // turn, per-NPC cooldown. See utils/engine/kinkEvasionCheck.ts.
+        if (!resampledThisTurn) {
+            const sceneEntities = (preCallState.gameWorld.knownEntities ?? [])
+                .filter(e => !e.status || e.status === 'present' || e.status === 'nearby');
+            const kinkSkipped: string[] = [];
+            const kinkFindings = checkKinkEvasion(text, previousPlayerInput, response.narrative, sceneEntities)
+                .filter(f => {
+                    const last = kinkResampleLastTurn.get(f.name);
+                    if (last !== undefined && thisTurn - last < KINK_RESAMPLE_COOLDOWN_TURNS) {
+                        kinkSkipped.push(`${f.name} (resampled ${thisTurn - last} turn(s) ago)`);
+                        return false;
+                    }
+                    return true;
+                });
+            if (kinkSkipped.length > 0) {
+                setGameHistory(prev => ({
+                    ...prev,
+                    debugLog: [
+                        ...prev.debugLog,
+                        {
+                            timestamp: new Date().toISOString(),
+                            message: `[KINK LOCK] Evasion noted but NOT resampled — ${kinkSkipped.join('; ')}.`,
+                            type: 'info',
+                        }
+                    ]
+                }));
+            }
+            if (kinkFindings.length > 0) {
+                resampledThisTurn = true;
+                for (const f of kinkFindings) kinkResampleLastTurn.set(f.name, thisTurn);
+                setGameHistory(prev => ({
+                    ...prev,
+                    debugLog: [
+                        ...prev.debugLog,
+                        {
+                            timestamp: new Date().toISOString(),
+                            message: `[KINK LOCK] ${kinkFindings.map(f => f.detail).join(' ')} Resampling once.`,
+                            type: 'warning',
+                        }
+                    ]
+                }));
+
+                response = keepOnFailure(response, await service.sendMessage(
+                    fullSystemPrompt,
+                    turnHistory,
+                    preCallState.gameHistory.lastActiveSummary,
+                    preCallState.gameWorld.bannedNameMap ?? {},
+                    buildTrailer(buildKinkEvasionReminder(kinkFindings)),
+                    turnSchema,
+                    contextPrompt,
+                    staticContext,
+                    escalateThinking(turnThinking),
+                ));
+
+                if (latestRequestId.current !== requestId) {
+                    console.log("Discarding stale kink-lock resample", requestId);
+                    return;
+                }
+
+                const stillEvading = checkKinkEvasion(text, previousPlayerInput, response.narrative, sceneEntities);
+                setGameHistory(prev => ({
+                    ...prev,
+                    debugLog: [
+                        ...prev.debugLog,
+                        {
+                            timestamp: new Date().toISOString(),
+                            message: stillEvading.length > 0
+                                ? `[KINK LOCK] Resample still evaded (${stillEvading.map(f => f.name).join(', ')}) — accepting it.`
+                                : `[KINK LOCK] Resample answered from the kink list.`,
+                            type: stillEvading.length > 0 ? 'warning' : 'success',
+                        }
+                    ]
+                }));
+            }
         }
 
         // v1.37: invented-trigger check, on the same thought_process the drift

@@ -849,6 +849,19 @@ carry this exact form for that character:
      This turn those traits manifest as: [concrete action / word choice /
      subtext / register]."
 
+v1.50 — THE KINKS ARE PART OF THE RECORD. If the record has a "The Kinks"
+section and this turn touches sex, desire, a bed, or the terms of what the
+character wants from someone, the restatement adds a line quoting it:
+
+    "Kinks: [the acts named in the record, in its own words]."
+
+Those acts are what this character wants. When they talk about their
+appetites or act on them, it is those acts, in those plain words — not a
+negotiation, a political favour, or an "arrangement" standing in for them.
+An empty "Extreme:" means nothing is listed there; do not invent one. The
+engine checks the narrative against the list and re-rolls a turn that
+answers a question about desire with nothing from it.
+
 If — and ONLY if — the character's personality record contains an
 EXPLICIT trigger clause of the form "(surfaces when [condition])" (see
 §10 Conditional Personalities), the restatement must additionally specify:

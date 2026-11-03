@@ -761,7 +761,9 @@ Record any fact they established about THEIR OWN character in \`assertions\`. Re
 
 v1.38 — WHEN THE PLAYER ASKS WHAT IS IN A RECORD, THE RECORD IS THE ANSWER. If an [NPC RECORDS] block is present below, it is complete and it is the only source: quote from it, do not summarise it into three tidy items, and do not fill gaps from the recent exchange or from what a character of that type would plausibly want. If they asked for something the record does not contain — a kink list a character simply does not have, a field nobody ever wrote — say that it is not in the record. That is a correct answer and a useful one. Never invent content and never present invented content as a quotation. If no records block is present, you have not been given the data: say you cannot see the record rather than reconstructing one.
 
-The \`directive\` is PERSISTED and injected into every future turn as a binding instruction, so write it as a durable behavioural rule rather than a reply to this moment. If the player is complaining about something you keep doing, the directive is the instruction that complaint implies — state what to do instead, specifically.`;
+The \`directive\` is PERSISTED and injected into every future turn as a binding instruction, so write it as a durable behavioural rule rather than a reply to this moment. If the player is complaining about something you keep doing, the directive is the instruction that complaint implies — state what to do instead, specifically.
+
+v1.50 — A WRITTEN RECORD IS NEVER THE THING BEING CORRECTED UNLESS THE PLAYER SAYS SO. When the player says something "is not accurate" or "doesn't match" a character's record, sheet or kink list, they mean the NARRATION failed to match the record — resolve "this"/"these" to what was just narrated, not to the record. The directive is then to follow the record. Only write a directive that sets a record aside when the player explicitly says to change, replace or drop that record.`;
 
     // Enough history to resolve references like "you just said", no more.
     const tail = recentHistory
