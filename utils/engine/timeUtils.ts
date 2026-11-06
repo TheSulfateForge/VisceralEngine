@@ -239,6 +239,92 @@ export const trimHiddenRegistry = (registry: string): string => {
  * Also applies TIME_FLOOR_MINUTES (1) so non-sleep turns always advance
  * at least 1 minute — prevents time-frozen loops.
  */
+// ────────────────────────────────────────────────────────────────────────────
+// v1.51: TIME FLOOR FROM WHAT ACTUALLY HAPPENED.
+//
+// The model under-reports time_passed_minutes. In the 2026-11-06 saves the
+// clock moved 48 minutes across 21 turns that covered a tailor's fitting, a
+// walk home "taking the long route" past the river and the market (+1m), and a
+// full gift-planning session; reading a three-page letter aloud was +1m. No
+// clamp fired — the model asked for 1–4 minutes. The schema told it to "pick
+// the lowest" and default to 2.
+//
+// Two mechanical floors the narrative can't argue with:
+//   • Speech: words spoken aloud (quoted dialogue + italic text read out)
+//     take time at ~150 words per minute.
+//   • Travel: when the player actually changed location, the trip takes at
+//     least the model's own travel_time_minutes, and at least a district walk
+//     when the player's input describes going somewhere on foot/horse/coach.
+// The floor only RAISES the model's number; caps still apply afterwards.
+// ────────────────────────────────────────────────────────────────────────────
+
+export const SPOKEN_WORDS_PER_MINUTE = 150;
+export const TRAVEL_FLOOR_MINUTES = 15;
+export const LONG_ROUTE_FLOOR_MINUTES = 30;
+
+const QUOTED_RE = /["“]([^"“”]{1,4000})["”]/g;
+const ITALIC_RE = /(?:^|[^*])\*([^*\n]{3,4000})\*(?!\*)/g;
+
+const countWords = (s: string): number => (s.match(/[A-Za-z0-9'’-]+/g) ?? []).length;
+
+/** Words spoken aloud or read out in this narrative. */
+export const countSpokenWords = (narrative: string): number => {
+    let n = 0;
+    let m: RegExpExecArray | null;
+    QUOTED_RE.lastIndex = 0;
+    while ((m = QUOTED_RE.exec(narrative)) !== null) n += countWords(m[1]);
+    ITALIC_RE.lastIndex = 0;
+    while ((m = ITALIC_RE.exec(narrative)) !== null) n += countWords(m[1]);
+    return n;
+};
+
+const TRAVEL_INPUT_RE = /\b(?:walk|walks|walked|walking|ride|rides|riding|rode|drive|drives|travel|travels|travelling|traveling|head(?:s|ed|ing)?\s+(?:back|home|out|over|off|down|up|to|toward|towards|for)|go(?:es|ing)?\s+(?:back|home|out|over|to|toward|towards)|leave(?:s)?\s+for|set(?:s|ting)?\s+off|carriage|coach|cart)\b/i;
+const LONG_ROUTE_RE = /\b(?:long\s+(?:route|way)|taking\s+my\s+time|take\s+my\s+time|the\s+scenic|wander(?:s|ing)?|stroll(?:s|ing)?)\b/i;
+
+export interface TimeFloor {
+    floor: number;
+    reasons: string[];
+}
+
+export const estimateTimeFloor = (
+    narrative: string,
+    playerInput: string,
+    locationUpdate: { location_name?: string; traveled_from?: string; travel_time_minutes?: number } | undefined,
+    previousLocation: string,
+): TimeFloor => {
+    const reasons: string[] = [];
+    let floor = 0;
+
+    const spoken = countSpokenWords(narrative ?? '');
+    const speechMin = Math.floor(spoken / SPOKEN_WORDS_PER_MINUTE);
+    if (speechMin > 0) {
+        floor = speechMin;
+        reasons.push(`${spoken} words spoken/read aloud ≈ ${speechMin}m`);
+    }
+
+    const moved = !!locationUpdate?.location_name
+        && locationUpdate.location_name.trim() !== ''
+        && locationUpdate.location_name !== previousLocation;
+    if (moved) {
+        const declared = Math.max(0, locationUpdate?.travel_time_minutes ?? 0);
+        let travel = declared;
+        if (TRAVEL_INPUT_RE.test(playerInput ?? '')) {
+            const cue = LONG_ROUTE_RE.test(playerInput ?? '') ? LONG_ROUTE_FLOOR_MINUTES : TRAVEL_FLOOR_MINUTES;
+            travel = Math.max(travel, cue);
+        }
+        if (travel > 0) {
+            // Talk on the way happens during the trip, not after it.
+            const combined = Math.max(travel, speechMin);
+            if (combined > floor) {
+                floor = combined;
+                reasons.push(`travel ${previousLocation || '?'} → ${locationUpdate!.location_name} ≥ ${travel}m`);
+            }
+        }
+    }
+
+    return { floor, reasons };
+};
+
 export const calculateTimeDelta = (
     requestedMinutes: number | undefined,
     hasSleep: boolean,

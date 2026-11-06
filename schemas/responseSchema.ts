@@ -33,7 +33,7 @@ export const RESPONSE_SCHEMA: Schema = {
     },
     time_passed_minutes: {
         type: Type.INTEGER,
-        description: "Minutes elapsed in THIS scene beat ONLY. Do NOT 'catch up' or account for off-screen time. STRICT BRACKETS — pick the lowest that fits: Quick exchange (a few spoken sentences)=1-3. Short conversation (one topic discussed)=3-5. Extended dialogue scene (multiple topics, emotional shift)=5-10. Brief physical action (hug, hand something over, open a door)=1-2. Routine task (cooking, cleaning, getting dressed)=15-30. District travel on foot=30-60. Sleep=420-480 ONLY with sleep_hours set. SOCIAL MODE DEFAULT: If scene_mode is SOCIAL, default to 2 (not 15). The engine caps SOCIAL turns at 15m max. Combat round=1-5. If unsure, default LOW: 2 for dialogue, 15 for activity. Saying a single sentence is NOT 15 minutes."
+        description: "Minutes elapsed in THIS turn, counting EVERYTHING the narrative shows happening (v1.51). Do NOT add off-screen catch-up time. Add up the beat: spoken dialogue runs ~150 words per minute, so a long exchange of several speeches is 5-15, not 2; reading a letter aloud = 1-3 per page; a brief physical action (hug, hand something over, open a door) = 1-2; a routine task (dressing, a meal, a fitting) = 15-45; walking across a district = 15-30, and taking the long way, stopping to look or buy something = 30-60; a carriage across the city = 15-30. Sleep=420-480 ONLY with sleep_hours set. Combat round=1-5. The engine raises your number if the narrative contains more speech or travel than it covers, and caps SOCIAL turns at 15. Saying a single sentence is 1, not 15 — but a whole scene is never 1."
     },
     biological_inputs: {
         type: Type.OBJECT,

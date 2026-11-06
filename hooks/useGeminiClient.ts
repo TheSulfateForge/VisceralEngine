@@ -31,7 +31,7 @@ import {
     privateTermsForCharacter,
     detectPrivateKnowledgeLeak,
 } from '../utils/engine/privateKnowledge';
-import { checkVoiceLock, isFocalCharacter } from '../utils/engine/voiceLockCheck';
+import { checkVoiceLock, isFocalCharacter, playerSheetLines } from '../utils/engine/voiceLockCheck';
 import { checkKinkEvasion, buildKinkEvasionReminder } from '../utils/engine/kinkEvasionCheck';
 import { guardRecordDismissal, RECORD_IS_AUTHORITATIVE_DIRECTIVE } from '../utils/engine/oocDirectiveGuard';
 import { checkPlayerActionEngagement, buildPlayerActionReminder } from '../utils/engine/playerActionCheck';
@@ -588,12 +588,31 @@ export const useGeminiClient = () => {
         }
     }
 
-    setGameHistory(prev => ({
-        ...prev,
-        history: [...prev.history, userMsg],
-        isThinking: true,
-        debugLog: [...prev.debugLog, { timestamp: new Date().toISOString(), message: `Sending Request [${requestId}]`, type: 'info' }]
-    }));
+    // v1.51: if the previous player input never got a reply (the request
+    // failed or was abandoned and the player typed it again), drop the orphan.
+    // Otherwise the model sees two consecutive player moves — in the
+    // 2026-11-05/06 saves a typo'd input and its corrected re-send both
+    // stayed in history ("Irka"/"Iskra").
+    setGameHistory(prev => {
+        let lastNarrative = -1;
+        for (let i = prev.history.length - 1; i >= 0; i--) {
+            if (isNarrativeMessage(prev.history[i])) { lastNarrative = i; break; }
+        }
+        const orphan = lastNarrative >= 0 && prev.history[lastNarrative].role === Role.USER;
+        const base = orphan
+            ? prev.history.filter((_, i) => i !== lastNarrative)
+            : prev.history;
+        return {
+            ...prev,
+            history: [...base, userMsg],
+            isThinking: true,
+            debugLog: [
+                ...prev.debugLog,
+                ...(orphan ? [{ timestamp: new Date().toISOString(), message: `[INPUT — v1.51] Previous input had no reply; replaced it with this one.`, type: 'info' as const }] : []),
+                { timestamp: new Date().toISOString(), message: `Sending Request [${requestId}]`, type: 'info' as const },
+            ]
+        };
+    });
 
     try {
         const service = await getService();
@@ -1492,6 +1511,7 @@ export const useGeminiClient = () => {
         const allSurfaceOnly = checkVoiceLock(
             response.thought_process,
             (preCallState.gameWorld.knownEntities ?? []),
+            playerSheetLines(preCallState.character, (preCallState.gameWorld.playerCanon ?? []).map(c => c.fact)),
         ).filter(f => f.surfaceOnly);
 
         const skipped: string[] = [];
@@ -1591,6 +1611,7 @@ turn is anything their Actual Core describes, you are writing the mask.`;
             const after = checkVoiceLock(
                 response.thought_process,
                 (preCallState.gameWorld.knownEntities ?? []),
+                playerSheetLines(preCallState.character, (preCallState.gameWorld.playerCanon ?? []).map(c => c.fact)),
             ).filter(f => f.surfaceOnly);
             setGameHistory(prev => ({
                 ...prev,
@@ -1738,6 +1759,7 @@ turn is anything their Actual Core describes, you are writing the mask.`;
         const voiceLockFindings = checkVoiceLock(
             response.thought_process,
             (preCallState.gameWorld.knownEntities ?? []),
+            playerSheetLines(preCallState.character, (preCallState.gameWorld.playerCanon ?? []).map(c => c.fact)),
         );
         for (const f of voiceLockFindings) {
             setGameHistory(prev => ({
@@ -2276,8 +2298,11 @@ turn is anything their Actual Core describes, you are writing the mask.`;
                 { timestamp: new Date().toISOString(), message: `Response Received [${requestId}]`, type: 'success' },
                 // Review item 1: real token accounting from Gemini usageMetadata.
                 { timestamp: new Date().toISOString(), message: response.usageMetadata
-                    ? `[TOKENS] prompt=${response.usageMetadata.promptTokenCount} (cached ${response.usageMetadata.cachedContentTokenCount}) · output=${response.usageMetadata.candidatesTokenCount} · thoughts=${response.usageMetadata.thoughtsTokenCount} · total=${response.usageMetadata.totalTokenCount}`
-                    : `[TOKENS] usageMetadata unavailable for this turn`, type: 'info' },
+                    // v1.51: name the provider/model actually called — world.currentModel
+                    // keeps the Gemini default when OpenRouter is selected, so saves
+                    // alone could not tell which model wrote a turn.
+                    ? `[TOKENS] ${service.provider}/${service.modelName} · prompt=${response.usageMetadata.promptTokenCount} (cached ${response.usageMetadata.cachedContentTokenCount}) · output=${response.usageMetadata.candidatesTokenCount} · thoughts=${response.usageMetadata.thoughtsTokenCount} · total=${response.usageMetadata.totalTokenCount}`
+                    : `[TOKENS] ${service.provider}/${service.modelName} · usageMetadata unavailable for this turn`, type: 'info' },
                 { timestamp: new Date().toISOString(), message: `[RAG] Lore: ${ragDebug.filteredLore}/${ragDebug.totalLore} | Entities: ${ragDebug.filteredEntities}/${ragDebug.totalEntities} | Tokens: [${ragDebug.queryTokens.slice(0, 10).join(', ')}]`, type: 'info' },
                 // v1.26: per-block char counts — the token-diet instrument.
                 { timestamp: new Date().toISOString(), message: `[PROMPT BLOCKS] ${Object.entries(blockSizes).map(([k, v]) => `${k}=${v}c`).join(' ')} | thinking=${turnThinking}`, type: 'info' },

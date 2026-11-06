@@ -502,43 +502,20 @@ export const entityLifecycleStep: PipelineStep = {
                 updatedKnownEntities,
                 r.world_tick.npc_actions,
                 r.hidden_update ?? '',
-                ctx.debugLogs
+                ctx.debugLogs,
+                ctx.previousCharacter?.name
             );
         }
 
-        // v1.14: Entity Status Lifecycle
-        let newPlayerLocation = ctx.previousWorld.location ?? '';
-        updatedKnownEntities = updateEntityPresence(
-            updatedKnownEntities,
-            r.narrative,
-            r.world_tick?.npc_actions ?? [],
-            r.npc_interaction,
-            ctx.currentTurn,
-            newPlayerLocation,
-            ctx.debugLogs
-        );
-
-        updatedKnownEntities = applyStatusTransitions(
-            updatedKnownEntities,
-            ctx.currentTurn,
-            newPlayerLocation,
-            ctx.previousWorld.location ?? '',
-            ctx.previousWorld.emergingThreats ?? [],
-            ctx.debugLogs
-        );
-
-        updatedKnownEntities = detectEntityDeaths(
-            updatedKnownEntities,
-            r.known_entity_updates,
-            r.narrative,
-            ctx.debugLogs
-        );
-
-        updatedKnownEntities = detectLoreDeaths(
-            updatedKnownEntities,
-            ctx.previousWorld.lore ?? [],
-            ctx.debugLogs
-        );
+        // v1.51: Resolve where the PLAYER is this turn BEFORE presence and
+        // status transitions run. Previously both used last turn's location,
+        // so an NPC acting this turn was pinned to the room the player had
+        // just left, and applyStatusTransitions never saw the player move
+        // (it compared the old location to itself). Companions who walk with
+        // the player are on-screen actors and are carried to the new place by
+        // updateEntityPresence; everyone else is left behind as 'nearby'.
+        const previousPlayerLocation = ctx.previousWorld.location ?? '';
+        let newPlayerLocation = previousPlayerLocation;
 
         // v1.14: Location Proximity Graph
         let updatedLocationGraph = ctx.previousWorld.locationGraph ?? {
@@ -563,6 +540,40 @@ export const entityLifecycleStep: PipelineStep = {
                 newPlayerLocation = inferred;
             }
         }
+
+        // v1.14: Entity Status Lifecycle
+        updatedKnownEntities = updateEntityPresence(
+            updatedKnownEntities,
+            r.narrative,
+            r.world_tick?.npc_actions ?? [],
+            r.npc_interaction,
+            ctx.currentTurn,
+            newPlayerLocation,
+            ctx.debugLogs,
+            previousPlayerLocation
+        );
+
+        updatedKnownEntities = applyStatusTransitions(
+            updatedKnownEntities,
+            ctx.currentTurn,
+            newPlayerLocation,
+            previousPlayerLocation,
+            ctx.previousWorld.emergingThreats ?? [],
+            ctx.debugLogs
+        );
+
+        updatedKnownEntities = detectEntityDeaths(
+            updatedKnownEntities,
+            r.known_entity_updates,
+            r.narrative,
+            ctx.debugLogs
+        );
+
+        updatedKnownEntities = detectLoreDeaths(
+            updatedKnownEntities,
+            ctx.previousWorld.lore ?? [],
+            ctx.debugLogs
+        );
 
         // -------------------------------------------------------------------
         // v1.29: PLAYER CORRECTIONS BECOME STATE.

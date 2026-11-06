@@ -511,6 +511,17 @@ export class GeminiClient {
         ...(thinkingConfig ? { thinkingConfig } : {}),
     };
 
+    // v1.51: light repetition penalties on the narrative call when routed
+    // through OpenRouter (DeepSeek). The 2026-11-06 saves showed the same
+    // gesture and phrase ("a quarter turn", "the whole of it") recurring in
+    // nearly every turn. Kept small because JSON field names legitimately
+    // repeat inside one response. Providers that don't support a parameter
+    // ignore it (no require_parameters is sent).
+    if (this.provider === 'openrouter') {
+        chatConfig.frequencyPenalty = 0.1;
+        chatConfig.presencePenalty = 0.1;
+    }
+
     // v1.24: Any leftover dynamic remainder in the systemPrompt (legacy
     // callers that still concatenate) is folded into the per-turn dynamic
     // context rather than injected as a top-of-history preamble. A preamble

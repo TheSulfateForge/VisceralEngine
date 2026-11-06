@@ -392,6 +392,8 @@ export class OpenRouterGenAI {
         };
         if (typeof config.temperature === 'number') body.temperature = config.temperature;
         if (typeof config.topP === 'number') body.top_p = config.topP;
+        if (typeof config.frequencyPenalty === 'number') body.frequency_penalty = config.frequencyPenalty;   // v1.51
+        if (typeof config.presencePenalty === 'number') body.presence_penalty = config.presencePenalty;      // v1.51
         if (typeof config.maxOutputTokens === 'number') body.max_tokens = config.maxOutputTokens;
         if (responseFormat) body.response_format = responseFormat;
         if (stream) body.stream_options = { include_usage: true };

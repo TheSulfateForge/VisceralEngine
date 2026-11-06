@@ -46,6 +46,7 @@ import {
     buildSinceLastTurnBlock,
 } from './engine/sceneContinuity';
 import { deriveTimePhase, getAmbientCue } from './engine/timeUtils';
+import { findOverusedPhrases, buildOverusedPhrasesBlock } from './engine/ticTracker';
 import {
     beginPromptProfile,
     endPromptProfile,
@@ -1299,6 +1300,20 @@ This world is fundamentally: ${gameWorld.worldTags.join(', ')}.
           .map(e => e.fact)
       : [];
   const sinceLastTurnBlock = buildSinceLastTurnBlock(digest, gameWorld, character, canonFromLastTurn);
+  // v1.51: recurring phrases/gestures across the last 10 narrative turns.
+  // Engine-side, no model call. Names are excluded (they recur legitimately).
+  const TIC_WINDOW = 10;
+  const recentNarratives = gameHistory.history
+      .filter(m => m.role === Role.MODEL && isNarrativeMessage(m))
+      .slice(-TIC_WINDOW)
+      .map(m => m.text ?? '');
+  const overusedBlock = buildOverusedPhrasesBlock(
+      findOverusedPhrases(
+          recentNarratives,
+          [character.name, ...(gameWorld.knownEntities ?? []).map(e => e.name)],
+      ),
+      recentNarratives.length,
+  );
   // v1.45: the ledger is rendered against THIS turn's player action so a beat
   // the player is playing right now is never listed as covered ground.
   const sceneLedgerBlock = buildSceneLedgerBlock(gameWorld.sceneLedger, userInput);
@@ -1346,6 +1361,7 @@ This world is fundamentally: ${gameWorld.worldTags.join(', ')}.
 ${summaryBlock}
 ${sanitise(situationRecap)}
 ${sanitise(sinceLastTurnBlock ? `\n${sinceLastTurnBlock}\n` : '')}
+${sanitise(overusedBlock ? `\n${overusedBlock}\n` : '')}
 ${sanitise(sceneLedgerBlock ? `\n${sceneLedgerBlock}\n` : '')}
 ${sanitise(playerCanonBlock ? `\n${playerCanonBlock}\n` : '')}
 ${sanitise(dreamSeed ? `\n${dreamSeed}\n` : '')}
@@ -1425,6 +1441,7 @@ ${sanitise(conditionLock ? `\n${conditionLock}\n` : '')}
       // "nothing changed" text several turns running, the scene has stalled and
       // repetition is imminent.
       delta: sinceLastTurnBlock.length,
+      overused: overusedBlock.length,       // v1.51
       ledger: sceneLedgerBlock.length,
       canon: playerCanonBlock.length,
       directives: oocDirectivesBlock.length,  // v1.35

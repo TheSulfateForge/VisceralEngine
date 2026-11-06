@@ -912,6 +912,20 @@ export const buildSinceLastTurnBlock = (
 
     const minutesDelta = (world.time?.totalMinutes ?? 0) - previous.totalMinutes;
     if (minutesDelta !== 0) lines.push(`Clock: ${minutesToClause(minutesDelta)} → ${world.time?.display ?? ''}`.trim());
+    // v1.51: OFF-SCREEN BUDGET. world_tick runs once per TURN but the clock
+    // moves by minutes; in the 2026-11-06 saves a 1–4 minute turn routinely
+    // carried an off-screen runner across a mile and back, a 90-mile letter
+    // sent AND answered, and a tailor's whole commission. State the budget so
+    // off-screen progress is sized to the clock, not to the turn.
+    if (minutesDelta > 0 && minutesDelta < 180) {
+        lines.push(
+            `Off-screen pace: the last turn covered only ${minutesToClause(minutesDelta).replace('+', '')} of game time, and this turn's world_tick covers only this turn's time_passed_minutes. ` +
+            `Off-screen NPCs can do only that much: continue an action already under way rather than finish new ones; ` +
+            `a person, runner or letter covers about 3 mi per hour on foot (6–8 mi/h mounted) and cannot arrive, be read and be answered faster than that; ` +
+            `nobody can know of the player's plans unless they were there or a messenger has had time to reach them; ` +
+            `light and weather do not visibly change in under ~30 minutes.`
+        );
+    }
 
     const loc = world.location ?? '';
     if (loc !== previous.location) lines.push(`Location: ${previous.location || 'unknown'} → ${loc || 'unknown'}`);
@@ -943,8 +957,9 @@ NOTHING IN THE WORLD STATE CHANGED. Same place, same clock, same people, same
 stakes. You are not being asked to re-establish the situation — the player can
 still read your last message. Do not restate it, re-describe the room, or
 re-stage the beat you just wrote. Something must be different by the end of
-this turn: someone acts, someone arrives or leaves, a fact is revealed, or a
-choice closes.`;
+this turn: someone already in the scene acts, a fact is revealed, or a
+choice closes. (v1.51: do not bring a new person in just to make something
+change — an arrival needs travel time and a reason.)`;
     }
 
     return `[SINCE LAST TURN]\n${lines.map(l => `- ${l}`).join('\n')}`;

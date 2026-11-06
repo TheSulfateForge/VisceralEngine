@@ -194,14 +194,64 @@ export interface VoiceLockFinding {
  * archetype word from the voice lock's own forbidden list is ungrounded unless
  * the record genuinely uses it.
  */
+/**
+ * v1.51: What the PLAYER'S OWN SHEET says about this NPC.
+ *
+ * The 2026-11-06 saves flagged Iskra Renne's restatement — "steward",
+ * "friend", "frequent lover" — as having "no basis in the record" on turn
+ * after turn, and armed the voice lock against it. Those words come straight
+ * from the player's character sheet ("Iskra Renne - House Steward, friend,
+ * and frequent romantic sexual partner"); only the NPC's own personality
+ * field was being read. The lock was pushing the model AWAY from player
+ * canon. Sheet lines that name the NPC (relationships, backstory sentences,
+ * player canon facts) now count as record for grounding traits. They do not
+ * count toward the Actual Core layer check — that stays about the NPC record.
+ */
+export const playerSheetLinesAbout = (entityName: string, sheetLines: string[]): string[] => {
+    const tokens = entityName
+        .replace(/\([^)]*\)/g, '')
+        .toLowerCase()
+        .split(/\s+/)
+        .filter(t => t.length >= 4);
+    if (tokens.length === 0) return [];
+    return sheetLines.filter(line => {
+        const l = (line ?? '').toLowerCase();
+        return tokens.some(t => new RegExp(`\\b${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(l));
+    });
+};
+
+/** v1.51: flatten a character sheet into lines the voice lock can search. */
+export const playerSheetLines = (character: {
+    relationships?: string[];
+    backstory?: string;
+    goals?: string[];
+} | undefined, canonFacts: string[] = []): string[] => {
+    if (!character) return canonFacts;
+    const backstorySentences = (character.backstory ?? '').split(/(?<=[.!?])\s+/);
+    return [
+        ...(character.relationships ?? []),
+        ...backstorySentences,
+        ...(character.goals ?? []),
+        ...canonFacts,
+    ].filter(l => typeof l === 'string' && l.trim().length > 0);
+};
+
 export const checkRestatement = (
     restatement: Restatement,
     entity: KnownEntity,
+    sheetLines: string[] = [],
 ): VoiceLockFinding | null => {
     const record = (entity.personality ?? '').trim();
     if (!record) return null;
 
-    const recordWords = contentWords(record);
+    // Grounding text = the NPC's personality + role + what the player's own
+    // sheet says about them (v1.51).
+    const groundingText = [
+        record,
+        entity.role ?? '',
+        ...playerSheetLinesAbout(entity.name ?? '', sheetLines),
+    ].join('\n');
+    const recordWords = contentWords(groundingText);
     const recordStems = new Set(recordWords.map(stem));
     const ungrounded: string[] = [];
     for (const trait of restatement.traits) {
@@ -262,6 +312,7 @@ export const checkRestatement = (
 export const checkVoiceLock = (
     thoughtProcess: string | undefined | null,
     entities: KnownEntity[],
+    sheetLines: string[] = [],     // v1.51 — see playerSheetLinesAbout
 ): VoiceLockFinding[] => {
     const restatements = parseRestatements(thoughtProcess);
     if (restatements.length === 0) return [];
@@ -277,7 +328,7 @@ export const checkVoiceLock = (
                 return parts.includes(wanted) || wanted.split(/\s+/).every(w => parts.includes(w));
             });
         if (!entity) continue;
-        const finding = checkRestatement(r, entity);
+        const finding = checkRestatement(r, entity, sheetLines);
         if (finding) findings.push(finding);
     }
     return findings;

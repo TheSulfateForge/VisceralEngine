@@ -41,9 +41,65 @@ export const nameMentionIndex = (textLower: string, name: string): number => {
 export const nameMentionedIn = (textLower: string, name: string): boolean =>
     nameMentionIndex(textLower, name) >= 0;
 
+// ────────────────────────────────────────────────────────────────────────────
+// v1.51: OFF-SCREEN ACTORS ARE NOT IN THE ROOM.
+//
+// world_tick.npc_actions is mandatory every turn and most entries are
+// off-screen ("At the Rivergate warehouse, Cyran drafts a note"). Before
+// v1.51 ANY npc_action promoted its NPC to status 'present' AT THE PLAYER'S
+// LOCATION. Reviewed saves (2026-11-06): Vesna Kamenova, acting ~90 mi away
+// at her Hold, was 'present' in the player's Great Hall; Clara Lorrimer stayed
+// 'present' after walking home; Iskra's off-screen ledger work put her at the
+// tailor's, and the model squared that with "Iskra sent word you'd be coming."
+// The prompt lists 'present' NPCs as being in the scene, so the model wrote
+// them arriving instantly.
+//
+// Now only on-screen participation (a player_visible action that isn't
+// tagged as remote, or speaking in npc_interaction) places an NPC with the
+// player. Off-screen actions keep the NPC warm but put a present NPC out of
+// sight ('nearby'). A visible departure ("left the townhouse") takes the NPC
+// out of the scene instead of pinning them in it.
+// ────────────────────────────────────────────────────────────────────────────
+
+/** Distance annotations the model attaches to off-screen actions:
+ *  "(~1 mi from the Great Hall)", "(~90 mi)", "(~half mile)", "(~20 min from …)". */
+const REMOTE_ANNOTATION_RE = /\(\s*~?\s*(?:\d+(?:\.\d+)?|half|quarter|a)\s*(?:-?\s*)(?:mi|mile|miles|km|kilometres?|kilometers?|min|minutes?|hours?|hrs?|days?|leagues?)\b/i;
+
+/** Leading locative: "At the Rivergate warehouse, …" / "In Kamenova Hold …". */
+const LEADING_LOCATIVE_RE = /^\s*(?:at|in|inside|outside|near|from)\s+(?:the\s+)?([A-Z][\w'’-]*(?:\s+(?:(?:of|the|de|du|on)\s+)*[A-Z][\w'’-]*)*)/i;
+
+/** The NPC leaves the player's scene this turn. */
+const DEPARTURE_RE = /\b(?:left|leaves|leaving|departed|departs|departing|walked\s+(?:back|away|out|off|home)|walks\s+(?:back|away|out|off|home)|went\s+(?:out|back|home|away)|goes\s+(?:out|back|home|away)|rode\s+(?:out|off|away|back|for)|rides\s+(?:out|off|away|back|for)|headed\s+(?:out|back|home)|heads\s+(?:out|back|home)|set\s+off|sets\s+off|took\s+(?:his|her|their)\s+leave|takes\s+(?:his|her|their)\s+leave|saw\s+(?:himself|herself|themselves)\s+out|slipped\s+out)\b/i;
+
+const placeTokens = (s: string): string[] =>
+    s.toLowerCase()
+        .replace(/[^a-z0-9\s'-]/g, ' ')
+        .split(/\s+/)
+        .filter(t => t.length >= 4 && !['the', 'with', 'from', 'near'].includes(t));
+
+/** True when a world_tick action describes the NPC somewhere other than the
+ *  player's location — by a distance annotation, or by a leading "At X" whose
+ *  place shares no significant word with the player's location. */
+export const isRemoteAction = (actionText: string, playerLocation: string): boolean => {
+    if (REMOTE_ANNOTATION_RE.test(actionText)) return true;
+    const lead = LEADING_LOCATIVE_RE.exec(actionText);
+    if (lead && lead[1] && /^[A-Z]/.test(lead[1])) {
+        const placeT = placeTokens(lead[1]);
+        const playerT = new Set(placeTokens(playerLocation));
+        if (placeT.length > 0 && !placeT.some(t => playerT.has(t))) return true;
+    }
+    return false;
+};
+
+export const isDepartureAction = (actionText: string): boolean => DEPARTURE_RE.test(actionText);
+
 /** Called every turn after entity updates are merged. Updates lastSeenTurn
  *  for entities referenced in this turn's narrative, npc_actions, or
- *  npc_interaction. Returns the updated entity array. */
+ *  npc_interaction. Returns the updated entity array.
+ *
+ *  `previousPlayerLocation` (v1.51): when the player changed location this
+ *  turn, a bare narrative mention no longer carries a 'present' NPC along —
+ *  only on-screen participation does. */
 export const updateEntityPresence = (
     entities: KnownEntity[],
     narrative: string,
@@ -51,25 +107,51 @@ export const updateEntityPresence = (
     npcInteraction: NPCInteraction | undefined,
     currentTurn: number,
     playerLocation: string,
-    debugLogs: DebugLogEntry[]
+    debugLogs: DebugLogEntry[],
+    previousPlayerLocation?: string
 ): KnownEntity[] => {
     const narrativeLower = narrative.toLowerCase();
+    const playerMoved =
+        previousPlayerLocation !== undefined &&
+        playerLocation !== '' &&
+        previousPlayerLocation !== playerLocation;
 
     return entities.map(entity => {
         if (entity.status === 'dead' || entity.status === 'retired') return entity;
 
-        // v1.27: ACTIVE participation (acted or spoke) vs mere MENTION.
-        // Acting/speaking promotes to present at the player's location, as
-        // before. A narrative mention alone refreshes lastSeenTurn — halting
-        // decay — but does NOT teleport a distant/missing NPC to the player
-        // ("she thought of Halric" must not relocate Halric). Token-aware
-        // matching (v1.27) means first-name references now count as seen.
-        const activeThisTurn =
-            npcActions.some(a => nameMatch(a.npc_name, entity.name)) ||
-            (!!npcInteraction && nameMatch(npcInteraction.speaker, entity.name));
-        const mentionedThisTurn = activeThisTurn || nameMentionedIn(narrativeLower, entity.name);
+        const myActions = npcActions.filter(a => nameMatch(a.npc_name, entity.name));
+        // v1.51: an action counts as on-screen only if the model marked it
+        // player_visible AND did not place it somewhere else.
+        const onScreenActions = myActions.filter(
+            a => a.player_visible !== false && !isRemoteAction(a.action ?? '', playerLocation)
+        );
+        const offScreenActions = myActions.filter(a => !onScreenActions.includes(a));
+        const spoke = !!npcInteraction && nameMatch(npcInteraction.speaker, entity.name);
+        const departing = onScreenActions.some(a => isDepartureAction(a.action ?? ''));
+        const onScreen = (onScreenActions.length > 0 || spoke) && !departing;
+        const mentionedThisTurn =
+            myActions.length > 0 || spoke || nameMentionedIn(narrativeLower, entity.name);
 
-        if (activeThisTurn || (mentionedThisTurn && (!entity.status || entity.status === 'present' || entity.status === 'nearby'))) {
+        // 1. Left the scene on screen → out of the room, still warm.
+        if (departing && !spoke) {
+            if (entity.status === 'present' || !entity.status) {
+                debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    type: 'info',
+                    message: `[PRESENCE — v1.51] ${entity.name} left the scene → nearby (no longer in the room).`
+                });
+            }
+            return {
+                ...entity,
+                lastSeenTurn: currentTurn,
+                status: 'nearby' as const,
+                location: entity.location === playerLocation ? `left ${playerLocation}` : entity.location,
+                statusChangedTurn: entity.status !== 'nearby' ? currentTurn : entity.statusChangedTurn
+            };
+        }
+
+        // 2. On screen (acted visibly here, or spoke) → present with the player.
+        if (onScreen) {
             return {
                 ...entity,
                 lastSeenTurn: currentTurn,
@@ -79,8 +161,39 @@ export const updateEntityPresence = (
             };
         }
 
+        // 3. Acted off screen only → keep warm; if the registry had them in the
+        //    room, the model has now put them elsewhere: out of sight.
+        if (offScreenActions.length > 0) {
+            if (entity.status === 'present' || !entity.status) {
+                debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    type: 'info',
+                    message: `[PRESENCE — v1.51] ${entity.name} acted off screen ("${(offScreenActions[0].action ?? '').slice(0, 60)}") → nearby, not placed with the player.`
+                });
+                return {
+                    ...entity,
+                    lastSeenTurn: currentTurn,
+                    status: 'nearby' as const,
+                    location: entity.location === playerLocation ? '' : entity.location,
+                    statusChangedTurn: currentTurn
+                };
+            }
+            return { ...entity, lastSeenTurn: currentTurn };
+        }
+
+        // 4. Mentioned only. A present NPC stays present while the player
+        //    stays put; if the player moved, a mention doesn't carry them.
+        //    Nearby/distant/missing NPCs are never promoted by a mention
+        //    ("she thought of Halric" must not relocate Halric — v1.27).
         if (mentionedThisTurn) {
-            // Distant/missing but referenced — keep them warm, keep them put.
+            if ((entity.status === 'present' || !entity.status) && !playerMoved) {
+                return {
+                    ...entity,
+                    lastSeenTurn: currentTurn,
+                    status: 'present' as const,
+                    location: playerLocation || entity.location,
+                };
+            }
             return { ...entity, lastSeenTurn: currentTurn };
         }
 

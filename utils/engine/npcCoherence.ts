@@ -902,20 +902,84 @@ export const validateNpcEntityRegistration = (
  * that entity's location in knownEntities. This prevents stale location data
  * where the registry says an entity is in one place but hidden_update shows
  * them elsewhere.
+ *
+ * v1.51: The old patterns had no word boundaries and ran anywhere in the
+ * sentence, so "at" matched inside "th-AT" and topics read as places. Saved
+ * locations in the 2026-11-06 saves included "Duke has accepted",
+ * "Ryan handling the lamps without telling the steward" and
+ * "Greenglass Marches and her own decision not". Now a location is taken
+ * only from (a) a LEADING locative ("At the Rivergate warehouse, …") or
+ * (b) the destination of a MOVEMENT verb ("walked back toward the Academy"),
+ * and the captured text must be a run of capitalised words that is not a
+ * person or title.
  */
+const PLACE = String.raw`([A-Z][\w'’-]*(?:\s+(?:(?:of|the|de|du|on)\s+)*[A-Z][\w'’-]*)*)`;
+const LEADING_LOCATION_RE = new RegExp(String.raw`^\s*(?:[Aa]t|[Ii]n|[Ii]nside|[Oo]utside|[Nn]ear)\s+(?:the\s+)?` + PLACE);
+const MOVEMENT_VERB_RE = /\b(?:arriv(?:es|ed|ing|e)|reach(?:es|ed|ing)?|enter(?:s|ed|ing)?|head(?:s|ed|ing)?|return(?:s|ed|ing)?|walk(?:s|ed|ing)?|r(?:o|i)de(?:s)?|riding|went|goes|going|travel(?:s|led|ed|ling|ing)?|mov(?:es|ed|ing)|cross(?:es|ed|ing)?|hurr(?:ies|ied|ying)|ran|runs|set(?:s)?\s+off|left)\b/i;
+const DESTINATION_RE = new RegExp(String.raw`\b(?:to|toward|towards|into|at|for|reaches|reached|enters|entered)\s+(?:the\s+)?` + PLACE, 'g');
+
+/** Leading words that mark a person or rank, never a place. */
+const NOT_A_PLACE_FIRST_WORDS = new Set([
+    'duke', 'duchess', 'lord', 'lady', 'king', 'queen', 'prince', 'princess', 'sir', 'dame',
+    'captain', 'steward', 'master', 'mistress', 'father', 'mother', 'brother', 'sister',
+    'his', 'her', 'their', 'your', 'my', 'he', 'she', 'they', 'it',
+]);
+
+const isPlausiblePlace = (candidate: string, entities: KnownEntity[], playerName?: string): boolean => {
+    const c = candidate.trim();
+    if (c.length < 4 || c.length > 60) return false;
+    const first = c.split(/\s+/)[0].toLowerCase();
+    if (NOT_A_PLACE_FIRST_WORDS.has(first)) return false;
+    const cl = c.toLowerCase();
+    if (playerName) {
+        // Full name or first name only — a surname is often also a house or
+        // place name ("Westcross Townhouse").
+        const full = playerName.toLowerCase().trim();
+        const firstName = full.split(/\s+/)[0];
+        if (cl === full || cl.startsWith(full) || (firstName.length >= 3 && (cl === firstName || cl.startsWith(firstName + ' ')))) return false;
+    }
+    // A capitalised run that IS a known person's name is not a place.
+    for (const e of entities) {
+        const n = e.name.split('(')[0].trim().toLowerCase();
+        if (!n) continue;
+        if (cl === n || n.startsWith(cl + ' ') || cl.startsWith(n)) return false;
+        const firstName = n.split(/\s+/)[0];
+        if (firstName.length >= 4 && (cl === firstName || cl.startsWith(firstName + ' '))) return false;
+    }
+    return true;
+};
+
+/** v1.51: extract the location an NPC action places its actor in, or null. */
+export const extractActionLocation = (
+    actionText: string,
+    entities: KnownEntity[] = [],
+    playerName?: string
+): string | null => {
+    const lead = LEADING_LOCATION_RE.exec(actionText);
+    if (lead && lead[1] && isPlausiblePlace(lead[1], entities, playerName)) return lead[1].trim();
+
+    const verb = MOVEMENT_VERB_RE.exec(actionText);
+    if (!verb) return null;
+    // Destination = the LAST place after the movement verb ("walked from the
+    // Academy to the Westcross Townhouse" → Westcross Townhouse).
+    const tail = actionText.slice(verb.index);
+    let dest: string | null = null;
+    DESTINATION_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = DESTINATION_RE.exec(tail)) !== null) {
+        if (m[1] && isPlausiblePlace(m[1], entities, playerName)) dest = m[1].trim();
+    }
+    return dest;
+};
+
 export const syncEntityLocationsFromWorldTick = (
     knownEntities: KnownEntity[],
     npcActions: WorldTickAction[],
     hiddenUpdate: string,
-    debugLogs: DebugLogEntry[]
+    debugLogs: DebugLogEntry[],
+    playerName?: string
 ): KnownEntity[] => {
     const updated = [...knownEntities];
-
-    // Location extraction patterns from NPC actions
-    const LOCATION_PATTERNS = [
-        /(?:at|in|near|outside|inside|heading to|arrives? at|reaches?|enters?)\s+(?:the\s+)?([A-Z][a-zA-Z\s'-]+?)(?:\.|,|$|to\s)/,
-        /(?:sweeps?|searches?|secures?|patrols?)\s+(?:the\s+)?([A-Z][a-zA-Z\s'-]+?)(?:\.|,|$)/,
-    ];
 
     for (const action of npcActions) {
         // Find the matching entity
@@ -927,25 +991,18 @@ export const syncEntityLocationsFromWorldTick = (
 
         if (entityIdx === -1) continue;
 
-        // Try to extract a location from the action text
-        for (const pattern of LOCATION_PATTERNS) {
-            const match = pattern.exec(action.action);
-            if (match && match[1]) {
-                const newLocation = match[1].trim();
-                if (newLocation.length >= 4 && newLocation.length <= 60) {
-                    const oldLocation = updated[entityIdx].location;
-                    if (oldLocation !== newLocation) {
-                        updated[entityIdx] = { ...updated[entityIdx], location: newLocation };
-                        debugLogs.push({
-                            timestamp: new Date().toISOString(),
-                            message: `[ENTITY LOCATION SYNC — v1.12] ${updated[entityIdx].name}: ` +
-                                `"${oldLocation}" → "${newLocation}" (from world_tick action)`,
-                            type: 'info'
-                        });
-                    }
-                    break;
-                }
-            }
+        const newLocation = extractActionLocation(action.action ?? '', updated, playerName);
+        if (!newLocation) continue;
+
+        const oldLocation = updated[entityIdx].location;
+        if (oldLocation !== newLocation) {
+            updated[entityIdx] = { ...updated[entityIdx], location: newLocation };
+            debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[ENTITY LOCATION SYNC — v1.51] ${updated[entityIdx].name}: ` +
+                    `"${oldLocation}" → "${newLocation}" (from world_tick action)`,
+                type: 'info'
+            });
         }
     }
 

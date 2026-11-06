@@ -1,5 +1,5 @@
 import type { PipelineStep, TurnContext } from '../types';
-import { calculateTimeDelta, updateTime, deriveTimePhase } from '../../engine';
+import { calculateTimeDelta, updateTime, deriveTimePhase, estimateTimeFloor } from '../../engine';
 
 /**
  * Step 1: Time Pipeline (v1.19.1: scene-mode-aware clamping)
@@ -15,8 +15,28 @@ export const timeProgressionStep: PipelineStep = {
         const isCombat = r.scene_mode === 'COMBAT';
         const isSocial = r.scene_mode === 'SOCIAL';
 
+        // v1.51: raise the model's figure to what the turn actually contained
+        // (speech at ~150 wpm, real travel). Sleep turns keep their own path.
+        let requested = r.time_passed_minutes;
+        if (!hasSleep) {
+            const { floor, reasons } = estimateTimeFloor(
+                r.narrative ?? '',
+                ctx.playerInput ?? '',
+                r.location_update,
+                ctx.previousWorld.location ?? ''
+            );
+            if (floor > (requested ?? 0)) {
+                ctx.debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    message: `[TIME FLOOR — v1.51] AI asked +${requested ?? 0}m; raised to +${floor}m (${reasons.join('; ')})`,
+                    type: 'info'
+                });
+                requested = floor;
+            }
+        }
+
         const { delta, log: timeLog } = calculateTimeDelta(
-            r.time_passed_minutes,
+            requested,
             hasSleep,
             isCombat,
             isSocial,
