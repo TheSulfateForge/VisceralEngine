@@ -23,7 +23,9 @@ import type { Character } from '../../types';
 export type NarrationPerson = 'first' | 'second' | 'third';
 export type NarrationSetting = 'match' | NarrationPerson;
 
-const FIRST_PERSON_RE = /\b(?:I|me|my|mine|myself)\b/g;
+// v1.52: capitalised forms count. "My voice is deep soft and even" opens a
+// sentence, and the old lower-case-only pattern scored it zero.
+const FIRST_PERSON_RE = /\b(?:I|[Mm]e|[Mm]y|[Mm]ine|[Mm]yself)\b/g;
 
 /**
  * Narration with dialogue removed. Dialogue in this engine's output comes in
@@ -53,6 +55,11 @@ export const resolveNarrationPerson = (
     const first = count(FIRST_PERSON_RE, text);
     const firstName = pcName.trim().split(/\s+/)[0] ?? '';
     const byName = firstName.length > 2 ? count(new RegExp(`\\b${firstName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi'), text) : 0;
+    // v1.52: one "I/my" outside dialogue is enough when the player never
+    // names their own character. The 2026-11-07 Westcross openings were mostly
+    // quoted speech ("My voice is deep soft and even" + a quote) — one "my",
+    // no name — and resolved to third person for five turns before flipping.
+    if (first >= 1 && byName === 0) return 'first';
     if (first >= 2 && first >= byName) return 'first';
     if (byName >= 2) return 'third';
     return 'third';

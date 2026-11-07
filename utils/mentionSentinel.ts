@@ -132,3 +132,61 @@ export function buildLoreTopicIndex(lore: LoreItem[]): string {
     return `[LORE INDEX — topics with established canon. Do not contradict; full entries surface when relevant.]
 ${keywords.join('; ')}`;
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// v1.52: SAME-TURN INTRODUCTIONS.
+//
+// The sentinel above hydrates a dormant NPC on the turn AFTER the narrative
+// names them. The turn that first brings them on is written blind: in the
+// 2026-11-07 Westcross save Ordric sent for "Elowen Sarath", and the same reply
+// described her — wrongly — before the sentinel could fetch her record.
+//
+// Matching is strict on purpose (a false hit costs a resample): the full name,
+// or the given name as a capitalised whole word. Family names alone don't
+// count — "the Kamenova townhouse" is not Dragomir walking in.
+// ────────────────────────────────────────────────────────────────────────────
+
+const TITLE_WORDS = new Set([
+    'lord', 'lady', 'duke', 'duchess', 'count', 'countess', 'king', 'queen', 'prince', 'princess',
+    'sir', 'dame', 'captain', 'guildmaster', 'inquisitor-captain', 'inquisitor', 'master', 'mistress',
+    'father', 'mother', 'brother', 'sister', 'baron', 'baroness', 'earl', 'marquis', 'commander',
+]);
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Full name, or the given name as a capitalised whole word. */
+export const strictNameIn = (text: string, name: string): boolean => {
+    if (!name.trim() || !text) return false;
+    if (text.toLowerCase().includes(name.toLowerCase().trim())) return true;
+    const given = name.replace(/\([^)]*\)/g, '').split(/\s+/)
+        .find(p => p.length >= 3 && !TITLE_WORDS.has(p.toLowerCase()));
+    if (!given || given.length < 4) return false;
+    return new RegExp(`\\b${escapeRe(given)}\\b`).test(text);
+};
+
+/**
+ * Living entities the new narrative names that (a) had no record in this
+ * turn's prompt and (b) were not named in any of `recentTexts` — i.e. the
+ * reply is bringing them on, not continuing a thread. Only entities with
+ * something to ground on (appearance or personality) are returned.
+ */
+export function findUngroundedIntroductions(
+    narrative: string,
+    entities: KnownEntity[],
+    groundedIds: Set<string>,
+    recentTexts: string[],
+    limit = 3,
+): KnownEntity[] {
+    if (!narrative?.trim()) return [];
+    const recent = recentTexts.join('\n');
+    const out: KnownEntity[] = [];
+    for (const e of entities) {
+        if (out.length >= limit) break;
+        if (!e.name || !isAlive(e) || groundedIds.has(e.id)) continue;
+        if (!e.appearance?.trim() && !e.personality?.trim()) continue;
+        if (!strictNameIn(narrative, e.name)) continue;
+        if (strictNameIn(recent, e.name)) continue;
+        out.push(e);
+    }
+    return out;
+}

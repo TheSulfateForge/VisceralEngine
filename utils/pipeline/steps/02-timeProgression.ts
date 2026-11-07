@@ -1,5 +1,5 @@
 import type { PipelineStep, TurnContext } from '../types';
-import { calculateTimeDelta, updateTime, deriveTimePhase, estimateTimeFloor } from '../../engine';
+import { calculateTimeDelta, updateTime, deriveTimePhase, estimateTimeFloor, estimateActivityMinutes, checkNarratedClock } from '../../engine';
 
 /**
  * Step 1: Time Pipeline (v1.19.1: scene-mode-aware clamping)
@@ -51,12 +51,56 @@ export const timeProgressionStep: PipelineStep = {
             });
         }
 
-        ctx.newTime = updateTime(ctx.previousWorld.time?.totalMinutes ?? 0, delta, ctx.previousWorld.calendar);
+        // v1.52: EVIDENCE OVERRIDES THE SCENE CAP. Activities the player named
+        // (a bath, a meal) and a time the narration itself put on the clock
+        // are facts about this turn, not the model's estimate — so they may
+        // exceed the SOCIAL/COMBAT cap. Never on sleep turns; never past
+        // NARRATED_CLOCK_MAX_ADVANCE.
+        let finalDelta = delta;
+        let clockConflict: string | undefined;
+        if (!hasSleep) {
+            const act = estimateActivityMinutes(ctx.playerInput ?? '');
+            if (act.minutes > finalDelta) {
+                ctx.debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    message: `[TIME — v1.52] Activities (${act.labels.join(', ')}) need ≥${act.minutes}m; +${finalDelta}m raised to +${act.minutes}m.`,
+                    type: 'info'
+                });
+                finalDelta = act.minutes;
+            }
+            const startTotal = ctx.previousWorld.time?.totalMinutes ?? 0;
+            const narrated = checkNarratedClock(
+                r.narrative ?? '',
+                startTotal,
+                finalDelta,
+                ctx.previousWorld.calendar?.minutesPerDay ?? 1440,
+            );
+            if (narrated.floor > finalDelta) {
+                ctx.debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    message: `[TIME — v1.52] Clock moved to match the prose: ${narrated.reason}; +${finalDelta}m raised to +${narrated.floor}m.`,
+                    type: 'info'
+                });
+                finalDelta = narrated.floor;
+            }
+            if (narrated.conflict) {
+                clockConflict = narrated.conflict;
+                ctx.debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    message: `[TIME — v1.52] Prose/clock conflict: ${narrated.conflict} The clock stands; next turn is told so.`,
+                    type: 'warning'
+                });
+            }
+        }
+        // Read by buildClockLine next turn, then replaced (undefined clears it).
+        ctx.worldUpdate.clockConflictNote = clockConflict;
 
-        if (delta > 0) {
+        ctx.newTime = updateTime(ctx.previousWorld.time?.totalMinutes ?? 0, finalDelta, ctx.previousWorld.calendar);
+
+        if (finalDelta > 0) {
             ctx.debugLogs.push({
                 timestamp: new Date().toISOString(),
-                message: `Time Advancement: +${delta}m -> ${ctx.newTime.display}`,
+                message: `Time Advancement: +${finalDelta}m -> ${ctx.newTime.display}`,
                 type: 'info'
             });
         } else {

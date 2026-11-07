@@ -335,6 +335,112 @@ export const detectSelfRepetition = (
     return best;
 };
 
+// ────────────────────────────────────────────────────────────────────────────
+// v1.52: VERBATIM ECHO — one sentence copied from further back.
+//
+// detectSelfRepetition measures the WHOLE turn against the last 3, so a single
+// copied sentence in an otherwise new turn never reaches 15%. The 2026-11-07
+// Westcross save: Vesna's "She has been rehearsing that since we left the
+// Hold. I told her she could have it when we reached terms. We have reached
+// terms." came back word for word two turns later; Tihana's "I came down those
+// stairs with a name in my head and a reason to be afraid of it, and I put the
+// fear in front of you before I put the reason" in back-to-back turns; Ordric's
+// note quoted in full on waking and again at breakfast. None tripped the guard.
+//
+// This finds the longest run of identical words shared with any of the last
+// ECHO_LOOKBACK model turns. Measured on that save: the copies ran 35, 34, 21,
+// 16 and 14 words; the longest run that was NOT a copy was 11 ("she looked at
+// me the way she had looked at the" — a stock gesture). 14 sits between.
+// ────────────────────────────────────────────────────────────────────────────
+
+export const ECHO_MIN_WORDS = 14;
+export const ECHO_LOOKBACK = 10;
+
+export interface EchoReport {
+    echoed: boolean;
+    /** Length in words of the longest shared run. */
+    words: number;
+    /** How many model turns back it came from (1 = the previous turn). */
+    distance: number;
+    /** The shared run, in normalised words. */
+    fragment: string;
+}
+
+const NO_ECHO: EchoReport = { echoed: false, words: 0, distance: 0, fragment: '' };
+
+/**
+ * Longest verbatim run of words the new narrative shares with any recent
+ * model turn. `priorNarratives` is oldest-first. Text the player wrote is
+ * excluded (`playerTexts`) — echoing the player's own words back is answering
+ * them, not repeating yourself.
+ */
+export const detectVerbatimEcho = (
+    narrative: string | undefined | null,
+    priorNarratives: string[],
+    playerTexts: string[] = [],
+    minWords: number = ECHO_MIN_WORDS,
+): EchoReport => {
+    if (!narrative || typeof narrative !== 'string') return NO_ECHO;
+    const mine = normaliseForShingles(narrative);
+    if (mine.length < minWords) return NO_ECHO;
+    const priors = priorNarratives.filter((t): t is string => typeof t === 'string').slice(-ECHO_LOOKBACK);
+    if (priors.length === 0) return NO_ECHO;
+
+    const playerGrams = new Set<string>();
+    for (const t of playerTexts) {
+        const w = normaliseForShingles(t ?? '');
+        for (let i = 0; i + minWords <= w.length; i++) playerGrams.add(w.slice(i, i + minWords).join(' '));
+    }
+
+    let best = NO_ECHO;
+    priors.forEach((prior, idx) => {
+        const distance = priors.length - idx;
+        const theirs = normaliseForShingles(prior);
+        if (theirs.length < minWords) return;
+        // Index every minWords-gram of the prior turn by its start positions.
+        const starts = new Map<string, number[]>();
+        for (let i = 0; i + minWords <= theirs.length; i++) {
+            const g = theirs.slice(i, i + minWords).join(' ');
+            const list = starts.get(g);
+            if (list) list.push(i); else starts.set(g, [i]);
+        }
+        let i = 0;
+        while (i + minWords <= mine.length) {
+            const g = mine.slice(i, i + minWords).join(' ');
+            const hits = starts.get(g);
+            if (!hits || playerGrams.has(g)) { i++; continue; }
+            // Extend the run as far as it goes against each hit.
+            let longest = minWords;
+            for (const j of hits) {
+                let k = minWords;
+                while (i + k < mine.length && j + k < theirs.length && mine[i + k] === theirs[j + k]) k++;
+                if (k > longest) longest = k;
+            }
+            if (longest > best.words || (longest === best.words && distance < best.distance)) {
+                best = {
+                    echoed: true,
+                    words: longest,
+                    distance,
+                    fragment: mine.slice(i, i + longest).join(' '),
+                };
+            }
+            i += longest;
+        }
+    });
+    return best;
+};
+
+/** Resample reminder for a verbatim echo: quotes it so the retry prompt differs. */
+export const buildEchoReminder = (report: EchoReport): string =>
+    `[SYSTEM REFRESH — DO NOT REPEAT EARLIER TEXT — v1.52]
+The draft copied this, word for word, from ${report.distance === 1 ? 'the previous turn' : `${report.distance} turns back`}:
+
+"${report.fragment.slice(0, 300)}${report.fragment.length > 300 ? '…' : ''}"
+
+That has already been said or shown. Write this turn again without it — not
+reworded, not paraphrased. If a character would say the same thing again, have
+them say something new or say nothing.`;
+
 /**
  * Trailing reminder for a resample after self-repetition. Quotes the echoed
  * text back so the resample prompt is genuinely DIFFERENT from the one that

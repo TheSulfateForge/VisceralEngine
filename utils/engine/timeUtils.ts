@@ -302,6 +302,13 @@ export const estimateTimeFloor = (
         reasons.push(`${spoken} words spoken/read aloud ≈ ${speechMin}m`);
     }
 
+    // v1.52: what the player said they're doing takes time too.
+    const act = estimateActivityMinutes(playerInput ?? '');
+    if (act.minutes > floor) {
+        floor = act.minutes;
+        reasons.push(`activities (${act.labels.join(', ')}) ≥ ${act.minutes}m`);
+    }
+
     const moved = !!locationUpdate?.location_name
         && locationUpdate.location_name.trim() !== ''
         && locationUpdate.location_name !== previousLocation;
@@ -314,7 +321,7 @@ export const estimateTimeFloor = (
         }
         if (travel > 0) {
             // Talk on the way happens during the trip, not after it.
-            const combined = Math.max(travel, speechMin);
+            const combined = Math.max(travel, speechMin, act.minutes);
             if (combined > floor) {
                 floor = combined;
                 reasons.push(`travel ${previousLocation || '?'} → ${locationUpdate!.location_name} ≥ ${travel}m`);
@@ -323,6 +330,248 @@ export const estimateTimeFloor = (
     }
 
     return { floor, reasons };
+};
+
+// ────────────────────────────────────────────────────────────────────────────
+// v1.52: TIME FROM ACTIVITIES, FROM THE NARRATION'S OWN CLOCK, AND FROM THE
+// PLAYER'S STATED TIME.
+//
+// The 2026-11-07 Westcross save (deepseek-v4.1-flash, temp 0.70): breakfast in
+// the garden asked +1m while the narration had the corner bell strike seven at
+// 06:05; a bath, hair and shave asked +1m while the narration read "a quarter
+// to seven" off the hall clock at 06:07. The v1.51 floor counts only speech and
+// travel, so neither turn tripped it — and the player's own "[IT is 6:06AM]"
+// was ignored.
+//
+// Three more floors, all mechanical:
+//   • Activities: things the player says they do take a known minimum time.
+//   • Narrated clock: when the narration has a bell strike an hour or a clock
+//     show a time, the world clock moves to that time (forward only, ≤6h).
+//     The prose is what the player read; the clock follows it. If the prose
+//     puts the time EARLIER than the clock, it's recorded and the next prompt
+//     is told the clock was right.
+//   • Player time note: "[It is 6:06 AM]" in the player's input sets the clock
+//     before the turn is built (see parsePlayerTimeNote, used by the client).
+// ────────────────────────────────────────────────────────────────────────────
+
+interface ActivityRule { re: RegExp; minutes: number; label: string; }
+
+/** Minimum minutes for ordinary activities named in the player's input. */
+export const ACTIVITY_RULES: ActivityRule[] = [
+    { re: /\b(?:bath(?:e|es|ed|ing)?|soak(?:s|ed|ing)?\s+in\s+the\s+tub)\b/i, minutes: 20, label: 'bath' },
+    { re: /\b(?:shower(?:s|ed|ing)?)\b/i, minutes: 10, label: 'shower' },
+    { re: /\bshav(?:e|es|ed|ing)\b/i, minutes: 5, label: 'shave' },
+    { re: /\b(?:groom(?:s|ed|ing)?|do(?:es)?\s+my\s+hair|brush(?:es|ed|ing)?\s+my\s+hair)\b/i, minutes: 10, label: 'grooming' },
+    { re: /\b(?:get(?:s|ting)?\s+dressed|dress(?:es|ed)?\s+(?:myself|for)|put(?:s|ting)?\s+on\s+(?:my|the)\s+(?:clothes|armou?r|coat|boots|uniform))\b/i, minutes: 5, label: 'dressing' },
+    { re: /\b(?:breakfast|lunch|luncheon|dinner|supper|(?:eat|eats|ate|eating)\s+(?:a|my|the|some)\s+(?:meal|food|breakfast|lunch|dinner|supper))\b/i, minutes: 20, label: 'meal' },
+    { re: /\b(?:wash(?:es|ed|ing)?\s+(?:up|myself|my\s+face|my\s+hands))\b/i, minutes: 5, label: 'washing' },
+];
+
+/** Cap on the activity floor so a long list of chores can't eat a day. */
+export const ACTIVITY_FLOOR_CAP_MINUTES = 90;
+
+export const estimateActivityMinutes = (playerInput: string): { minutes: number; labels: string[] } => {
+    const text = (playerInput ?? '').replace(/["“][^"”]*["”]/g, ' ');   // what they DO, not what they say
+    const labels: string[] = [];
+    let minutes = 0;
+    for (const r of ACTIVITY_RULES) {
+        if (r.re.test(text)) { minutes += r.minutes; labels.push(r.label); }
+    }
+    return { minutes: Math.min(minutes, ACTIVITY_FLOOR_CAP_MINUTES), labels };
+};
+
+const HOUR_WORDS: Record<string, number> = {
+    one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
+    first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6, seventh: 7, eighth: 8, ninth: 9, tenth: 10, eleventh: 11, twelfth: 12,
+    noon: 12, midnight: 12,
+};
+const MINUTE_WORDS: Record<string, number> = {
+    five: 5, ten: 10, twenty: 20, 'twenty-five': 25, 'twenty five': 25,
+};
+const HOUR_TOKEN = String.raw`(?:\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|noon|midnight)`;
+const TIME_EXPR = String.raw`(?:(?:a\s+)?quarter\s+(?:to|past|after)\s+${HOUR_TOKEN}|half\s+past\s+${HOUR_TOKEN}|(?:\d{1,2}|five|ten|twenty|twenty[- ]five)\s+(?:minutes\s+)?(?:to|past|after)\s+${HOUR_TOKEN}|\d{1,2}:\d{2}|${HOUR_TOKEN}(?:\s+o'?clock)?)`;
+
+const toHour = (tok: string): number | null => {
+    const t = tok.toLowerCase();
+    if (/^\d+$/.test(t)) { const n = parseInt(t, 10); return n >= 0 && n <= 24 ? n : null; }
+    return HOUR_WORDS[t] ?? null;
+};
+
+/** Parse one time expression into minutes past midnight on a 12-hour face (0..719), or 24h when given as hh:mm ≥ 13. */
+export const parseTimeExpression = (expr: string): number | null => {
+    const e = expr.toLowerCase().trim();
+    let m: RegExpMatchArray | null;
+    if ((m = e.match(/^(\d{1,2}):(\d{2})$/))) {
+        const h = parseInt(m[1], 10), mi = parseInt(m[2], 10);
+        return h < 24 && mi < 60 ? h * 60 + mi : null;
+    }
+    if ((m = e.match(new RegExp(String.raw`^(?:a\s+)?quarter\s+(to|past|after)\s+(${HOUR_TOKEN})$`)))) {
+        const h = toHour(m[2]); if (h === null) return null;
+        return m[1] === 'to' ? ((h * 60 - 15) + 720) % 720 : (h % 12) * 60 + 15;
+    }
+    if ((m = e.match(new RegExp(String.raw`^half\s+past\s+(${HOUR_TOKEN})$`)))) {
+        const h = toHour(m[1]); if (h === null) return null;
+        return (h % 12) * 60 + 30;
+    }
+    if ((m = e.match(new RegExp(String.raw`^(\d{1,2}|five|ten|twenty|twenty[- ]five)\s+(?:minutes\s+)?(to|past|after)\s+(${HOUR_TOKEN})$`)))) {
+        const mins = /^\d+$/.test(m[1]) ? parseInt(m[1], 10) : MINUTE_WORDS[m[1].replace('-', ' ')] ?? MINUTE_WORDS[m[1]];
+        const h = toHour(m[3]); if (h === null || mins === undefined || mins >= 60) return null;
+        return m[2] === 'to' ? ((h * 60 - mins) + 720) % 720 : (h % 12) * 60 + mins;
+    }
+    if ((m = e.match(new RegExp(String.raw`^(${HOUR_TOKEN})(?:\s+o'?clock)?$`)))) {
+        const h = toHour(m[1]); if (h === null) return null;
+        if (h > 12) return h * 60;
+        return (h % 12) * 60;
+    }
+    return null;
+};
+
+export interface NarratedClock { minutes: number; text: string; }
+
+// A bell/clock that struck or shows a time, or "it was a quarter to seven".
+const STRIKE_RE = new RegExp(String.raw`\b(?:bells?|clocks?|chimes?|carillon|watch-?bell)\b[^.!?\n]{0,60}?\b(?:struck|strikes|striking|chimed|chimes|chiming|rang|rings|ringing|tolled|tolls|tolling|sounded|sounds|counted)\s+(?:out\s+)?(?:the\s+)?(${TIME_EXPR})(?:\s+hour|\s+bell)?\b`, 'gi');
+const READ_RE = new RegExp(String.raw`\bclocks?\b[^.!?\n]{0,40}?\b(?:said|says|read|reads|showed|shows|stood\s+at|stands\s+at|pointed\s+to|points\s+to|was\s+at|showing|reading)\s+(?:it\s+was\s+)?(${TIME_EXPR})\b`, 'gi');
+const ITWAS_RE = new RegExp(String.raw`\b(?:it\s+was|it's|it\s+is)\s+(?:now\s+)?((?:a\s+)?quarter\s+(?:to|past|after)\s+${HOUR_TOKEN}|half\s+past\s+${HOUR_TOKEN}|${HOUR_TOKEN}\s+o'?clock)\b`, 'gi');
+// A clock time inside a subordinate/future clause is not the present time.
+const NOT_NOW_RE = /\b(?:when|until|till|before|after|by|once|if|wants?|wanted|expects?|at)\s+(?:the\s+)?(?:\w+\s+){0,3}$/i;
+
+/**
+ * Every time the narration states as the CURRENT time, in order of appearance.
+ * Dialogue is excluded — characters talk about appointments and plans.
+ */
+export const extractNarratedClockTimes = (narrative: string): NarratedClock[] => {
+    const text = (narrative ?? '').replace(/["“][^"”]*["”]/g, m => ' '.repeat(m.length));
+    const hits: { index: number; minutes: number; text: string }[] = [];
+    for (const re of [STRIKE_RE, READ_RE, ITWAS_RE]) {
+        re.lastIndex = 0;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(text)) !== null) {
+            const before = text.slice(Math.max(0, m.index - 30), m.index);
+            if (NOT_NOW_RE.test(before)) continue;
+            const minutes = parseTimeExpression(m[1]);
+            if (minutes === null) continue;
+            hits.push({ index: m.index, minutes, text: m[0].trim() });
+        }
+    }
+    hits.sort((a, b) => a.index - b.index);
+    return hits.map(h => ({ minutes: h.minutes, text: h.text }));
+};
+
+/** Narration may move the clock this far forward on its own word, no further. */
+export const NARRATED_CLOCK_MAX_ADVANCE = 360;
+/** Narration this far behind the clock is a contradiction worth flagging. */
+export const NARRATED_CLOCK_BEHIND_TOLERANCE = 10;
+
+/**
+ * Place a 12-hour-face reading on the absolute timeline: the occurrence (am/pm,
+ * yesterday/today/tomorrow) nearest to `anchorTotal`.
+ */
+export const resolveClockReading = (minutes: number, anchorTotal: number, minutesPerDay = 1440): number => {
+    const dayStart = Math.floor(anchorTotal / minutesPerDay) * minutesPerDay;
+    const faces = minutes >= 720 ? [minutes] : [minutes, minutes + 720];
+    let best = dayStart + faces[0];
+    for (const d of [-1, 0, 1]) {
+        for (const f of faces) {
+            const cand = dayStart + d * minutesPerDay + f;
+            if (Math.abs(cand - anchorTotal) < Math.abs(best - anchorTotal)) best = cand;
+        }
+    }
+    return best;
+};
+
+export interface NarratedClockCheck {
+    /** Minutes the turn must advance for the clock to agree with the prose (0 if none). */
+    floor: number;
+    /** Set when the prose stated a time earlier than the clock already was. */
+    conflict?: string;
+    reason?: string;
+}
+
+/**
+ * Compare the LAST time the narration states against the clock.
+ * startTotal = clock before the turn; proposedDelta = minutes the turn would
+ * advance without this check.
+ */
+export const checkNarratedClock = (
+    narrative: string,
+    startTotal: number,
+    proposedDelta: number,
+    minutesPerDay = 1440,
+): NarratedClockCheck => {
+    const times = extractNarratedClockTimes(narrative);
+    if (times.length === 0) return { floor: 0 };
+    const last = times[times.length - 1];
+    const proposedEnd = startTotal + Math.max(0, proposedDelta);
+    const at = resolveClockReading(last.minutes, proposedEnd, minutesPerDay);
+    const hhmm = (t: number) => {
+        const md = ((t % minutesPerDay) + minutesPerDay) % minutesPerDay;
+        return `${String(Math.floor(md / 60)).padStart(2, '0')}:${String(md % 60).padStart(2, '0')}`;
+    };
+    if (at > proposedEnd) {
+        const need = at - startTotal;
+        if (need <= NARRATED_CLOCK_MAX_ADVANCE) {
+            return { floor: need, reason: `narration says "${last.text}" (${hhmm(at)})` };
+        }
+        return {
+            floor: 0,
+            conflict: `The narration said "${last.text}" (${hhmm(at)}), but the clock was ${hhmm(proposedEnd)} — too far ahead to be this turn.`,
+        };
+    }
+    if (at < startTotal - NARRATED_CLOCK_BEHIND_TOLERANCE) {
+        return {
+            floor: 0,
+            conflict: `The narration said "${last.text}" (${hhmm(at)}), but the clock was already ${hhmm(startTotal)}.`,
+        };
+    }
+    return { floor: 0 };
+};
+
+/**
+ * A player's bracketed statement of the time: "[It is 6:06 AM]", "[time: 18:30]",
+ * "[the time is half past six]". Returns minutes past midnight, with am/pm
+ * applied when given (null am/pm → caller resolves nearest occurrence).
+ */
+export const parsePlayerTimeNote = (input: string): { minutes: number; meridiem: 'am' | 'pm' | null; text: string } | null => {
+    const re = /\[\s*(?:it\s*(?:is|'s)|the\s+time\s+is|time\s*(?:is|:)|clock\s*(?:is|:))\s*(?:now\s+)?([^\]]{1,40}?)\s*\]/i;
+    const m = (input ?? '').match(re);
+    if (!m) return null;
+    let body = m[1].trim().toLowerCase().replace(/\./g, '');
+    let meridiem: 'am' | 'pm' | null = null;
+    const mer = body.match(/\s*(am|pm|in the morning|in the evening|at night|in the afternoon)\s*$/);
+    if (mer) {
+        meridiem = /am|morning/.test(mer[1]) ? 'am' : 'pm';
+        body = body.slice(0, mer.index).trim();
+    }
+    body = body.replace(/^(\d{1,2})(\d{2})$/, '$1:$2');           // 0606 → 06:06
+    if (/^\d{1,2}$/.test(body)) body = `${body}:00`;
+    const minutes = parseTimeExpression(body);
+    if (minutes === null) return null;
+    let total = minutes;
+    if (meridiem) {
+        const h = Math.floor(minutes / 60) % 12;
+        total = (meridiem === 'pm' ? h + 12 : h) * 60 + (minutes % 60);
+    } else if (minutes >= 720) {
+        meridiem = 'pm';
+    }
+    return { minutes: total, meridiem, text: m[0] };
+};
+
+/** Absolute clock for a player time note: the nearest occurrence to now. */
+export const resolvePlayerTimeNote = (
+    note: { minutes: number; meridiem: 'am' | 'pm' | null },
+    currentTotal: number,
+    minutesPerDay = 1440,
+): number => {
+    if (note.meridiem !== null) {
+        const dayStart = Math.floor(currentTotal / minutesPerDay) * minutesPerDay;
+        let best = dayStart + note.minutes;
+        for (const d of [-1, 1]) {
+            const cand = dayStart + d * minutesPerDay + note.minutes;
+            if (Math.abs(cand - currentTotal) < Math.abs(best - currentTotal)) best = cand;
+        }
+        return best;
+    }
+    return resolveClockReading(note.minutes, currentTotal, minutesPerDay);
 };
 
 export const calculateTimeDelta = (

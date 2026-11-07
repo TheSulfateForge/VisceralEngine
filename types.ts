@@ -1576,6 +1576,8 @@ export interface GameWorld {
      * arrives with the response, so it corrects the NEXT turn.
      */
     voiceLockFlaggedTurn?: number;
+    /** v1.52: set when last turn's prose stated a time the clock contradicts; shown once in the next prompt's clock line. */
+    clockConflictNote?: string;
     voiceLockFlaggedNames?: string[];
     /** 'inactive' pinned the character into the mask; 'active' into revelation. */
     voiceLockFlaggedDirection?: string;

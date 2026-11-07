@@ -74,6 +74,8 @@ const USE_HYBRID_RAG = true;
 
 export interface PromptResult {
     prompt: string;
+    /** v1.52: ids of entities whose record (looks + personality) is in this prompt. */
+    groundedEntityIds?: string[];
     /**
      * v1.26: Campaign-static context — character identity, world tags, world
      * rules. Changes rarely (hash-detected), so geminiClient folds it into
@@ -129,6 +131,17 @@ export interface PromptResult {
  * Tagging in the output ([P]/[R]/recent unmarked) is deliberately minimal —
  * the model gets the fact, not the metadata.
  */
+/**
+ * v1.52: header for the memory bullets. Until now they sat under [CONTEXT]
+ * unlabelled. In the 2026-11-07 Westcross save "Filed the Westcross entail with
+ * the Crown chancery" and "The marriage contract is signed" were both in the
+ * prompt (memory=5.6k chars) while the narration had the entail drafted again
+ * and a fair copy of the same contract signed again.
+ */
+export const ESTABLISHED_EVENTS_HEADER =
+    `[ESTABLISHED — these already happened. They are settled history: never stage them again, `
+    + `re-sign, re-file, re-decide or re-discover them, and never contradict them. Build on them.]`;
+
 const buildMemoryContext = (
     memory: MemoryItem[],
     userInput: string,
@@ -362,6 +375,26 @@ const MENTIONED_IMPRESSION_CAP = 200;
  */
 const ACTIVE_IMPRESSION_CAP = 420;
 
+/**
+ * v1.52: an NPC's stored physical description reaches the prompt. Until now
+ * `appearance` (v1.48) was written by seed hydration and read by nothing on
+ * the narrative path — the only physical description the model ever saw was
+ * the seed text copied into `impression`, which the first scene overwrites
+ * with mood. In the 2026-11-07 Westcross save the archivist Elowen Sarath
+ * (record: an elf of thirty-three) was written as a grey-furred hare-kin of
+ * sixty. Clothed description only: anything from "Naked" on is the bodies
+ * block's business (intimate scenes), not every scene's.
+ */
+const ACTIVE_APPEARANCE_CAP = 420;
+const MENTIONED_APPEARANCE_CAP = 220;
+export const appearanceForPrompt = (appearance: string | undefined, cap: number): string => {
+    const raw = (appearance ?? '').trim();
+    if (!raw) return '';
+    const naked = raw.search(/\bNaked\b/);
+    const clothed = (naked >= 0 ? raw.slice(0, naked) : raw).trim();
+    return clothed ? trimToSentence(clothed, cap) : '';
+};
+
 /** Exported for tests — the tiering here is load-bearing on prompt size. */
 export const buildEntityContext = (
     entities: KnownEntity[],
@@ -432,8 +465,10 @@ export const buildEntityContext = (
             const voiceLine = e.voice_sample?.trim() && !isFigurativeVoiceSample(e.voice_sample)
                 ? ` Voice sample (write their dialogue in THIS register): "${e.voice_sample.trim()}"\n`
                 : '';
+            const looks = appearanceForPrompt(e.appearance, ACTIVE_APPEARANCE_CAP);
             return (
                 `ID: ${e.id}\n Name: ${e.name} (${e.role})\n Location: ${e.location}\n` +
+                (looks ? ` Appearance (CANONICAL — describe them only this way): ${looks}\n` : '') +
                 personalityLine +
                 voiceLine +
                 // v1.24: labeled "situational" so the model reads impression as
@@ -474,8 +509,10 @@ export const buildEntityContext = (
             const impressionLine = impression
                 ? ` Last known: [${e.relationship_level}] - ${trimToSentence(impression, MENTIONED_IMPRESSION_CAP)}\n`
                 : '';
+            const looks = appearanceForPrompt(e.appearance, MENTIONED_APPEARANCE_CAP);
             return (
                 `Name: ${e.name} (${e.role}) — ${e.status === 'missing' ? 'whereabouts unknown' : e.location}\n` +
+                (looks ? ` Appearance: ${looks}\n` : '') +
                 personalityLine + voiceLine + impressionLine
             ).trimEnd();
         }).join('\n----------------\n');
@@ -504,10 +541,34 @@ export const buildEntityContext = (
 };
 
 /**
+ * v1.52: RECORD CHECK. The reply brought in a character whose record was not
+ * in the prompt (dormant tier — the roster carries names and roles only), so
+ * the model described them from nothing. The resample gets their record.
+ */
+export const buildRecordCheckReminder = (entities: KnownEntity[]): string => {
+    const blocks = entities.slice(0, 4).map(e => {
+        const looks = appearanceForPrompt(e.appearance, ACTIVE_APPEARANCE_CAP);
+        return [
+            `--- ${e.name}${e.role ? ` (${e.role})` : ''}`,
+            looks ? `Appearance: ${looks}` : 'Appearance: (none recorded — do not invent a species, age or build; keep description minimal)',
+            e.personality?.trim() ? `Personality: ${capSheetBySections(e.personality, MENTIONED_PERSONALITY_CAP)}` : '',
+            e.voice_sample?.trim() && !isFigurativeVoiceSample(e.voice_sample) ? `Voice sample: "${e.voice_sample.trim()}"` : '',
+        ].filter(Boolean).join('\n');
+    });
+    return `[SYSTEM REFRESH — RECORD CHECK — REWRITE THIS TURN — v1.52]
+The draft brought in ${entities.map(e => e.name).join(', ')} without their stored record, so whatever
+it said about them (species, age, looks, manner, history) was invented. These are the
+records. Write the same turn again with these characters exactly as recorded.
+
+${blocks.join('\n\n')}`;
+};
+
+/**
  * v1.50: one line stating the exact clock and what it binds. Exported for tests.
  */
 export const buildClockLine = (
     time: { hour?: number; minute?: number; day?: number } | undefined,
+    conflictNote?: string,
 ): string => {
     const hour = time?.hour ?? 9;
     const minute = time?.minute ?? 0;
@@ -516,7 +577,10 @@ export const buildClockLine = (
     const untilNext = minute === 0 ? 60 : 60 - minute;
     return `Clock: ${pad(hour)}:${pad(minute)}, Day ${time?.day ?? 1} — the next hour (${pad(nextHour)}:00) is ${untilNext} minute(s) away.\n`
         + `Anything in the narrative that marks time — a bell or chime, the light, a character saying how long something has taken — must agree with this clock. `
-        + `Nothing strikes or announces an hour that has not arrived.`;
+        + `Nothing strikes or announces an hour that has not arrived.`
+        + (conflictNote
+            ? `\nCLOCK CORRECTION (v1.52): ${conflictNote} The clock above is correct. Do not repeat that time or build on it.`
+            : '');
 };
 
 const buildBioStatus = (bio: BioMonitor | undefined, timeDisplay: string): string => {
@@ -1156,6 +1220,12 @@ export const constructGeminiPrompt = async (
     forceActiveEntityIds,
     mentionedOnlyIds,
   );
+  // v1.52: the entities whose record (looks + personality) is in THIS prompt —
+  // the active and mentioned tiers. The client checks the reply against it.
+  const groundedEntityIds = allRelevantEntities
+    .filter(e => e.status !== 'dead' && e.status !== 'retired')
+    .filter(e => forceActiveEntityIds.has(e.id) || !e.status || e.status === 'present' || e.status === 'nearby')
+    .map(e => e.id);
 
   // 3. Narrative Intent & State
   const lowerInput = userInput.toLowerCase();
@@ -1176,7 +1246,7 @@ export const constructGeminiPrompt = async (
   // stats line; the atmosphere block said "morning" and nothing more. On the
   // 2026-11-03 save (deepseek-v4.1-flash) an NPC said "I've watched you for an
   // hour" twenty-one minutes into the scene.
-  const clockLine = buildClockLine(gameWorld.time);
+  const clockLine = buildClockLine(gameWorld.time, gameWorld.clockConflictNote);
 
   // 4. Build Instructions
   const bioStatus = buildBioStatus(character.bio, timeDisplay);
@@ -1368,7 +1438,7 @@ ${sanitise(dreamSeed ? `\n${dreamSeed}\n` : '')}
 ${sanitise(worldPrimerBlock ? `\n${worldPrimerBlock}\n` : '')}
 
 [CONTEXT]
-${sanitise(memoryContext)}
+${memoryContext ? `${ESTABLISHED_EVENTS_HEADER}\n` : ''}${sanitise(memoryContext)}
 ${sanitise(loreContext)}
 ${sanitise(knownEntitiesContext)}
 
@@ -1457,6 +1527,7 @@ ${sanitise(conditionLock ? `\n${conditionLock}\n` : '')}
       profile: builtProfile,                          // v1.43
       profileLine: formatPromptProfile(builtProfile), // v1.43
       blockSizes,
-      ragDebug: debugInfo
+      ragDebug: debugInfo,
+      groundedEntityIds,   // v1.52
   };
 };

@@ -34,6 +34,9 @@ const currentSkills = (character: Character): string => {
     return skills.map(s => `${s.name} (${s.level})`).join(', ');
 };
 
+/** v1.52: how many of the latest memories the montage is shown as already-happened. */
+export const MONTAGE_RECENT_MEMORY_COUNT = 10;
+
 const TYPE_GUIDANCE: Record<MontageType, string> = {
     training: 'Focus on skill growth earned through deliberate practice. Memories should mark milestones, plateaus, or breakthroughs — not every session.',
     travel:   'Focus on the passage across places: what changed in the world, who was met or lost, what the journey cost. Skill gains are incidental, not the point.',
@@ -59,6 +62,12 @@ export function buildMontageInstruction(
         ? `The player set a focus: "${declaredAction.focus}". Center the montage on it.`
         : 'No explicit focus — infer a sensible emphasis from the character and situation.';
 
+    // v1.52: what is already on record. Two montages back to back in the
+    // 2026-11-07 Westcross save each narrated "Tihana's last letter… a list of
+    // four names", and the second re-ran the first one's timeline. The montage
+    // prompt saw none of the memories the first one had just committed.
+    const recentFacts = (world.memory ?? []).slice(-MONTAGE_RECENT_MEMORY_COUNT).map(m => `  - ${m.fact}`);
+
     return [
         '[MONTAGE MODE]',
         `A span of time passes: ${durationLabel} (${montageType}). ${focusLine}`,
@@ -74,6 +83,11 @@ export function buildMontageInstruction(
         '- age_increment_years: whole years the PC ages (0 for sub-year montages).',
         '- season_delta: optional human-readable note on seasonal/era shift.',
         '',
+        ...(recentFacts.length ? [
+            'ALREADY ON RECORD — these happened before this span began. Do not narrate them again, re-date them, or repeat them as new events; the montage starts AFTER them and may only build on them:',
+            ...recentFacts,
+            '',
+        ] : []),
         `Character skills on record: ${currentSkills(character)}`,
         'Known NPCs (use these exact ids for proposed_npc_deltas):',
         knownEntityRoster(world),

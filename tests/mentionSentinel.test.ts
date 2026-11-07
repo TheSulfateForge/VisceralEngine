@@ -10,7 +10,7 @@ import {
     detectEntityDeaths,
     detectLoreDeaths,
 } from '../utils/engine/entityLifecycle';
-import type { KnownEntity, DebugLogEntry } from '../types';
+import type { KnownEntity, DebugLogEntry, LoreId } from '../types';
 
 const mk = (over: Partial<KnownEntity>): KnownEntity => ({
     id: over.id ?? `npc_${(over.name ?? 'x').toLowerCase().replace(/\s+/g, '_')}`,
@@ -53,8 +53,8 @@ describe('findNarrativeMentionedEntities (v1.27)', () => {
 
 describe('findExactKeywordLore (v1.27)', () => {
     const lore = [
-        { id: 'l1', keyword: 'The Sundering', content: 'The cataclysm that split the realm.', timestamp: '' },
-        { id: 'l2', keyword: 'Ash', content: 'too-short keyword must not match', timestamp: '' },
+        { id: 'l1' as LoreId, keyword: 'The Sundering', content: 'The cataclysm that split the realm.', timestamp: '' },
+        { id: 'l2' as LoreId, keyword: 'Ash', content: 'too-short keyword must not match', timestamp: '' },
     ];
 
     it('force-injects lore on an exact keyword hit, bypassing similarity', () => {
@@ -64,7 +64,7 @@ describe('findExactKeywordLore (v1.27)', () => {
 
     it('skips short keywords and already-retrieved entries', () => {
         expect(findExactKeywordLore('ash falls', lore, new Set(), 3)).toEqual([]);
-        expect(findExactKeywordLore('the sundering', lore, new Set(['l1']), 3)).toEqual([]);
+        expect(findExactKeywordLore('the sundering', lore, new Set(['l1' as LoreId]), 3)).toEqual([]);
     });
 });
 
@@ -82,8 +82,8 @@ describe('world roster + lore index (v1.27, cache-stable)', () => {
 
     it('renders sorted lore keywords only', () => {
         const idx = buildLoreTopicIndex([
-            { id: 'l1', keyword: 'Verancourt Succession', content: 'secret', timestamp: '' },
-            { id: 'l2', keyword: 'The Sundering', content: 'secret', timestamp: '' },
+            { id: 'l1' as LoreId, keyword: 'Verancourt Succession', content: 'secret', timestamp: '' },
+            { id: 'l2' as LoreId, keyword: 'The Sundering', content: 'secret', timestamp: '' },
         ]);
         expect(idx).toContain('The Sundering; Verancourt Succession');
         expect(idx).not.toContain('secret');

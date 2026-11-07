@@ -11,14 +11,15 @@ import {
 } from '../utils/engine/sceneContinuity';
 import { mapSystemErrorToNarrative } from '../utils';
 import { useToast } from '../components/providers/ToastProvider';
-import { constructGeminiPrompt, buildOocEntityRecords } from '../utils/promptUtils';
+import { constructGeminiPrompt, buildOocEntityRecords, buildRecordCheckReminder } from '../utils/promptUtils';
+import { findUngroundedIntroductions } from '../utils/mentionSentinel';
 import { findAliasMatchedEntities } from '../utils/ragEngine';
 import { getResponseSchema, SchemaMode } from '../schemas/responseSchema';
 import { SYSTEM_INSTRUCTIONS } from '../systemInstructions'; // v1.19: Wire persona into API call
 import { GeminiService } from '../geminiService';
 import { useGameStore } from '../store';
 import { SimulationEngine } from '../utils/simulationEngine';
-import { phaseAfterElapsed } from '../utils/engine/timeUtils';
+import { phaseAfterElapsed, parsePlayerTimeNote, resolvePlayerTimeNote, deriveWorldTime } from '../utils/engine/timeUtils';
 import {
     detectPlayerFraming,
     containsMatureContent,
@@ -53,6 +54,9 @@ import {
     detectSanitizationDrift,
     detectSofteningTells,
     detectSelfRepetition,
+    detectVerbatimEcho,
+    buildEchoReminder,
+    ECHO_LOOKBACK,
     detectInventedTrigger,       // v1.37
     buildRepetitionReminder,
     REPETITION_LOOKBACK,
@@ -147,6 +151,11 @@ const maskResampleLastTurn = new Map<string, number>();
 // v1.50: kink-evasion resample cooldown — same reasoning as the mask-mode one.
 const KINK_RESAMPLE_COOLDOWN_TURNS = 3;
 const kinkResampleLastTurn = new Map<string, number>();
+// v1.52: record-check resample — one per NPC per RECORD_CHECK_COOLDOWN_TURNS.
+const recordCheckLastTurn = new Map<string, number>();
+const RECORD_CHECK_COOLDOWN_TURNS = 10;
+/** Narrative messages (player + model) scanned to decide a name is a new arrival. */
+const RECORD_CHECK_RECENT_MESSAGES = 6;
 let staticBeatStreak = 0;
 let staticBeatLocation = '';
 let lastTurnRepeated = false;
@@ -258,7 +267,10 @@ export const useGeminiClient = () => {
       // memory-worthy facts the model narrated but never recorded via
       // new_memories. Without this, those facts survive only in raw history
       // and are silently lost when the window scrolls past maxHistory.
-      const { summary, memoryCandidates } = await service.summarizeHistoryWithSalvage(window);
+      const { summary, memoryCandidates } = await service.summarizeHistoryWithSalvage(
+          window,
+          useGameStore.getState().character?.name,   // v1.52: who "I" is
+      );
 
       if (memoryCandidates.length > 0) {
           setGameWorld(prevWorld => {
@@ -588,6 +600,31 @@ export const useGeminiClient = () => {
         }
     }
 
+    // v1.52: "[It is 6:06 AM]" — the player stating the time is a fact, not
+    // flavour. Set the clock BEFORE the turn's snapshot is taken, so the
+    // prompt's clock line, the time step and every check below start from it.
+    // In the 2026-11-07 save the note was sent as text and the narration
+    // carried on at "a quarter to seven".
+    const timeNote = parsePlayerTimeNote(text);
+    if (timeNote) {
+        const w = useGameStore.getState().gameWorld;
+        const minutesPerDay = w.calendar?.minutesPerDay ?? 1440;
+        const before = w.time?.totalMinutes ?? 0;
+        const target = resolvePlayerTimeNote(timeNote, before, minutesPerDay);
+        if (target !== before) {
+            const time = deriveWorldTime(target, w.calendar);
+            setGameWorld(cw => ({ ...cw, time, clockConflictNote: undefined }));
+            setGameHistory(h => ({
+                ...h,
+                debugLog: [...h.debugLog, {
+                    timestamp: new Date().toISOString(),
+                    message: `[PLAYER TIME — v1.52] ${timeNote.text} → clock set to ${time.display} (${target - before >= 0 ? '+' : ''}${target - before}m).`,
+                    type: 'info' as const,
+                }],
+            }));
+        }
+    }
+
     // v1.51: if the previous player input never got a reply (the request
     // failed or was abandoned and the player typed it again), drop the orphan.
     // Otherwise the model sees two consecutive player moves — in the
@@ -734,7 +771,7 @@ export const useGeminiClient = () => {
         // Phase 2: constructGeminiPrompt is async (encodes the query
         // embedding off-thread for hybrid retrieval). Awaits ~5–20ms warm,
         // a few seconds on the very first call while the model loads.
-        const { prompt: contextPrompt, staticContext, oocDirectivesBlock, profileLine, blockSizes, ragDebug } = await constructGeminiPrompt(
+        const { prompt: contextPrompt, staticContext, oocDirectivesBlock, profileLine, blockSizes, ragDebug, groundedEntityIds } = await constructGeminiPrompt(
             preCallState.gameHistory,
             preCallState.gameWorld,
             preCallState.character,
@@ -1033,7 +1070,7 @@ export const useGeminiClient = () => {
         const recentPlayerInputs = [
             ...preCallState.gameHistory.history
                 .filter(m => m.role === Role.USER && isNarrativeMessage(m))
-                .slice(-3)
+                .slice(-10)   // v1.52: was -3; a few dialogue-only inputs flipped the narrator
                 .map(m => m.text),
         ];
         const narrationPerson = resolveNarrationPerson(
@@ -1969,6 +2006,74 @@ turn is anything their Actual Core describes, you are writing the mask.`;
         }
 
         // ------------------------------------------------------------------
+        // v1.52: RECORD CHECK — a dormant NPC brought on this turn without
+        // their record in the prompt gets described from nothing (Elowen
+        // Sarath, an elf of thirty-three, written as a sixty-year-old
+        // hare-kin). Resample once with the records; keep the retry unless it
+        // failed. Per-NPC cooldown so a recurring name can't re-roll every turn.
+        // ------------------------------------------------------------------
+        let recordChecked = false;
+        {
+            const recentTexts = [
+                ...preCallState.gameHistory.history
+                    .filter(m => isNarrativeMessage(m))
+                    .slice(-RECORD_CHECK_RECENT_MESSAGES)
+                    .map(m => m.text),
+                text,
+            ];
+            const thisTurnN = preCallState.gameHistory.turnCount ?? 0;
+            const found = findUngroundedIntroductions(
+                response.narrative ?? '',
+                preCallState.gameWorld.knownEntities ?? [],
+                new Set(groundedEntityIds ?? []),
+                recentTexts,
+            ).filter(e => {
+                const last = recordCheckLastTurn.get(e.id);
+                return last === undefined || thisTurnN - last >= RECORD_CHECK_COOLDOWN_TURNS;
+            });
+            if (found.length > 0) {
+                recordChecked = true;
+                for (const e of found) recordCheckLastTurn.set(e.id, thisTurnN);
+                setGameHistory(prev => ({
+                    ...prev,
+                    debugLog: [...prev.debugLog, {
+                        timestamp: new Date().toISOString(),
+                        message: `[RECORD CHECK — v1.52] ${found.map(e => e.name).join(', ')} brought on without a record in the prompt — resampling once with their records.`,
+                        type: 'warning',
+                    }],
+                }));
+                const retry = await service.sendMessage(
+                    fullSystemPrompt,
+                    turnHistory,
+                    preCallState.gameHistory.lastActiveSummary,
+                    preCallState.gameWorld.bannedNameMap ?? {},
+                    buildTrailer(buildRecordCheckReminder(found)),
+                    turnSchema,
+                    contextPrompt,
+                    staticContext,
+                    turnThinking,
+                );
+                if (latestRequestId.current !== requestId) {
+                    console.log("Discarding stale record-check resample", requestId);
+                    return;
+                }
+                const ok = !retry.engineError && typeof retry.narrative === 'string' && retry.narrative.trim().length > 0;
+                if (ok) response = retry;
+                setGameHistory(prev => ({
+                    ...prev,
+                    debugLog: [...prev.debugLog, {
+                        timestamp: new Date().toISOString(),
+                        message: ok
+                            ? `[RECORD CHECK — v1.52] Resample accepted — written from the records.`
+                            : `[RECORD CHECK — v1.52] Resample failed — keeping the original turn.`,
+                        type: ok ? 'success' : 'warning',
+                    }],
+                }));
+            }
+        }
+
+
+        // ------------------------------------------------------------------
         // v1.30: SELF-REPETITION GUARD
         //
         // Runs AFTER the drift path, on whatever narrative survived it — a
@@ -2043,6 +2148,67 @@ turn is anything their Actual Core describes, you are writing the mask.`;
                     }
                 ]
             }));
+        }
+
+        // ------------------------------------------------------------------
+        // v1.52: VERBATIM ECHO GUARD — a single sentence copied from up to
+        // ten turns back, which the whole-turn overlap above can't see. One
+        // resample, kept only if the echo is gone or shorter. Skipped when the
+        // repetition guard already re-rolled this turn.
+        // ------------------------------------------------------------------
+        if (!repetition.repeated && !recordChecked) {
+            const echoPriors = preCallState.gameHistory.history
+                .filter(m => m.role === Role.MODEL && isNarrativeMessage(m))
+                .slice(-ECHO_LOOKBACK)
+                .map(m => m.text);
+            const playerTexts = [
+                ...preCallState.gameHistory.history
+                    .filter(m => m.role === Role.USER && isNarrativeMessage(m))
+                    .slice(-ECHO_LOOKBACK)
+                    .map(m => m.text),
+                text,
+            ];
+            const echo = detectVerbatimEcho(response.narrative, echoPriors, playerTexts);
+            if (echo.echoed) {
+                setGameHistory(prev => ({
+                    ...prev,
+                    debugLog: [...prev.debugLog, {
+                        timestamp: new Date().toISOString(),
+                        message: `[ECHO — v1.52] ${echo.words}-word run copied from ${echo.distance} turn(s) back: "${echo.fragment.slice(0, 120)}…" — resampling once.`,
+                        type: 'warning',
+                    }],
+                }));
+                const retry = await service.sendMessage(
+                    fullSystemPrompt,
+                    turnHistory,
+                    preCallState.gameHistory.lastActiveSummary,
+                    preCallState.gameWorld.bannedNameMap ?? {},
+                    buildTrailer(buildEchoReminder(echo)),
+                    turnSchema,
+                    contextPrompt,
+                    staticContext,
+                    turnThinking,
+                );
+                if (latestRequestId.current !== requestId) {
+                    console.log("Discarding stale echo resample", requestId);
+                    return;
+                }
+                const after = retry.engineError ? null : detectVerbatimEcho(retry.narrative, echoPriors, playerTexts);
+                const better = after !== null && (!after.echoed || after.words < echo.words);
+                if (better) response = retry;
+                setGameHistory(prev => ({
+                    ...prev,
+                    debugLog: [...prev.debugLog, {
+                        timestamp: new Date().toISOString(),
+                        message: after === null
+                            ? `[ECHO — v1.52] Resample failed — keeping the original turn.`
+                            : better
+                                ? `[ECHO — v1.52] Resample accepted — ${echo.words} → ${after.echoed ? after.words : 0} copied words.`
+                                : `[ECHO — v1.52] Resample copied as much (${after.words}) — keeping the original turn.`,
+                        type: better ? 'success' : 'warning',
+                    }],
+                }));
+            }
         }
 
         // ------------------------------------------------------------------

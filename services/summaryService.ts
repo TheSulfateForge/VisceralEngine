@@ -55,8 +55,8 @@ export class SummaryService {
     ) {}
 
     /** Legacy string-only path — kept for any remaining callers. */
-    async summarizeHistory(history: ChatMessage[]): Promise<string> {
-        const result = await this.summarizeHistoryWithSalvage(history);
+    async summarizeHistory(history: ChatMessage[], pcName?: string): Promise<string> {
+        const result = await this.summarizeHistoryWithSalvage(history, pcName);
         return result.summary;
     }
 
@@ -65,13 +65,20 @@ export class SummaryService {
      * the same call. Same latency, same price bracket, closes the "narrated
      * but never recorded" memory leak.
      */
-    async summarizeHistoryWithSalvage(history: ChatMessage[]): Promise<SummaryWithSalvage> {
+    async summarizeHistoryWithSalvage(history: ChatMessage[], pcName?: string): Promise<SummaryWithSalvage> {
         try {
             const textContent = history.map(h => `${h.role}: ${h.text}`).join('\n');
+            // v1.52: name the player character. Narration in this engine is
+            // often first person, so the logs never say who "I" is — and the
+            // 2026-11-07 Westcross save's summaries and salvaged memories
+            // called Ryan Westcross "Aldric", a name from nowhere.
+            const who = pcName?.trim()
+                ? `\nTHE PLAYER CHARACTER IS ${pcName.trim()}. "user" lines are ${pcName.trim()}'s actions and speech; "I", "me" and "my" in "model" narration also mean ${pcName.trim()}. Refer to the player character as ${pcName.trim()} — never by any other name, and never invent one.\n`
+                : '';
             const response = await this.ai.models.generateContent({
                 model: this.modelName,
                 contents: `You are the archival subsystem of an RPG simulation engine. Process the session logs below.
-
+${who}
 1. Write a concise narrative summary (max 300 words): key events, injuries, location changes, relationship shifts.
 2. Extract 0-3 memory candidates: PERMANENT facts a future narrator must not lose (vows, oaths, debts, deaths, reveals, major acquisitions, identity facts). One self-contained sentence each. Skip routine actions and transient states. If nothing qualifies, return an empty array — most windows have 0-1.
 

@@ -33,13 +33,13 @@ export class GeminiService extends GeminiClient {
 
     // Facade Methods
 
-    async summarizeHistory(history: ChatMessage[]): Promise<string> {
-        return this.summaryService.summarizeHistory(history);
+    async summarizeHistory(history: ChatMessage[], pcName?: string): Promise<string> {
+        return this.summaryService.summarizeHistory(history, pcName);
     }
 
     // v1.24: summary + salvaged memory candidates in one call
-    async summarizeHistoryWithSalvage(history: ChatMessage[]) {
-        return this.summaryService.summarizeHistoryWithSalvage(history);
+    async summarizeHistoryWithSalvage(history: ChatMessage[], pcName?: string) {
+        return this.summaryService.summarizeHistoryWithSalvage(history, pcName);
     }
 
     async generateScenarios(character: Character, seedBrief?: string): Promise<Scenario[]> {

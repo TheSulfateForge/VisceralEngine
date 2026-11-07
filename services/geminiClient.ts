@@ -517,9 +517,15 @@ export class GeminiClient {
     // nearly every turn. Kept small because JSON field names legitimately
     // repeat inside one response. Providers that don't support a parameter
     // ignore it (no require_parameters is sent).
+    //
+    // v1.52: frequency_penalty REMOVED. It subtracts per occurrence, so over a
+    // 1,500–2,500-token JSON reply ordinary words ("the", "her") and the field
+    // names pile up penalty until the sampler reaches for rare tokens — the
+    // word salad at the end of long turns in the 2026-11-07 save ("heel-file
+    // woman", "four pounds bore-alkali"). presence_penalty is flat (once per
+    // token) and is kept, halved.
     if (this.provider === 'openrouter') {
-        chatConfig.frequencyPenalty = 0.1;
-        chatConfig.presencePenalty = 0.1;
+        chatConfig.presencePenalty = 0.05;
     }
 
     // v1.24: Any leftover dynamic remainder in the systemPrompt (legacy

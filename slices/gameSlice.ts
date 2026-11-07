@@ -14,6 +14,7 @@ import {
     WorldTime
 } from '../types';
 import { MODELS } from '../constants';
+import { deriveWorldTime } from '../utils/engine/timeUtils';
 
 // --- Initial States ---
 
@@ -24,13 +25,11 @@ export const DEFAULT_BIO: BioMonitor = {
     modifiers: { calories: 1.0, hydration: 1.0, stamina: 1.0, lactation: 1.0 }
 };
 
-export const DEFAULT_TIME: WorldTime = {
-    totalMinutes: 540, // 09:00 AM on Day 1
-    day: 1,
-    hour: 9,
-    minute: 0,
-    display: "Day 1, 09:00"
-};
+// v1.52: built from deriveWorldTime so a new game starts with every calendar
+// field (year, month, dayOfMonth, dayOfYear, season) and the current display
+// format. The old literal predated the 360-day calendar and left those
+// fields undefined until the clock first advanced.
+export const DEFAULT_TIME: WorldTime = deriveWorldTime(540); // 09:00 on Day 1
 
 export const EMPTY_CHARACTER: Character = {
     name: "", gender: "", appearance: "", notableFeatures: "", race: "", backstory: "", setting: "",
