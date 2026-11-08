@@ -1,5 +1,6 @@
 
 import { GoogleGenAI, GenerateContentResponse, Schema } from "@google/genai";
+import { normaliseSingleQuotedDialogue } from '../utils/engine/dialogueQuotes';
 import { GEMINI_SAFETY_SETTINGS, THINKING_DEFAULTS } from "../constants";
 import { ChatMessage, Role, ModelResponseSchema, SCENE_MODES, SceneMode, Lighting, LIGHTING_LEVELS,
     MontageBlock, MontageType, ProposedMemory, ProposedTrauma, ProposedSkillUpdate, ProposedNpcDelta, TokenUsage,
@@ -156,7 +157,9 @@ export class GeminiClient {
         thought_process: asString(safeData.thought_process, "Analysis protocol bypassed."),
         scene_mode: scene_mode,
         tension_level: asNumber(safeData.tension_level, 0),
-        narrative: asString(safeData.narrative, "System Error: Narrative missing."),
+        // v1.53: single-quoted dialogue rewritten to double quotes so every
+        // speech-aware check (time floor, POV, voice lock) can see it.
+        narrative: normaliseSingleQuotedDialogue(asString(safeData.narrative, "System Error: Narrative missing.")),
         
         time_passed_minutes: asNumber(safeData.time_passed_minutes, 0),
         

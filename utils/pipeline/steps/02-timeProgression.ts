@@ -1,5 +1,6 @@
 import type { PipelineStep, TurnContext } from '../types';
 import { calculateTimeDelta, updateTime, deriveTimePhase, estimateTimeFloor, estimateActivityMinutes, checkNarratedClock } from '../../engine';
+import { inferLocationMove } from '../../engine/locationGraph';
 
 /**
  * Step 1: Time Pipeline (v1.19.1: scene-mode-aware clamping)
@@ -14,6 +15,30 @@ export const timeProgressionStep: PipelineStep = {
         const hasSleep = (r.biological_inputs?.sleep_hours ?? 0) > 0;
         const isCombat = r.scene_mode === 'COMBAT';
         const isSocial = r.scene_mode === 'SOCIAL';
+
+        // v1.53: the model often never reports a move. Infer it from the
+        // player's input and the narration against the location graph, and
+        // write it back as the turn's location_update so this step's travel
+        // floor and step 06's graph/presence logic both see it.
+        if (!r.location_update?.location_name?.trim() && !hasSleep) {
+            const move = inferLocationMove(
+                ctx.previousWorld.locationGraph,
+                r.narrative ?? '',
+                ctx.playerInput ?? '',
+                ctx.previousWorld.location ?? '',
+            );
+            if (move) {
+                r.location_update = {
+                    location_name: move.location_name,
+                    ...(move.travelled && ctx.previousWorld.location ? { traveled_from: ctx.previousWorld.location } : {}),
+                };
+                ctx.debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    message: `[LOCATION INFERRED — v1.53] No location_update from the model; ${move.reason}.`,
+                    type: 'info'
+                });
+            }
+        }
 
         // v1.51: raise the model's figure to what the turn actually contained
         // (speech at ~150 wpm, real travel). Sleep turns keep their own path.

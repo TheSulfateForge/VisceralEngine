@@ -259,6 +259,12 @@ export const trimHiddenRegistry = (registry: string): string => {
 // ────────────────────────────────────────────────────────────────────────────
 
 export const SPOKEN_WORDS_PER_MINUTE = 150;
+/**
+ * v1.53: each line of dialogue also costs a pause — the beat before a reply,
+ * a look, a sip. 150 wpm alone timed a 16-turn garden party (2,795 spoken
+ * words) at under 19 minutes. 15 s per line puts the same party near an hour.
+ */
+export const UTTERANCE_PAUSE_MINUTES = 0.25;
 export const TRAVEL_FLOOR_MINUTES = 15;
 export const LONG_ROUTE_FLOOR_MINUTES = 30;
 
@@ -266,6 +272,12 @@ const QUOTED_RE = /["“]([^"“”]{1,4000})["”]/g;
 const ITALIC_RE = /(?:^|[^*])\*([^*\n]{3,4000})\*(?!\*)/g;
 
 const countWords = (s: string): number => (s.match(/[A-Za-z0-9'’-]+/g) ?? []).length;
+
+/** v1.53: number of separate spoken lines (quoted spans) in this narrative. */
+export const countUtterances = (narrative: string): number => {
+    QUOTED_RE.lastIndex = 0;
+    return ((narrative ?? '').match(QUOTED_RE) ?? []).length;
+};
 
 /** Words spoken aloud or read out in this narrative. */
 export const countSpokenWords = (narrative: string): number => {
@@ -296,10 +308,11 @@ export const estimateTimeFloor = (
     let floor = 0;
 
     const spoken = countSpokenWords(narrative ?? '');
-    const speechMin = Math.floor(spoken / SPOKEN_WORDS_PER_MINUTE);
+    const lines = countUtterances(narrative ?? '');
+    const speechMin = Math.floor(spoken / SPOKEN_WORDS_PER_MINUTE + lines * UTTERANCE_PAUSE_MINUTES);
     if (speechMin > 0) {
         floor = speechMin;
-        reasons.push(`${spoken} words spoken/read aloud ≈ ${speechMin}m`);
+        reasons.push(`${spoken} words in ${lines} spoken line(s) ≈ ${speechMin}m`);
     }
 
     // v1.52: what the player said they're doing takes time too.
@@ -365,6 +378,8 @@ export const ACTIVITY_RULES: ActivityRule[] = [
     { re: /\b(?:get(?:s|ting)?\s+dressed|dress(?:es|ed)?\s+(?:myself|for)|put(?:s|ting)?\s+on\s+(?:my|the)\s+(?:clothes|armou?r|coat|boots|uniform))\b/i, minutes: 5, label: 'dressing' },
     { re: /\b(?:breakfast|lunch|luncheon|dinner|supper|(?:eat|eats|ate|eating)\s+(?:a|my|the|some)\s+(?:meal|food|breakfast|lunch|dinner|supper))\b/i, minutes: 20, label: 'meal' },
     { re: /\b(?:wash(?:es|ed|ing)?\s+(?:up|myself|my\s+face|my\s+hands))\b/i, minutes: 5, label: 'washing' },
+    // v1.53: practice sessions ("take up my bow and quiver… head down to the back to shoot").
+    { re: /\b(?:practi[cs](?:e|es|ed|ing)|train(?:s|ed|ing)?|drill(?:s|ed|ing)?|spar(?:s|red|ring)?|shoot(?:s|ing)?\s+(?:at\s+)?(?:targets?|butts|arrows)|(?:take|takes|took|taking)\s+up\s+my\s+(?:bow|sword|blade|spear|staff))\b/i, minutes: 30, label: 'practice' },
 ];
 
 /** Cap on the activity floor so a long list of chores can't eat a day. */

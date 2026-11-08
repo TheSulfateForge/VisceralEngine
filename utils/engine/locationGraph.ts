@@ -421,3 +421,112 @@ export const deduplicateLocationGraph = (
 
     return { nodes, edges, playerLocationId };
 };
+
+// ============================================================================
+// v1.53: INFER A MOVE THE MODEL DIDN'T REPORT
+//
+// The 2026-11-08 Westcross save never once received a location_update. The
+// world location stayed "" for the whole session — through a garden party at
+// the Drevast property, a carriage ride home and a walk to the back yard — so
+// the v1.51 travel floor never ran (the ride home took one minute), the scene
+// ledger saw one endless static scene, and inferPlayerLocation was a stub that
+// returned its input.
+//
+// This reads the player's input and the narration against the location graph:
+//   1. The player states travel to a known place ("head back to the town
+//      house") → that place.
+//   2. The narration has the player arrive at a known place by full name
+//      ("we pulled up at the Westcross Townhouse") → that place.
+//   3. The location is unset and the narration names a known place → that
+//      place (no travel time — it's where the scene already is).
+// Matching is by full name; a place's last word alone ("townhouse") counts only
+// in the player's own travel phrase, and only when no other place shares it.
+// ============================================================================
+
+const NOT_A_PLACE_RE = /\b(?:population|demographics|history|overview|timeline|calendar)\b/i;
+
+// Strong travel cues only. "go to the window" is not a trip; "head back to",
+// "ride to", "the carriage" are.
+const STRONG_TRAVEL_RE = /\b(?:head(?:s|ed|ing)?\s+(?:back|home|out|over|off|down|up|to|toward|towards|for)|ride|rides|riding|rode|drive|drives|driving|drove|travel(?:s|led|ling|ed|ing)?|carriage|coach|leave(?:s)?\s+for|set(?:s|ting)?\s+off|return(?:s|ed|ing)?\s+to|go(?:es|ing)?\s+(?:back|home)|went\s+(?:back|home)|make\s+my\s+way|making\s+my\s+way)\b/i;
+
+const ARRIVAL_RE = String.raw`(?:arriv\w*\s+(?:at|in)|reach\w*|pull\w*\s+up\s+(?:at|before|outside)|back\s+(?:at|in|inside)|return\w*\s+to|through\s+the\s+gates?\s+of|in\s+through\s+the\s+door\s+of|step\w*\s+into|walk\w*\s+into)`;
+
+const escapeLocRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Regex body for a place's core name, letting compound words split ("town house"). */
+const corePattern = (core: string): string =>
+    core.split(/\s+/).map(w => escapeLocRe(w).replace(/(house|field|brook|mere|cross|stone|wall|gate|hold|moot)$/i, '\\s?$1')).join('\\s+');
+
+const coreName = (displayName: string) => displayName.replace(/^the\s+/i, '').trim();
+const sameLocation = (a: string, b: string) => coreName(a).toLowerCase() === coreName(b).toLowerCase();
+
+export interface InferredMove {
+    location_name: string;
+    /** True when the player travelled (time floor applies); false for an unset location being filled in. */
+    travelled: boolean;
+    reason: string;
+}
+
+export const inferLocationMove = (
+    graph: LocationGraph | undefined,
+    narrative: string,
+    playerInput: string,
+    currentLocation: string,
+): InferredMove | null => {
+    const nodes = Object.values(graph?.nodes ?? {}).filter(n => n.displayName && !NOT_A_PLACE_RE.test(n.displayName));
+    if (nodes.length === 0) return null;
+
+    const lastWordCounts = new Map<string, number>();
+    for (const n of nodes) {
+        const last = coreName(n.displayName).split(/\s+/).pop()!.toLowerCase();
+        lastWordCounts.set(last, (lastWordCounts.get(last) ?? 0) + 1);
+    }
+    const input = playerInput ?? '';
+    const text = narrative ?? '';
+    const current = currentLocation ?? '';
+
+    // 1. Player travel to a named place. Best match wins: a full name beats a
+    //    last-word match, and a longer last-word match beats a shorter one —
+    //    "back to the town house" is the Townhouse, not Aldwyn House.
+    if (STRONG_TRAVEL_RE.test(input)) {
+        let best: { n: LocationNode; score: number } | null = null;
+        for (const n of nodes) {
+            if (current && sameLocation(n.displayName, current)) continue;
+            const core = coreName(n.displayName);
+            const full = new RegExp(`\\b${corePattern(core)}\\b`, 'i').exec(input);
+            let score = full ? 1000 + full[0].length : 0;
+            if (!score) {
+                const last = core.split(/\s+/).pop()!;
+                const uniqueLast = (lastWordCounts.get(last.toLowerCase()) ?? 0) === 1 && last.length >= 5;
+                if (uniqueLast) {
+                    const head = new RegExp(
+                        String.raw`\b(?:to|toward|towards|for|back\s+to|home\s+to)\s+(?:the\s+)?(?:[\w'’-]+\s+){0,2}?(${corePattern(last)})\b`, 'i',
+                    ).exec(input);
+                    if (head) score = head[1].length;
+                }
+            }
+            if (score && (!best || score > best.score)) best = { n, score };
+        }
+        if (best) return { location_name: best.n.displayName, travelled: true, reason: `player travels to ${best.n.displayName}` };
+    }
+
+    // 2. Narrated arrival at a named place.
+    for (const n of nodes) {
+        if (current && sameLocation(n.displayName, current)) continue;
+        const re = new RegExp(`${ARRIVAL_RE}\\s+(?:the\\s+)?${corePattern(coreName(n.displayName))}\\b`, 'i');
+        if (re.test(text)) {
+            return { location_name: n.displayName, travelled: true, reason: `narration arrives at ${n.displayName}` };
+        }
+    }
+
+    // 3. Unset location: first known place the narration names.
+    if (!current.trim()) {
+        let best: { n: LocationNode; at: number } | null = null;
+        for (const n of nodes) {
+            const m = new RegExp(`\\b${corePattern(coreName(n.displayName))}\\b`, 'i').exec(text);
+            if (m && (best === null || m.index < best.at)) best = { n, at: m.index };
+        }
+        if (best) return { location_name: best.n.displayName, travelled: false, reason: `location was unset; narration names ${best.n.displayName}` };
+    }
+    return null;
+};
