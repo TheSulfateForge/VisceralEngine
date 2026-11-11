@@ -43,6 +43,13 @@ export const timeProgressionStep: PipelineStep = {
         // v1.51: raise the model's figure to what the turn actually contained
         // (speech at ~150 wpm, real travel). Sleep turns keep their own path.
         let requested = r.time_passed_minutes;
+        if (r.time_passed_raw !== undefined) {
+            ctx.debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[TIME — v1.55] Model sent time_passed_minutes as ${r.time_passed_raw} (not a number); read as +${requested ?? 0}m.`,
+                type: 'info'
+            });
+        }
         // v1.54: sleep_hours set but time_passed_minutes left at 0/short used
         // to advance the clock by nothing (the sleep floor is 0). The hours
         // slept ARE the elapsed time.

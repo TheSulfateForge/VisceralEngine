@@ -1,6 +1,7 @@
 
 import { GoogleGenAI, GenerateContentResponse, Schema } from "@google/genai";
 import { normaliseSingleQuotedDialogue } from '../utils/engine/dialogueQuotes';
+import { parseLooseDuration } from '../utils/engine/looseNumber';
 import { GEMINI_SAFETY_SETTINGS, THINKING_DEFAULTS } from "../constants";
 import { ChatMessage, Role, ModelResponseSchema, SCENE_MODES, SceneMode, Lighting, LIGHTING_LEVELS,
     SCENE_TIME_PHASES, type SceneTimePhase, TIME_MODES, type TimeMode,
@@ -162,12 +163,14 @@ export class GeminiClient {
         // speech-aware check (time floor, POV, voice lock) can see it.
         narrative: normaliseSingleQuotedDialogue(asString(safeData.narrative, "System Error: Narrative missing.")),
         
-        time_passed_minutes: asNumber(safeData.time_passed_minutes, 0),
+        // v1.55: DeepSeek writes "~20" / "15-20" / "an hour" — read what it meant.
+        time_passed_minutes: Math.max(0, Math.round(parseLooseDuration(safeData.time_passed_minutes, 'minutes') ?? 0)),
+        ...(typeof safeData.time_passed_minutes !== 'number' ? { time_passed_raw: JSON.stringify(safeData.time_passed_minutes ?? null) } : {}),
         
         biological_inputs: isObject(safeData.biological_inputs) ? {
             ingested_calories: asNumber(safeData.biological_inputs.ingested_calories, undefined),
             ingested_water: asNumber(safeData.biological_inputs.ingested_water, undefined),
-            sleep_hours: asNumber(safeData.biological_inputs.sleep_hours, undefined),
+            sleep_hours: parseLooseDuration(safeData.biological_inputs.sleep_hours, 'hours'),
             relieved_pressure: asArray(safeData.biological_inputs.relieved_pressure)
         } : undefined,
 
@@ -252,7 +255,7 @@ export class GeminiClient {
                 .filter((s: unknown): s is string => typeof s === 'string'),
             traveled_from: typeof safeData.location_update.traveled_from === 'string' && safeData.location_update.traveled_from.trim()
                 ? safeData.location_update.traveled_from : undefined,
-            travel_time_minutes: asOptionalNumber(safeData.location_update.travel_time_minutes),
+            travel_time_minutes: parseLooseDuration(safeData.location_update.travel_time_minutes, 'minutes'),
             nearby_locations: asArray<{ name: string; travel_time_minutes: number; mode?: string }>(
                 safeData.location_update.nearby_locations
             ).map((loc: unknown) => {

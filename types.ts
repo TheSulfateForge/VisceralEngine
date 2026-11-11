@@ -1075,6 +1075,8 @@ export interface ModelResponseSchema {
     // absent the engine derives it from scene_mode. Drives time caps + pipeline
     // gating, not tone.
     time_mode?: TimeMode;
+    /** v1.55: the model's time_passed_minutes as sent, when it was not a number (debug only). */
+    time_passed_raw?: string;
 
     /**
      * v1.31: 0-2 short clauses naming what this turn established and therefore
