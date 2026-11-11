@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { parseLooseDuration } from '../utils/engine/looseNumber';
-import { estimateActivityMinutes } from '../utils/engine/timeUtils';
 import { GeminiClient } from '../services/geminiClient';
 
 describe('v1.55 — loose durations from the model', () => {
@@ -27,22 +26,5 @@ describe('v1.55 — loose durations from the model', () => {
         expect(r.time_passed_minutes).toBe(18);
         expect(r.biological_inputs?.sleep_hours).toBe(8);
         expect(r.location_update?.travel_time_minutes).toBe(30);
-    });
-});
-
-describe('v1.55 — the Westcross dawn turns have a time floor', () => {
-    const turns: Array<[string, number]> = [
-        ['I rise and dress in loose thick black linen trousers, I put on a light cotton tunic, my belt with knife and remain barefoot. I head down stairs to the kitchen and start a pot of coffee.', 15],
-        ['I take my mug of coffee and walk out into the back garden and slowly walk it enjoying the fact that the noble quarter was still asleep and the city was asleep. And walked it while sipping my coffee.', 15],
-        ['I head back into the kitchen to pour another cup of coffee.', 5],
-        ['I head into the solarium to sit and read while sipping my coffee', 30],
-    ];
-    for (const [input, atLeast] of turns) {
-        it(input.slice(0, 50), () => {
-            expect(estimateActivityMinutes(input).minutes).toBeGreaterThanOrEqual(atLeast);
-        });
-    }
-    it('a line of speech is not an activity', () => {
-        expect(estimateActivityMinutes('"Have you read the book?" I ask.').minutes).toBe(0);
     });
 });

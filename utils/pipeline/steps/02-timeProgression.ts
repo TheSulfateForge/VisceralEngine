@@ -8,6 +8,9 @@ import { inferLocationMove } from '../../engine/locationGraph';
  * Calculates time delta based on scene mode and sleep inputs,
  * then updates the world time.
  */
+/** v1.56: minutes for a turn whose time_passed_minutes was omitted. */
+export const OMITTED_TIME_BEAT_MINUTES = { NARRATIVE: 5, SOCIAL: 3, TENSION: 2, COMBAT: 1 } as const;
+
 export const timeProgressionStep: PipelineStep = {
     name: '02-timeProgression',
     execute: (ctx: TurnContext): TurnContext => {
@@ -43,10 +46,38 @@ export const timeProgressionStep: PipelineStep = {
         // v1.51: raise the model's figure to what the turn actually contained
         // (speech at ~150 wpm, real travel). Sleep turns keep their own path.
         let requested = r.time_passed_minutes;
+        if (r.time_beats && r.time_beats.length > 0) {
+            ctx.debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[TIME BEATS — v1.57] ${r.time_beats.map(b => `${b.beat} ${b.minutes}m`).join(' · ')} = +${requested ?? 0}m`,
+                type: 'info'
+            });
+        }
+        if (r.activity_estimate && r.activity_estimate.minutes > 0) {
+            ctx.debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[ACTIVITY FLOOR — v1.57] Player's actions match: ${r.activity_estimate.labels.join(', ')} → ≥${r.activity_estimate.minutes}m.`,
+                type: 'info'
+            });
+        }
         if (r.time_passed_raw !== undefined) {
             ctx.debugLogs.push({
                 timestamp: new Date().toISOString(),
                 message: `[TIME — v1.55] Model sent time_passed_minutes as ${r.time_passed_raw} (not a number); read as +${requested ?? 0}m.`,
+                type: 'info'
+            });
+        }
+        // v1.56: an OMITTED figure is not a claim that no time passed. The
+        // 2026-11-11 Westcross save: 13 of 16 turns came back with no
+        // time_passed_minutes at all, and every one the floors didn't
+        // recognise ("I cock my head", "I find a book") became +1m. Use a
+        // modest per-mode beat; the floors below still raise it.
+        if (r.time_passed_raw === 'null' && !hasSleep && (requested ?? 0) === 0) {
+            const beat = OMITTED_TIME_BEAT_MINUTES[r.scene_mode as keyof typeof OMITTED_TIME_BEAT_MINUTES] ?? OMITTED_TIME_BEAT_MINUTES.NARRATIVE;
+            requested = beat;
+            ctx.debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[TIME — v1.56] No time_passed_minutes from the model; using the ${r.scene_mode ?? 'NARRATIVE'} beat of +${beat}m before floors.`,
                 type: 'info'
             });
         }
@@ -69,7 +100,8 @@ export const timeProgressionStep: PipelineStep = {
                 r.narrative ?? '',
                 ctx.playerInput ?? '',
                 r.location_update,
-                ctx.previousWorld.location ?? ''
+                ctx.previousWorld.location ?? '',
+                r.activity_estimate
             );
             if (floor > (requested ?? 0)) {
                 ctx.debugLogs.push({
@@ -105,7 +137,7 @@ export const timeProgressionStep: PipelineStep = {
         let finalDelta = delta;
         let clockConflict: string | undefined;
         if (!hasSleep) {
-            const act = estimateActivityMinutes(ctx.playerInput ?? '');
+            const act = r.activity_estimate ?? estimateActivityMinutes(ctx.playerInput ?? '');
             if (act.minutes > finalDelta) {
                 ctx.debugLogs.push({
                     timestamp: new Date().toISOString(),

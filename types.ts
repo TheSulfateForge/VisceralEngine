@@ -1077,6 +1077,10 @@ export interface ModelResponseSchema {
     time_mode?: TimeMode;
     /** v1.55: the model's time_passed_minutes as sent, when it was not a number (debug only). */
     time_passed_raw?: string;
+    /** v1.57: the model's itemised time — each beat of the turn with its minutes. Summed into time_passed_minutes by the parser. */
+    time_beats?: Array<{ beat: string; minutes: number }>;
+    /** v1.57: engine-side activity floor from the player's input (embedding match). Not from the model. */
+    activity_estimate?: { minutes: number; labels: string[] };
 
     /**
      * v1.31: 0-2 short clauses naming what this turn established and therefore

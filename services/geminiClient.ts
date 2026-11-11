@@ -163,9 +163,29 @@ export class GeminiClient {
         // speech-aware check (time floor, POV, voice lock) can see it.
         narrative: normaliseSingleQuotedDialogue(asString(safeData.narrative, "System Error: Narrative missing.")),
         
-        // v1.55: DeepSeek writes "~20" / "15-20" / "an hour" — read what it meant.
-        time_passed_minutes: Math.max(0, Math.round(parseLooseDuration(safeData.time_passed_minutes, 'minutes') ?? 0)),
-        ...(typeof safeData.time_passed_minutes !== 'number' ? { time_passed_raw: JSON.stringify(safeData.time_passed_minutes ?? null) } : {}),
+        // v1.57: itemised beats are the primary time source — their sum IS
+        // time_passed_minutes. v1.55: a loose single figure ("~20", "an hour")
+        // is the fallback; time_passed_raw records a non-number for the log.
+        ...((): Pick<ModelResponseSchema, 'time_passed_minutes' | 'time_passed_raw' | 'time_beats'> => {
+            const beats = Array.isArray(safeData.time_beats)
+                ? (safeData.time_beats as unknown[])
+                    .filter(isObject)
+                    .map(b => ({
+                        beat: typeof b.beat === 'string' ? b.beat.trim().slice(0, 80) : '',
+                        minutes: parseLooseDuration(b.minutes, 'minutes'),
+                    }))
+                    .filter((b): b is { beat: string; minutes: number } => !!b.beat && b.minutes !== undefined && b.minutes >= 0)
+                    .map(b => ({ beat: b.beat, minutes: Math.round(b.minutes) }))
+                    .slice(0, 12)
+                : [];
+            if (beats.length > 0) {
+                return { time_passed_minutes: beats.reduce((s, b) => s + b.minutes, 0), time_beats: beats };
+            }
+            return {
+                time_passed_minutes: Math.max(0, Math.round(parseLooseDuration(safeData.time_passed_minutes, 'minutes') ?? 0)),
+                ...(typeof safeData.time_passed_minutes !== 'number' ? { time_passed_raw: JSON.stringify(safeData.time_passed_minutes ?? null) } : {}),
+            };
+        })(),
         
         biological_inputs: isObject(safeData.biological_inputs) ? {
             ingested_calories: asNumber(safeData.biological_inputs.ingested_calories, undefined),

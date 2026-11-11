@@ -303,6 +303,8 @@ export const estimateTimeFloor = (
     playerInput: string,
     locationUpdate: { location_name?: string; traveled_from?: string; travel_time_minutes?: number } | undefined,
     previousLocation: string,
+    /** v1.57: the embedding-matched activity floor; the regex table is the fallback. */
+    activity?: { minutes: number; labels: string[] },
 ): TimeFloor => {
     const reasons: string[] = [];
     let floor = 0;
@@ -316,7 +318,7 @@ export const estimateTimeFloor = (
     }
 
     // v1.52: what the player said they're doing takes time too.
-    const act = estimateActivityMinutes(playerInput ?? '');
+    const act = activity ?? estimateActivityMinutes(playerInput ?? '');
     if (act.minutes > floor) {
         floor = act.minutes;
         reasons.push(`activities (${act.labels.join(', ')}) ≥ ${act.minutes}m`);
@@ -381,14 +383,6 @@ export const ACTIVITY_RULES: ActivityRule[] = [
     { re: /\b(?:get(?:s|ting)?\s+dressed|dress(?:es|ed)?\s+(?:myself|for)|put(?:s|ting)?\s+on\s+(?:my|the)\s+(?:clothes|armou?r|coat|boots|uniform))\b/i, minutes: 5, label: 'dressing' },
     { re: /\b(?:breakfast|lunch|luncheon|dinner|supper|(?:eat|eats|ate|eating)\s+(?:a|my|the|some)\s+(?:meal|food|breakfast|lunch|dinner|supper))\b/i, minutes: 20, label: 'meal' },
     { re: /\b(?:wash(?:es|ed|ing)?\s+(?:up|myself|my\s+face|my\s+hands))\b/i, minutes: 5, label: 'washing' },
-    // v1.55: the 2026-11-11 Westcross dawn sequence — dressing "in" clothes,
-    // making coffee, walking the garden, sitting down to read — matched none
-    // of the rules above, so the floor never caught the model's +0m.
-    { re: /\b(?:(?:rise|rises|rose|get\s+up|gets\s+up)\s+and\s+dress|dress(?:es|ed|ing)?\s+in\b)/i, minutes: 5, label: 'dressing' },
-    { re: /\b(?:(?:start|starts|started|make|makes|made|brew|brews|brewed|put\s+on|puts\s+on)\s+(?:a\s+|the\s+|some\s+)?(?:pot|kettle|cup|mug|batch)?\s*(?:of\s+)?(?:coffee|tea)|cook(?:s|ed|ing)?\s+(?:a|my|the|some)\b)/i, minutes: 10, label: 'brewing/cooking' },
-    { re: /\b(?:sip(?:s|ped|ping)?|drink(?:s|ing)?|drank)\b[^.]{0,30}\b(?:coffee|tea|cup|mug)\b|\b(?:pour(?:s|ed|ing)?)\s+(?:myself\s+)?(?:another|a\s+second|a)\s+(?:cup|mug)\b/i, minutes: 5, label: 'drink' },
-    { re: /\b(?:walk(?:s|ed|ing)?\s+(?:it|around|about|the\s+(?:garden|grounds|perimeter|yard|courtyard|halls?))|stroll(?:s|ed|ing)?|pac(?:e|es|ed|ing)\s+(?:the|around))\b/i, minutes: 15, label: 'walk' },
-    { re: /\b(?:sit(?:s|ting)?\s+(?:and|to)\s+read|settle(?:s|d)?\s+in\s+(?:to|with)\s+(?:a|the)\s+book|read(?:s|ing)?\s+(?:a|my|the)\s+(?:book|ledgers?|reports?|letters))\b/i, minutes: 30, label: 'reading' },
     // v1.53: practice sessions ("take up my bow and quiver… head down to the back to shoot").
     { re: /\b(?:practi[cs](?:e|es|ed|ing)|train(?:s|ed|ing)?|drill(?:s|ed|ing)?|spar(?:s|red|ring)?|shoot(?:s|ing)?\s+(?:at\s+)?(?:targets?|butts|arrows)|(?:take|takes|took|taking)\s+up\s+my\s+(?:bow|sword|blade|spear|staff))\b/i, minutes: 30, label: 'practice' },
 ];

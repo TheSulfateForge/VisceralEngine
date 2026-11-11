@@ -21,6 +21,12 @@ import { useGameStore } from '../store';
 import { SimulationEngine } from '../utils/simulationEngine';
 import { phaseAfterElapsed, parsePlayerTimeNote, resolvePlayerTimeNote, deriveWorldTime } from '../utils/engine/timeUtils';
 import { applySleepInference } from '../utils/engine/sleepInference';
+import { estimateActivityBySimilarity, type ActivityEstimate } from '../utils/engine/activityEstimate';
+import { embeddingService } from '../services/embeddingService';
+
+// v1.57: stable encoder reference so the activity anchors are embedded once.
+const encodeActivityTexts = (texts: string[]) => embeddingService.encodeBatch(texts);
+const ACTIVITY_ESTIMATE_WAIT_MS = 1500;
 import {
     detectPlayerFraming,
     containsMatureContent,
@@ -1358,6 +1364,11 @@ export const useGeminiClient = () => {
         }
         lastTurnRepeated = false;
 
+        // v1.57: match the player's actions to example activities while the
+        // model is writing — free by the time the reply lands. Never throws.
+        const activityEstimateP: Promise<ActivityEstimate | null> =
+            estimateActivityBySimilarity(text, encodeActivityTexts).catch(() => null);
+
         let response: ModelResponseSchema = await service.sendMessage(
             fullSystemPrompt,
             turnHistory,
@@ -2334,6 +2345,18 @@ turn is anything their Actual Core describes, you are writing the mask.`;
         // v1.54: supply sleep_hours for a declared sleep BEFORE the phase is
         // corrected — otherwise the model's correct "dawn" is overwritten with
         // the 1-minute clock's "evening". Uses the model's phase as a wake cue.
+        // v1.57: the activity floor for the time step (bounded wait; a slow
+        // or failed embedder just means the regex fallback is used).
+        const activityEstimate = await Promise.race([
+            activityEstimateP,
+            new Promise<null>(resolve => setTimeout(() => resolve(null), ACTIVITY_ESTIMATE_WAIT_MS)),
+        ]);
+        if (activityEstimate && activityEstimate.matches.length > 0) {
+            response.activity_estimate = {
+                minutes: activityEstimate.minutes,
+                labels: activityEstimate.matches.map(m => `${m.label} ${m.minutes}m`),
+            };
+        }
         const sleepLog = applySleepInference(
             response,
             text,

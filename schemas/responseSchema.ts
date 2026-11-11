@@ -31,9 +31,21 @@ export const RESPONSE_SCHEMA: Schema = {
       type: Type.STRING,
       description: "The main story content."
     },
+    time_beats: {
+        type: Type.ARRAY,
+        description: "v1.57: EVERY beat of this turn with its minutes, in order — the engine adds them up and this sum becomes the turn's time. One entry per thing that takes time: each action the player declared, each exchange of speech (~150 spoken words per minute), each walk or ride. A glance or a single line is 1; dressing 5-10; brewing coffee 10; a meal 20-30; reading or waiting for someone 30+; crossing a district 15-30. Sleep turns: list only the waking moment (sleep goes in sleep_hours).",
+        items: {
+            type: Type.OBJECT,
+            properties: {
+                beat: { type: Type.STRING },
+                minutes: { type: Type.INTEGER }
+            },
+            required: ["beat", "minutes"]
+        }
+    },
     time_passed_minutes: {
         type: Type.INTEGER,
-        description: "Minutes elapsed in THIS turn, counting EVERYTHING the narrative shows happening (v1.51). Do NOT add off-screen catch-up time. Add up the beat: spoken dialogue runs ~150 words per minute, so a long exchange of several speeches is 5-15, not 2; reading a letter aloud = 1-3 per page; a brief physical action (hug, hand something over, open a door) = 1-2; a routine task (dressing, a meal, a fitting) = 15-45; walking across a district = 15-30, and taking the long way, stopping to look or buy something = 30-60; a carriage across the city = 15-30. Sleep=420-480 ONLY with sleep_hours set. Combat round=1-5. The engine raises your number if the narrative contains more speech or travel than it covers, and caps SOCIAL turns at 15. Saying a single sentence is 1, not 15 — but a whole scene is never 1."
+        description: "OPTIONAL fallback — ignored when time_beats is given (v1.57). Minutes elapsed in THIS turn, counting EVERYTHING the narrative shows happening (v1.51). Do NOT add off-screen catch-up time. Add up the beat: spoken dialogue runs ~150 words per minute, so a long exchange of several speeches is 5-15, not 2; reading a letter aloud = 1-3 per page; a brief physical action (hug, hand something over, open a door) = 1-2; a routine task (dressing, a meal, a fitting) = 15-45; walking across a district = 15-30, and taking the long way, stopping to look or buy something = 30-60; a carriage across the city = 15-30. Sleep=420-480 ONLY with sleep_hours set. Combat round=1-5. The engine raises your number if the narrative contains more speech or travel than it covers, and caps SOCIAL turns at 15. Saying a single sentence is 1, not 15 — but a whole scene is never 1."
     },
     biological_inputs: {
         type: Type.OBJECT,
@@ -494,7 +506,9 @@ export const RESPONSE_SCHEMA: Schema = {
       required: ["npc_actions", "environment_changes", "emerging_threats"]
     }
   },
-  required: ["thought_process", "scene_mode", "scene_time_phase", "tension_level", "narrative", "world_tick"]
+  // v1.57: time_beats is required (v1.56 required time_passed_minutes) — with
+  // strict:false DeepSeek left a single optional number out of most replies.
+  required: ["thought_process", "scene_mode", "scene_time_phase", "tension_level", "time_beats", "narrative", "world_tick"]
 };
 
 // ============================================================================

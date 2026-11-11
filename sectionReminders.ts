@@ -402,8 +402,8 @@ Required structure:
 3. DO NOT populate roll_request, bargain_request, emerging_threats, or
    known_entity_updates. Dreams cannot seed waking-world state machines.
 4. End with the PC waking. Close with the marker "[/DREAM]".
-5. time_passed_minutes = 0-3 only (the waking moment; sleep time is already
-   counted by the engine).
+5. time_beats = one beat for the waking moment, 0-3 minutes (sleep time is
+   already counted by the engine).
 6. character_updates.trauma_delta is REQUIRED and must be non-zero:
    +5 to +15 for re-traumatising or unresolved dreams.
    -3 to -10 for dreams the character processes or integrates.

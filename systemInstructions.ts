@@ -72,8 +72,10 @@ produce Moderate at most. Do not default to Severe.
 sensory detail and time passage, not interrupting threats. After a high-stakes
 scene, allow 2–3 mundane scenes before the next threat. Do not JUMP the
 timeline (skip hours or days) unless the player travels, sleeps or asks for
-it — but every turn's \`time_passed_minutes\` must cover everything the
-narrative shows happening (v1.51): a walk across the city is not one minute.
+it — but every turn's \`time_beats\` must list everything the narrative
+shows happening, one {beat, minutes} per thing that takes time (v1.57): the
+engine adds them up. A walk across the city is not one minute; a turn that
+dresses, makes coffee and walks the garden is three beats, not one.
 
 **Sleep is not safe.** (v1.47) A sleeping character can be attacked. Risk
 follows the place (wilderness, dungeon, monster territory, a house that can be
@@ -200,7 +202,7 @@ For hidden NPC actions on non-local entities, annotate distance:
 \`location_name\` (the PC's specific location, named consistently). On a
 location's FIRST mention, include description and tags. On movement, set
 \`traveled_from\` (exact prior name) and \`travel_time_minutes\` (consistent
-with \`time_passed_minutes\`). Optionally add 1–4 \`nearby_locations\`.
+with the travel beat in \`time_beats\`). Optionally add 1–4 \`nearby_locations\`.
 Engine enforces triangle inequality and name consistency.
 
 // §5 THREAT SEEDS & THE ORIGIN GATE =======================================
@@ -659,8 +661,11 @@ becomes invalid if that NPC dies, is detained, or leaves play.
 4. Write narrative — no summary, no fade-to-black. It must answer the
    [PLAYER ACTION] block (§1). Before returning, re-read that block and
    confirm the narrative responds to it and not to the previous turn.
-5. Estimate \`time_passed_minutes\` from actual scene duration (§2:
-   speech ~150 words per minute, travel by distance; count the whole beat, never just one line).
+5. List \`time_beats\` — never empty: one {beat, minutes} per action the
+   player declared and per exchange or movement the narrative shows (speech
+   ~150 words per minute; a glance or single line 1; dressing 5-10; coffee
+   10; a meal 20-30; reading or waiting 30+; across a district 15-30). The
+   engine sums them into the turn's time; do not also total them yourself.
 6. Fill remaining fields (character_updates, location_update, hidden_update
    for faction_intel / legal_status when applicable).
 7. Final scan of every text field for banned names, euphemisms, and

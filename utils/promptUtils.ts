@@ -649,8 +649,8 @@ The character is going to sleep. Sleep is NOT a safe zone; nothing protects a sl
 1. RISK FOLLOWS PLACE. Open wilderness, a dungeon, a ruin, monster territory, a hostile district — that place's established dangers can find a sleeper. A house can be broken into.
 2. PRECAUTIONS COUNT. A locked or barred door, a watch kept, a hidden or warded camp, traps or alarms, a guard animal, allies on watch — whatever the character actually did lowers the odds and can give a chance to wake before contact (roll_request). No precautions, no such chance. Precautions the player did not state do not exist.
 3. DETERMINED HOSTILES USE THIS TIME. Any NPC or creature already hostile to the character, with motive and the means to reach them, can choose this moment to attack or assault.
-4. IF SOMETHING COMES: write the night up to that moment, then the waking (or the failure to wake). The sleep ends there — set sleep_hours to the hours actually slept, time_passed_minutes to match, scene_mode TENSION or COMBAT, and fill combat_context.
-5. IF NOTHING COMES: the night passes. Do not invent a threat to fill the turn.${threatBlock}
+4. IF SOMETHING COMES: write the night up to that moment, then the waking (or the failure to wake). The sleep ends there — set sleep_hours to the hours actually slept, time_beats to the waking moment only, scene_mode TENSION or COMBAT, and fill combat_context.
+5. IF NOTHING COMES: the night passes — set sleep_hours to the hours slept (the engine advances the clock by them). Do not invent a threat to fill the turn.${threatBlock}
     `.trim();
 };
 
@@ -1083,8 +1083,8 @@ REQUIRED OUTPUT:
 - No roll_request. No emerging_threats. No legal events. No location change.
 - End with the PC waking (breath, sweat, sheets, heartbeat, the real room).
 - Close with "[/DREAM]" on its own line, then render the brief waking beat.
-- Set \`time_passed_minutes\` to 0–3 (just the waking moment; sleep time is
-  already counted upstream).
+- Set \`time_beats\` to one beat of 0–3 minutes (just the waking moment;
+  sleep time is already counted upstream).
 - Apply \`character_updates.trauma_delta\`:
     +5 to +15 if the dream re-traumatizes or opens an unresolved wound,
     -3 to -10 if the dream lets the character process or integrate.

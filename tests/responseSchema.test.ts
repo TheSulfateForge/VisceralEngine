@@ -109,7 +109,8 @@ describe('token budget (review item 7 — regression guard)', () => {
     expect(narrative).toBeLessThan(full);
     // Guardrail: the compacted narrative schema should stay well under budget.
     // If a future edit balloons it past this, the test fails loudly.
-    expect(narrative).toBeLessThan(4500);
+    // v1.57: 4500 → 4600 for the required time_beats array (~25 tokens).
+    expect(narrative).toBeLessThan(4600);
   });
 
   it('thought_process is constrained to a terse flags contract', () => {
