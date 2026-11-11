@@ -3,6 +3,7 @@ import { GoogleGenAI, GenerateContentResponse, Schema } from "@google/genai";
 import { normaliseSingleQuotedDialogue } from '../utils/engine/dialogueQuotes';
 import { GEMINI_SAFETY_SETTINGS, THINKING_DEFAULTS } from "../constants";
 import { ChatMessage, Role, ModelResponseSchema, SCENE_MODES, SceneMode, Lighting, LIGHTING_LEVELS,
+    SCENE_TIME_PHASES, type SceneTimePhase, TIME_MODES, type TimeMode,
     MontageBlock, MontageType, ProposedMemory, ProposedTrauma, ProposedSkillUpdate, ProposedNpcDelta, TokenUsage,
     RELATIONSHIP_LEVELS, RelationshipLevel, DeclaredSocialUpdate } from "../types";
 import { getResponseSchema } from "../schemas/responseSchema";
@@ -343,6 +344,31 @@ export class GeminiClient {
                     ...(typeof p.stance === 'string' && p.stance.trim() ? { stance: p.stance.trim() } : {}),
                 }))
                 .filter(p => p.holder.trim() && p.position.trim())
+            : undefined,
+        // v1.54: three schema fields the parser still dropped. Without
+        // time_mode no turn was ever REST/MONTAGE/ACTIVITY (always derived from
+        // scene_mode); without scene_time_phase the clock-phase correction never
+        // ran; without faction_updates step 14 never applied a faction change.
+        // MONTAGE only with a montage_block: the mode skips bio/world ticks and
+        // lifts the cap to a year, so a stray tag must not trigger it.
+        time_mode: (TIME_MODES as readonly string[]).includes(String(safeData.time_mode))
+            && (safeData.time_mode !== 'MONTAGE' || isObject(safeData.montage_block))
+            ? safeData.time_mode as TimeMode
+            : undefined,
+        scene_time_phase: (SCENE_TIME_PHASES as readonly string[]).includes(String(safeData.scene_time_phase))
+            ? safeData.scene_time_phase as SceneTimePhase
+            : undefined,
+        faction_updates: Array.isArray(safeData.faction_updates)
+            ? safeData.faction_updates
+                .filter((f: unknown): f is Record<string, unknown> => isObject(f) && typeof f.faction_name === 'string' && !!(f.faction_name as string).trim())
+                .map((f: Record<string, unknown>) => ({
+                    faction_name: (f.faction_name as string).trim(),
+                    ...(typeof f.influence_delta === 'number' ? { influence_delta: f.influence_delta } : {}),
+                    ...(Array.isArray(f.territory_gained) ? { territory_gained: (f.territory_gained as unknown[]).filter((t): t is string => typeof t === 'string') } : {}),
+                    ...(Array.isArray(f.territory_lost) ? { territory_lost: (f.territory_lost as unknown[]).filter((t): t is string => typeof t === 'string') } : {}),
+                    ...(typeof f.player_reputation_delta === 'number' ? { player_reputation_delta: f.player_reputation_delta } : {}),
+                    ...(typeof f.new_objective === 'string' && f.new_objective.trim() ? { new_objective: f.new_objective.trim() } : {}),
+                }))
             : undefined,
         social_updates: Array.isArray(safeData.social_updates)
             ? safeData.social_updates

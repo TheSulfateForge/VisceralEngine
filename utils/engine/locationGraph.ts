@@ -460,6 +460,46 @@ const corePattern = (core: string): string =>
 const coreName = (displayName: string) => displayName.replace(/^the\s+/i, '').trim();
 const sameLocation = (a: string, b: string) => coreName(a).toLowerCase() === coreName(b).toLowerCase();
 
+const ROOM_SEP_RE = /\s+[—–]\s+/;
+/** "Westcross Townhouse — Second Floor Bath" → "Westcross Townhouse". */
+export const buildingRoot = (loc: string): string => (loc ?? '').split(ROOM_SEP_RE)[0].trim();
+
+const ROOM_MOVE_RE = /\b(?:return(?:s|ed|ing)?|go(?:es|ing)?|went|head(?:s|ed|ing)?|walk(?:s|ed|ing)?|climb(?:s|ed|ing)?|cross(?:es|ed|ing)?|step(?:s|ped|ping)?|retire(?:s|d)?|make\s+my\s+way|pad(?:s|ded)?)\s+(?:back\s+|up\s+|down\s+|over\s+|across\s+)?(?:to|into|in\s+to)\s+(my|our|the|his|her)\s+(bed\s?chamber|bedroom|room|chambers?|study|library|kitchen|solarium|garden|bath(?:room)?|parlou?r|cellar|dining\s+room|sitting\s+room|office|attic|courtyard|stables?|nursery|chapel)\b/i;
+
+const ROOM_TITLES: Record<string, string> = {
+    bedchamber: 'Bedroom', 'bed chamber': 'Bedroom', bedroom: 'Bedroom', room: 'Bedroom', chamber: 'Bedroom', chambers: 'Bedroom',
+    bath: 'Bath', bathroom: 'Bath', parlor: 'Parlour', parlour: 'Parlour', stable: 'Stables', stables: 'Stables',
+};
+
+/** v1.54: a move to another room of the same building, or null. */
+export const inferRoomMove = (
+    knownPlaces: string[],
+    playerInput: string,
+    currentLocation: string,
+): InferredMove | null => {
+    const current = (currentLocation ?? '').trim();
+    if (!current) return null;
+    const root = buildingRoot(current);
+    const rootCore = coreName(root).toLowerCase();
+    // Only inside a building we know has rooms (current is a room, or a known
+    // place has rooms under this root) — "my room" in a city is not a place.
+    const roomsOfRoot = knownPlaces.filter(p => ROOM_SEP_RE.test(p) && coreName(buildingRoot(p)).toLowerCase() === rootCore);
+    if (!ROOM_SEP_RE.test(current) && roomsOfRoot.length === 0) return null;
+    const m = ROOM_MOVE_RE.exec(playerInput ?? '');
+    if (!m) return null;
+    const possessive = m[1].toLowerCase();
+    const word = m[2].toLowerCase().replace(/\s+/g, ' ');
+    // "the room" / "her room" is not the player's bedroom.
+    if ((word === 'room' || word.startsWith('chamber')) && possessive !== 'my' && possessive !== 'our') return null;
+    const title = ROOM_TITLES[word] ?? word.replace(/\b\w/g, c => c.toUpperCase());
+    const existing = roomsOfRoot.find(p => p.split(ROOM_SEP_RE).slice(1).join(' ').toLowerCase().includes(title.toLowerCase()));
+    const name = existing ?? `${root} — ${title}`;
+    if (sameLocation(name, current)) return null;
+    // Already in a room with that word ("Second Floor Bath" → "the bath").
+    if (current.split(ROOM_SEP_RE).slice(1).join(' ').toLowerCase().includes(title.toLowerCase())) return null;
+    return { location_name: name, travelled: false, reason: `player moves within ${root} to the ${title.toLowerCase()}` };
+};
+
 export interface InferredMove {
     location_name: string;
     /** True when the player travelled (time floor applies); false for an unset location being filled in. */
@@ -518,6 +558,15 @@ export const inferLocationMove = (
             return { location_name: n.displayName, travelled: true, reason: `narration arrives at ${n.displayName}` };
         }
     }
+
+    // 2b. v1.54: a move between rooms of the building the player is in.
+    //     Westcross save, turn 55: "I … return to my bedroom closing the door"
+    //     left the location at "Westcross Townhouse — Second Floor Bath" for
+    //     the night — the bedroom was never a graph node, so steps 1–2 could
+    //     not see it, and the static-scene detectors then counted the bath as
+    //     unchanged for 14 turns and fired SCENE_EXHAUSTED on the sleep turn.
+    const room = inferRoomMove(nodes.map(n => n.displayName), input, current);
+    if (room) return room;
 
     // 3. Unset location: first known place the narration names.
     if (!current.trim()) {

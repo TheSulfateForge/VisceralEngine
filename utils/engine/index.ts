@@ -7,3 +7,4 @@ export * from './threatPipelineCore';
 export * from './entityLifecycle';
 export * from './locationGraph';
 export * from './declaredActions';
+export * from './sleepInference';

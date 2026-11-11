@@ -3,6 +3,7 @@ import {
     syncEntityLocationsFromWorldTick,
     updateEntityPresence,
     applyStatusTransitions,
+    demoteRemoteNearby,
     detectEntityDeaths,
     detectLoreDeaths,
     processLocationUpdate,
@@ -559,6 +560,15 @@ export const entityLifecycleStep: PipelineStep = {
             newPlayerLocation,
             previousPlayerLocation,
             ctx.previousWorld.emergingThreats ?? [],
+            ctx.debugLogs
+        );
+
+        // v1.54: an NPC placed in another known town is distant, not nearby.
+        updatedKnownEntities = demoteRemoteNearby(
+            updatedKnownEntities,
+            updatedLocationGraph,
+            newPlayerLocation,
+            ctx.currentTurn,
             ctx.debugLogs
         );
 

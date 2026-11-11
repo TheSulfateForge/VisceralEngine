@@ -322,9 +322,12 @@ export const estimateTimeFloor = (
         reasons.push(`activities (${act.labels.join(', ')}) ≥ ${act.minutes}m`);
     }
 
+    // v1.54: room to room inside one building is not a trip.
+    const rootOf = (l: string) => (l ?? '').split(/\s+[—–]\s+/)[0].trim().replace(/^the\s+/i, '').toLowerCase();
     const moved = !!locationUpdate?.location_name
         && locationUpdate.location_name.trim() !== ''
-        && locationUpdate.location_name !== previousLocation;
+        && locationUpdate.location_name !== previousLocation
+        && !(/\s[—–]\s/.test(locationUpdate.location_name) && rootOf(locationUpdate.location_name) === rootOf(previousLocation ?? ''));
     if (moved) {
         const declared = Math.max(0, locationUpdate?.travel_time_minutes ?? 0);
         let travel = declared;

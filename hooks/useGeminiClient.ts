@@ -20,6 +20,7 @@ import { GeminiService } from '../geminiService';
 import { useGameStore } from '../store';
 import { SimulationEngine } from '../utils/simulationEngine';
 import { phaseAfterElapsed, parsePlayerTimeNote, resolvePlayerTimeNote, deriveWorldTime } from '../utils/engine/timeUtils';
+import { applySleepInference } from '../utils/engine/sleepInference';
 import {
     detectPlayerFraming,
     containsMatureContent,
@@ -2330,6 +2331,21 @@ turn is anything their Actual Core describes, you are writing the mask.`;
         // enum is wrong, so we simply overwrite it instead of re-rolling an
         // entire expensive generation. No extra API calls.
         const startTime = preCallState.gameWorld.time;
+        // v1.54: supply sleep_hours for a declared sleep BEFORE the phase is
+        // corrected — otherwise the model's correct "dawn" is overwritten with
+        // the 1-minute clock's "evening". Uses the model's phase as a wake cue.
+        const sleepLog = applySleepInference(
+            response,
+            text,
+            startTime?.totalMinutes ?? 0,
+            preCallState.gameWorld.calendar?.minutesPerDay ?? 1440,
+        );
+        if (sleepLog) {
+            setGameHistory(prev => ({
+                ...prev,
+                debugLog: [...prev.debugLog, { timestamp: new Date().toISOString(), message: sleepLog, type: 'warning' }],
+            }));
+        }
         const authoritativePhase = phaseAfterElapsed(
             startTime?.hour ?? 9,
             startTime?.minute ?? 0,

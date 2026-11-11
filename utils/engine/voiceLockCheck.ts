@@ -236,6 +236,8 @@ export const playerSheetLines = (character: {
     ].filter(l => typeof l === 'string' && l.trim().length > 0);
 };
 
+const ABSENCE_NOTE_RE = /\b(?:off[- ]?(?:scene|screen|stage)|not\s+(?:present|here|on[- ]screen|in\s+(?:the\s+)?(?:scene|room))|absent|asleep|elsewhere|nothing\s+to\s+render|not\s+rendered|does\s+not\s+appear)\b/i;
+
 export const checkRestatement = (
     restatement: Restatement,
     entity: KnownEntity,
@@ -254,7 +256,12 @@ export const checkRestatement = (
     const recordWords = contentWords(groundingText);
     const recordStems = new Set(recordWords.map(stem));
     const ungrounded: string[] = [];
-    for (const trait of restatement.traits) {
+    // v1.54: "off-scene this turn", "so nothing to render" are the model
+    // correctly NOT rendering an absent NPC — not invented traits. Westcross
+    // save turn 56: Liora asleep behind a latched door; the lock armed anyway.
+    const traits = restatement.traits.filter(t => !ABSENCE_NOTE_RE.test(t));
+    if (traits.length === 0) return null;
+    for (const trait of traits) {
         const wordsIn = contentWords(trait);
         if (wordsIn.length === 0) continue;
         if (!wordsIn.some(w => isGroundedWord(w, recordWords, recordStems))) {
@@ -270,9 +277,9 @@ export const checkRestatement = (
     if (hasCore && hasSurface) {
         const coreStems = new Set(contentWords(getSection(record, CORE_LABEL)).map(stem));
         const surfaceStems = new Set(contentWords(getSection(record, SURFACE_LABEL)).map(stem));
-        const touchedCore = restatement.traits.some(t =>
+        const touchedCore = traits.some(t =>
             contentWords(t).some(w => coreStems.has(stem(w)) && !surfaceStems.has(stem(w))));
-        const touchedSurface = restatement.traits.some(t =>
+        const touchedSurface = traits.some(t =>
             contentWords(t).some(w => surfaceStems.has(stem(w))));
         surfaceOnly = touchedSurface && !touchedCore;
     }

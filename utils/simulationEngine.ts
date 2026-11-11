@@ -28,6 +28,7 @@ import type { ModelResponseSchema, GameWorld, Character, DebugLogEntry, LoreItem
 import { executePipeline } from './pipeline/runner';
 import { buildTurnContext, buildPipeline } from './pipeline/pipelineConfig';
 import type { SimulationResult } from './pipeline/types';
+import { applySleepInference } from './engine/sleepInference';
 
 /**
  * SimulationEngine — Public API
@@ -66,6 +67,16 @@ export const SimulationEngine = {
         playerRemovedConditions: string[] = [],
         playerInput: string = ''
     ): SimulationResult => {
+        // v1.54: a declared sleep the model didn't report becomes a REST turn
+        // BEFORE the pipeline is chosen (time_mode gates steps). No-op when the
+        // caller already applied it or the model sent sleep_hours.
+        const sleepLog = applySleepInference(
+            response,
+            playerInput,
+            currentWorld.time?.totalMinutes ?? 0,
+            currentWorld.calendar?.minutesPerDay ?? 1440,
+        );
+
         // Build the initial context from inputs
         const ctx = buildTurnContext(
             response,
@@ -79,6 +90,7 @@ export const SimulationEngine = {
         // v1.21: Select the pipeline for this turn's time_mode. buildTurnContext
         // has already resolved ctx.effectiveTimeMode (AI-declared or derived from
         // scene_mode); MONTAGE/REST/etc. gate out the steps they disable.
+        if (sleepLog) ctx.debugLogs.push({ timestamp: new Date().toISOString(), message: sleepLog, type: 'warning' });
         const pipeline = buildPipeline(ctx.effectiveTimeMode);
         return executePipeline(pipeline, ctx);
     }

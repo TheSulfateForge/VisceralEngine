@@ -43,6 +43,20 @@ export const timeProgressionStep: PipelineStep = {
         // v1.51: raise the model's figure to what the turn actually contained
         // (speech at ~150 wpm, real travel). Sleep turns keep their own path.
         let requested = r.time_passed_minutes;
+        // v1.54: sleep_hours set but time_passed_minutes left at 0/short used
+        // to advance the clock by nothing (the sleep floor is 0). The hours
+        // slept ARE the elapsed time.
+        if (hasSleep) {
+            const sleptMinutes = Math.round((r.biological_inputs?.sleep_hours ?? 0) * 60);
+            if ((requested ?? 0) < sleptMinutes / 2) {
+                ctx.debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    message: `[SLEEP — v1.54] sleep_hours=${r.biological_inputs?.sleep_hours} but time_passed_minutes=${requested ?? 0}; clock follows the hours slept (+${sleptMinutes}m).`,
+                    type: 'info'
+                });
+                requested = sleptMinutes;
+            }
+        }
         if (!hasSleep) {
             const { floor, reasons } = estimateTimeFloor(
                 r.narrative ?? '',

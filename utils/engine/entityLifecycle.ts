@@ -1,4 +1,4 @@
-import { KnownEntity, WorldTickAction, NPCInteraction, WorldTickEvent, DebugLogEntry } from '../../types';
+import { KnownEntity, WorldTickAction, NPCInteraction, WorldTickEvent, DebugLogEntry, LocationGraph } from '../../types';
 import { ENTITY_NEARBY_DECAY_TURNS, ENTITY_DISTANT_DECAY_TURNS } from '../../config/engineConfig';
 import { ENTITY_EXTRACTION_BLACKLIST } from './threatPipeline';
 
@@ -235,7 +235,11 @@ export const applyStatusTransitions = (
                 type: 'info',
                 message: `[Entity Lifecycle] ${entity.name} transitioned to DISTANT (${turnsSinceSeen} turns unseen).`
             });
-        } else if (entity.status === 'distant' && turnsSinceSeen >= ENTITY_DISTANT_DECAY_TURNS) {
+        } else if (entity.status === 'distant' && turnsSinceSeen >= ENTITY_DISTANT_DECAY_TURNS
+            // v1.54: someone at a KNOWN place is not missing — they are where
+            // the record says. (Lyssara, an ambassador at her own house in
+            // Caerveld, went MISSING after eight turns off screen.)
+            && !(entity.location ?? '').trim()) {
             // Check if they are part of an active threat
             const inActiveThreat = emergingThreats.some(t =>
                 t.status !== 'expired' &&
@@ -494,4 +498,55 @@ export const validateConditionEntityCoherence = (
     });
 
     return { conditions: surviving, removed };
+};
+
+// ────────────────────────────────────────────────────────────────────────────
+// v1.54: AN NPC IN ANOTHER TOWN IS NOT 'NEARBY'.
+//
+// Westcross save: Lady Mirabel's off-screen action "Rides home to Sablebrook
+// Manor" put her at Sablebrook Manor — but her status stayed 'nearby' (same
+// building, out of the room). The scene digest lists 'nearby' as present, so
+// at turn 56 she was "present" in the player's townhouse bath, and since every
+// off-screen action refreshes lastSeenTurn she never decayed to distant.
+//
+// Rule: a present/nearby NPC whose location is a KNOWN place (a location-graph
+// node) sharing no place word with the player's location is 'distant'.
+// Unknown or bare room names ("Solarium") are left alone — too ambiguous.
+// ────────────────────────────────────────────────────────────────────────────
+const placeWords = (s: string): Set<string> => new Set(placeTokens((s ?? '').replace(/^left\s+/i, '')));
+const stripThe = (s: string) => s.trim().replace(/^the\s+/i, '').toLowerCase();
+
+export const demoteRemoteNearby = (
+    entities: KnownEntity[],
+    graph: LocationGraph | undefined,
+    playerLocation: string,
+    currentTurn: number,
+    debugLogs: DebugLogEntry[],
+): KnownEntity[] => {
+    if (!playerLocation.trim()) return entities;
+    const known = new Set(
+        Object.values(graph?.nodes ?? {})
+            .flatMap(n => {
+                const name = stripThe(n.displayName ?? '');
+                // "Westcross Townhouse, Caerveld" / "X — Garden" also count by their root
+                const root = name.split(/\s*(?:—|–|,)\s*/)[0];
+                return [name, root];
+            })
+            .filter(Boolean),
+    );
+    const player = placeWords(playerLocation);
+    return entities.map(e => {
+        if (e.status !== 'present' && e.status !== 'nearby') return e;
+        const loc = (e.location ?? '').trim();
+        if (!loc || /^left\s+/i.test(loc)) return e;
+        if (!known.has(stripThe(loc))) return e;
+        const theirs = placeWords(loc);
+        if (theirs.size === 0 || [...theirs].some(t => player.has(t))) return e;
+        debugLogs.push({
+            timestamp: new Date().toISOString(),
+            type: 'info',
+            message: `[PRESENCE — v1.54] ${e.name} is at ${loc}, not with the player at ${playerLocation} → DISTANT.`,
+        });
+        return { ...e, status: 'distant' as const, statusChangedTurn: currentTurn };
+    });
 };

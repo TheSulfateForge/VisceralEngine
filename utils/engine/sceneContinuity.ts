@@ -593,6 +593,8 @@ const DIRECTIVE_STOPWORDS = new Set([
     'will', 'should', 'must', 'not', 'no', 'do', 'dont', 'never', 'always', 'ensure', 'maintain', 'avoid',
     'using', 'use', 'from', 'into', 'than', 'such', 'regarding', 'during', 'including', 'remain', 'remains',
     'character', 'characters', 'npc', 'npcs', 'player', 'narration', 'narrative', 'describe', 'portray',
+    // v1.54: pronouns and hedges carry no instruction content
+    'her', 'hers', 'she', 'his', 'him', 'who', 'whom', 'what', 'unless', 'actually', 'only', 'just',
 ]);
 
 const directiveTokens = (s: string): Set<string> => new Set(
@@ -622,7 +624,36 @@ export const directiveSimilarity = (a: string, b: string): number => overlap(a, 
  * Measured on the Nissa save: the two "no cold/calculating/predatory" rewrites
  * score 0.43–0.60 against each other; unrelated directives top out at 0.29.
  */
+/**
+ * v1.54: capitalised words that are not sentence-initial — the people and
+ * places a directive is ABOUT. Used as a subject guard below.
+ */
+const NAME_STOP = new Set(['i', 'npc', 'npcs', 'ooc', 'gm', 'pc', 'the', 'a', 'an', 'do', 'when', 'in', 'if', 'no', 'not', 'never', 'always']);
+const directiveNames = (s: string): Set<string> => {
+    const out = new Set<string>();
+    const text = s ?? '';
+    const re = /\b[A-Z][a-zA-Z'’-]{2,}/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+        const before = text.slice(0, m.index).replace(/[\s"“'‘(\[—–-]+$/, '');
+        if (before === '' || /[.!?:;]$/.test(before)) continue; // sentence-initial
+        const w = m[0].toLowerCase().replace(/['’]s$/, '');
+        if (!NAME_STOP.has(w)) out.add(w);
+    }
+    return out;
+};
+
 export const directivesAreSame = (a: string, b: string): boolean => {
+    // v1.54: two directives about DIFFERENT named people are never the same
+    // instruction. 2026-11-10 Westcross save, turn 54: "Do not reference
+    // Lyssara … unless she actually appears" (12 content words) was replaced
+    // by a 120-word "Portray Liora Calder from her personality record …"
+    // because the short one's her/she/record/actual/appear all recurred in the
+    // long one (shared ≥ 3, ratio ≥ 0.4 of the SMALLER set). The Lyssara rule
+    // vanished with no eviction notice.
+    const na = directiveNames(a);
+    const nb = directiveNames(b);
+    if (na.size > 0 && nb.size > 0 && ![...na].some(n => nb.has(n))) return false;
     const { shared, ratio } = overlap(a, b);
     return ratio >= DIRECTIVE_SIMILARITY || (shared >= 3 && ratio >= 0.4);
 };
