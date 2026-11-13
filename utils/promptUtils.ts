@@ -1,5 +1,6 @@
 import { resolveCharacterBody, describeBodyState, vaginalVirginity, analVirginity } from './engine/bodyModel';
 import { contentPolicyLines, effectiveContentPolicy } from './engine/contentPolicy';
+import { selectLedgerForPrompt, selectWitnessedForPrompt } from './engine/npcMemory';
 import { GameHistory, GameWorld, Character, SceneMode, MemoryItem, LoreItem, KnownEntity, BioMonitor, ActiveThreat, DormantHook, FactionExposure, ThreatDenialTracker, ChatMessage, SummarySegment, Role, PlayerCanonEntry } from '../types';
 import { retrieveRelevantContext, retrieveRelevantMemories, retrieveRelevantSegments, findAliasMatchedEntities, RAGResult } from './ragEngine';
 import {
@@ -406,6 +407,8 @@ export const buildEntityContext = (
      * contradicting who they are, without the full in-scene block.
      */
     mentionedOnlyIds: Set<string> = new Set(),
+    /** v1.58: the player's input — ranks which older ledger/witnessed entries to show. */
+    query: string = '',
 ): string => {
     if (entities.length === 0) return "";
 
@@ -475,7 +478,13 @@ export const buildEntityContext = (
                 // this-scene state, not as characterization that can override
                 // the canonical personality line above.
                 ` Situational read (this scene only — personality above is who they ARE): [${e.relationship_level}] - ${trimToSentence(String(e.impression ?? ''), ACTIVE_IMPRESSION_CAP)}\n` +
-                ` Leverage: ${e.leverage}\n Ledger: [${e.ledger.join(', ')}]`
+                ` Leverage: ${e.leverage}\n Ledger: [${selectLedgerForPrompt(e.ledger, query).join(', ')}]` +
+                // v1.58: what this NPC has been part of, filed from the story's
+                // facts — so a character entering a scene carries their history.
+                (() => {
+                    const seen = selectWitnessedForPrompt(e.witnessed, query);
+                    return seen.length ? `\n Has been part of (they remember this): ${seen.map(f => `• ${f}`).join(' ')}` : '';
+                })()
             );
         }).join('\n----------------\n');
         context += `\n[ACTIVE ENTITIES — In Scene / Nearby]\n${activeStrings}`;
@@ -1219,6 +1228,7 @@ export const constructGeminiPrompt = async (
     allRelevantEntities,
     forceActiveEntityIds,
     mentionedOnlyIds,
+    userInput,
   );
   // v1.52: the entities whose record (looks + personality) is in THIS prompt —
   // the active and mentioned tiers. The client checks the reply against it.

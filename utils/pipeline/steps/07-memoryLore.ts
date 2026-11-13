@@ -10,6 +10,7 @@ import {
 import { generateLoreId, generateMemoryId } from '../../../idUtils';
 import { checkBannedMechanisms, checkAdversarialLore } from '../../engine';
 import { MEMORY_CAP, DEFAULT_MEMORY_SALIENCE } from '../../../config/engineConfig';
+import { fileWitnessedFacts } from '../../engine/npcMemory';
 
 /**
  * Step 7: Lore & Memory Pipeline
@@ -202,9 +203,27 @@ export const memoryLoreStep: PipelineStep = {
             }
         }
 
+        // v1.58: file this turn's facts on the NPCs they name. Entities with no
+        // `witnessed` field yet (older saves, new NPCs) back-fill once from the
+        // whole store.
+        const previousFacts = new Set(ctx.previousWorld.memory.map(m => m.fact));
+        const turnFacts = finalMemory.filter(m => !previousFacts.has(m.fact));
+        // 12-assembleState reads ctx.updatedKnownEntities, so write both.
+        const entitiesNow = ctx.updatedKnownEntities ?? ctx.worldUpdate.knownEntities ?? ctx.previousWorld.knownEntities ?? [];
+        const { entities: withWitnessed, filed } = fileWitnessedFacts(entitiesNow, turnFacts, finalMemory);
+        if (filed.length > 0) {
+            ctx.debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[NPC MEMORY — v1.58] Filed facts on: ${filed.map(f => `${f.name} (+${f.count})`).join(', ')}.`,
+                type: 'info',
+            });
+        }
+
+        ctx.updatedKnownEntities = withWitnessed;
         ctx.worldUpdate = {
             ...ctx.worldUpdate,
-            memory: finalMemory
+            memory: finalMemory,
+            knownEntities: withWitnessed,
         };
 
         return ctx;

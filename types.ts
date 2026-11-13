@@ -316,6 +316,11 @@ export interface KnownEntity {
     relationship_level: RelationshipLevel;
     leverage: string;
     ledger: string[];
+    /**
+     * v1.58: story facts (new_memories) that name this NPC, filed by the
+     * engine. Survives global memory eviction; shown for in-scene NPCs.
+     */
+    witnessed?: string[];
 
     // --- Characterization (v1.16) ---
     /**

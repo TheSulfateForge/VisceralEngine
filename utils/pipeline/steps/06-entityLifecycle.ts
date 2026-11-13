@@ -13,6 +13,7 @@ import {
 } from '../../engine';
 import { checkNameCollision, registerEntityName } from '../../nameResolver';
 import { detectPlayerFraming } from '../../engine/playerFraming';
+import { mergeLedger } from '../../engine/npcMemory';
 import { voiceSampleRejection, isFigurativeVoiceSample } from '../../engine/npcRhetoric';
 import { RELATIONSHIP_LEVELS, type RelationshipLevel } from '../../../types';
 import { RELATIONSHIP_MAX_STEPS_PER_TURN } from '../../../config/engineConfig';
@@ -313,6 +314,12 @@ export const entityLifecycleStep: PipelineStep = {
                     // Engine-owned fields: an absent/blank update never clears them.
                     if (!merged.personality?.trim()) merged.personality = existingEntity.personality;
                     if (!merged.voice_sample?.trim()) merged.voice_sample = existingEntity.voice_sample;
+                    // v1.58: the ledger is history — extend it, never replace it.
+                    // The model sends only the latest beats; spreading them over
+                    // the record erased everything older (Prosper Calder forgot
+                    // the court scene). `witnessed` is engine-owned.
+                    merged.ledger = mergeLedger(existingEntity.ledger, update.ledger);
+                    merged.witnessed = existingEntity.witnessed;
                     // v1.48: bodies are author/engine-owned. The model reports
                     // body changes through body_events, never by rewriting the record.
                     merged.appearance = existingEntity.appearance;

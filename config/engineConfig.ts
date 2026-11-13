@@ -380,11 +380,14 @@ export const MODEL_CONTEXT_PROFILES: Record<string, ModelContextProfile> = {
   },
   // v1.49: OpenRouter — 1M context, full-strength model; same budget as
   // gemini-3-flash-preview.
+  // v1.58: 30 → 50 messages (25 exchanges), the newest 20 at full length
+  // (was 10). Est. +8–10K prompt tokens per turn, mostly cached; at 2026-11
+  // usage (~$0.03/M blended) about +$2/month.
   'deepseek/deepseek-v4.1-flash': {
-    maxHistory: 30,
+    maxHistory: 50,
     summarizationInterval: 20,
     memoryLimit: 40,
-    recentFullMessages: 10,
+    recentFullMessages: 20,
     compressedMessageLength: 500,
     ragLookback: 5,
   },

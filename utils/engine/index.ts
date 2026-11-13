@@ -9,3 +9,4 @@ export * from './locationGraph';
 export * from './declaredActions';
 export * from './sleepInference';
 export * from './looseNumber';
+export * from './npcMemory';

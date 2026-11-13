@@ -500,6 +500,49 @@ export const inferRoomMove = (
     return { location_name: name, travelled: false, reason: `player moves within ${root} to the ${title.toLowerCase()}` };
 };
 
+const TRANSIT_RE = /\b(?:carriage|coach|cab|cart|wagon|litter|sedan|ferry|boat|ride|rides|rode|riding|drive|drove|driving|on\s+horseback|in\s+the\s+saddle|mounted\s+up|set\s+(?:off|out)|head(?:s|ed|ing)?\s+(?:out|over|across)\s+to|walk(?:s|ed|ing)?\s+(?:over|across)\s+to)\b/i;
+const PLACE_NOUN = String.raw`(?:approach|drive|driveway|gates?|house|townhouse|manor|estate|keep|hall|steps|front\s+(?:door|walk|steps)|door|courtyard|grounds|lane|yard|stables?|porch|portico)`;
+
+/** v1.58: arrival at a known place named by one distinctive word ("the Calder approach"). */
+export const inferTransitArrival = (
+    knownPlaces: string[],
+    narrative: string,
+    playerInput: string,
+    currentLocation: string,
+): InferredMove | null => {
+    const text = narrative ?? '';
+    if (!TRANSIT_RE.test(text) && !TRANSIT_RE.test(playerInput ?? '')) return null;
+    const currentWords = new Set(buildingRoot(currentLocation ?? '').replace(/,.*$/, '').toLowerCase().split(/[^a-z'’]+/).filter(w => w.length >= 4));
+    // Building-level places only ("Calder Townhouse", not "…, Noble Quarter").
+    const buildings = knownPlaces
+        .map(p => ({ p, root: buildingRoot(p).replace(/\s*,.*$/, '').trim() }))
+        .filter(x => x.root && !NOT_A_PLACE_RE.test(x.root));
+    // word → distinct building roots containing it
+    const byWord = new Map<string, Set<string>>();
+    for (const { root } of buildings) {
+        for (const w of root.split(/\s+/)) {
+            if (!/^[A-Z][a-z'’]{3,}$/.test(w)) continue;
+            const k = w.toLowerCase();
+            if (!byWord.has(k)) byWord.set(k, new Set());
+            byWord.get(k)!.add(root);
+        }
+    }
+    for (const [word, roots] of byWord) {
+        if (roots.size !== 1 || currentWords.has(word)) continue;
+        const root = [...roots][0];
+        if (sameLocation(root, buildingRoot(currentLocation ?? ''))) continue;
+        const w = word.charAt(0).toUpperCase() + word.slice(1);
+        const near = new RegExp(
+            String.raw`\b(?:the\s+)?${w}(?:'s|’s)?\s+${PLACE_NOUN}\b|` +
+            String.raw`\b(?:arriv\w*\s+at|pull\w*\s+up\s+(?:at|before|outside)|reach\w*|turn\w*\s+(?:onto|into|up)|through\s+the\s+gates?\s+of)\s+(?:the\s+)?${w}\b`,
+        ).exec(text);
+        if (!near) continue;
+        const place = buildings.filter(x => x.root === root).map(x => x.p).sort((a, b) => a.length - b.length)[0];
+        return { location_name: place, travelled: true, reason: `travelling; narration arrives at "${near[0].trim()}" → ${place}` };
+    }
+    return null;
+};
+
 export interface InferredMove {
     location_name: string;
     /** True when the player travelled (time floor applies); false for an unset location being filled in. */
@@ -558,6 +601,16 @@ export const inferLocationMove = (
             return { location_name: n.displayName, travelled: true, reason: `narration arrives at ${n.displayName}` };
         }
     }
+
+    // 2c. v1.58: travelling, then arriving at a place named by its owner or
+    //     a distinctive word rather than its full name. Westcross save, turns
+    //     123–129: "we head to the carriage" / "Inside the carriage" / "turned
+    //     onto the Calder approach … the house up ahead" — the model sent no
+    //     location_update and "Calder Townhouse" never appeared in full, so the
+    //     location stayed "Westcross Townhouse, Library" for 24 turns, through
+    //     dinner at the Calders', and every NPC's record stayed in that library.
+    const transit = inferTransitArrival(nodes.map(n => n.displayName), text, input, current);
+    if (transit) return transit;
 
     // 2b. v1.54: a move between rooms of the building the player is in.
     //     Westcross save, turn 55: "I … return to my bedroom closing the door"
