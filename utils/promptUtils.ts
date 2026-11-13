@@ -1,6 +1,7 @@
 import { resolveCharacterBody, describeBodyState, vaginalVirginity, analVirginity } from './engine/bodyModel';
 import { contentPolicyLines, effectiveContentPolicy } from './engine/contentPolicy';
 import { selectLedgerForPrompt, selectWitnessedForPrompt } from './engine/npcMemory';
+import { renderRegisterForPrompt, registerBrief } from './engine/npcRegister';
 import { GameHistory, GameWorld, Character, SceneMode, MemoryItem, LoreItem, KnownEntity, BioMonitor, ActiveThreat, DormantHook, FactionExposure, ThreatDenialTracker, ChatMessage, SummarySegment, Role, PlayerCanonEntry } from '../types';
 import { retrieveRelevantContext, retrieveRelevantMemories, retrieveRelevantSegments, findAliasMatchedEntities, RAGResult } from './ragEngine';
 import {
@@ -481,10 +482,14 @@ export const buildEntityContext = (
                 ` Leverage: ${e.leverage}\n Ledger: [${selectLedgerForPrompt(e.ledger, query).join(', ')}]` +
                 // v1.58: what this NPC has been part of, filed from the story's
                 // facts — so a character entering a scene carries their history.
-                (() => {
-                    const seen = selectWitnessedForPrompt(e.witnessed, query);
-                    return seen.length ? `\n Has been part of (they remember this): ${seen.map(f => `• ${f}`).join(' ')}` : '';
-                })()
+                // v1.59: an NPC with a register shows it instead (its
+                // knowledge already includes these facts, with sources).
+                (e.register
+                    ? renderRegisterForPrompt(e.register, query)
+                    : (() => {
+                        const seen = selectWitnessedForPrompt(e.witnessed, query);
+                        return seen.length ? `\n Has been part of (they remember this): ${seen.map(f => `• ${f}`).join(' ')}` : '';
+                    })())
             );
         }).join('\n----------------\n');
         context += `\n[ACTIVE ENTITIES — In Scene / Nearby]\n${activeStrings}`;
@@ -769,6 +774,8 @@ export const buildOocEntityRecords = (entities: KnownEntity[]): string => {
             e.impression?.trim() ? `Situational impression: ${e.impression.trim()}` : '',
             e.leverage?.trim() ? `Leverage: ${e.leverage.trim()}` : '',
             e.ledger?.length ? `Ledger: ${e.ledger.join(' | ')}` : '',
+            // v1.59: the living record, in full, for record questions.
+            e.register ? `Register (what has happened in this game):\n${registerBrief(e.register)}` : '',
             `Relationship to player: ${e.relationship_level}`,
         ].filter(Boolean).join('\n');
 

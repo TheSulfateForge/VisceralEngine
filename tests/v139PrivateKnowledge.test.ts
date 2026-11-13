@@ -126,7 +126,7 @@ describe('v1.39 — the private block states a real prohibition', () => {
 describe('v1.39 — the knowledge rule runs in both directions', () => {
     it('bounds what an NPC may know', () => {
         expect(NPC_KNOWLEDGE_RULE).toMatch(/observed in a scene they were present for/);
-        expect(NPC_KNOWLEDGE_RULE).toMatch(/Ledger is that record/);
+        expect(NPC_KNOWLEDGE_RULE).toMatch(/Ledger and REGISTER/);
     });
 
     it('denies that perceptiveness is a licence to know more', () => {

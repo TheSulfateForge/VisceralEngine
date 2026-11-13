@@ -9,6 +9,7 @@ import { ThreatRadar } from '../sidebar/ThreatRadar';
 import { RelationshipLevel, KnownEntity } from '../../types';
 import { BodyEditor, BodyStateView } from '../common/BodyEditor';
 import { resolveEntityBody } from '../../utils/engine/bodyModel';
+import { NpcRegisterList } from '../sidebar/NpcRegisterPanel';
 
 const RelationshipBadge: React.FC<{ level: RelationshipLevel }> = ({ level }) => {
     let colorClass = 'bg-gray-800 text-gray-400';
@@ -305,6 +306,12 @@ export const Sidebar: React.FC = () => {
                         </div>
                      </div>
                 )}
+
+                {/* v1.59: NPC registers — view, edit, delete */}
+                <NpcRegisterList
+                    entities={knownEntities}
+                    onChange={(id, register) => updateEntity(id, { register })}
+                />
 
                 {/* Independent Biological Tracker */}
                 {activePregnancies.length > 0 && (

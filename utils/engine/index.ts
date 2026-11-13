@@ -10,3 +10,4 @@ export * from './declaredActions';
 export * from './sleepInference';
 export * from './looseNumber';
 export * from './npcMemory';
+export * from './npcRegister';

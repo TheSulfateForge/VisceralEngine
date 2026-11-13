@@ -48,6 +48,7 @@ import type {
   NpcPosition,
   BodyProfile,
   BodyState,
+  NpcRegister,
   ContentPolicy,
   SceneFocus,
   PlayerCanonEntry,
@@ -258,6 +259,15 @@ export interface EntityRow {
   appearance?: string | null;
   body?: BodyProfile | null;
   body_state?: BodyState | null;
+  /**
+   * v1.59: fields that were silently dropped on save/load. Non-indexed, so no
+   * schema version bump. `ledger_ordered` keeps ledger ORDER (the
+   * entity_ledger_items rows come back sorted by random UUID).
+   */
+  ledger_ordered?: string[] | null;
+  witnessed?: string[] | null;
+  npc_register?: NpcRegister | null;
+  canonical?: boolean | null;
   relationship_level: RelationshipLevel;
   leverage: string;
   status: EntityStatus;

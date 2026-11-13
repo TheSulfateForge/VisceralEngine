@@ -5,6 +5,7 @@ import { ScenarioService } from "./services/scenarioService";
 import { CharacterService } from "./services/characterService";
 import { SummaryService } from "./services/summaryService";
 import { WorldPulseService } from "./services/worldPulseService";
+import { RegisterService, type RegisterPassInput } from "./services/registerService";
 import { ChatMessage, Scenario, Character, GeneratedCharacterFields, GameWorld } from "./types";
 import { isImageGenerationAvailable, type AiProvider } from "./config/aiProvider";
 
@@ -14,6 +15,7 @@ export class GeminiService extends GeminiClient {
     private characterService: CharacterService;
     private summaryService: SummaryService;
     private worldPulseService: WorldPulseService;
+    private registerService: RegisterService;
 
     constructor(apiKey: string, modelName: string, provider: AiProvider = 'gemini') {
         super(apiKey, modelName, provider);
@@ -24,6 +26,13 @@ export class GeminiService extends GeminiClient {
         // hardcoded gemini-2.5-flash-lite. 'low' keeps them cheap on 3.x.
         this.summaryService = new SummaryService(this.ai, modelName, this.buildThinkingConfig('low'));
         this.worldPulseService = new WorldPulseService(this.ai, modelName, this.buildThinkingConfig('low'));
+        // v1.59: post-turn NPC register pass (background, same model).
+        this.registerService = new RegisterService(this.ai, modelName, this.buildThinkingConfig('low'));
+    }
+
+    // v1.59: what changed for the named NPCs in this exchange
+    async extractRegisterUpdates(input: RegisterPassInput) {
+        return this.registerService.extract(input);
     }
 
     // v1.24: offscreen world simulation (background, cheap model)

@@ -22,6 +22,9 @@ import { SimulationEngine } from '../utils/simulationEngine';
 import { phaseAfterElapsed, parsePlayerTimeNote, resolvePlayerTimeNote, deriveWorldTime } from '../utils/engine/timeUtils';
 import { applySleepInference } from '../utils/engine/sleepInference';
 import { estimateActivityBySimilarity, type ActivityEstimate } from '../utils/engine/activityEstimate';
+import { applyRegisterDiff, matchRegisterNpc } from '../utils/engine/npcRegister';
+import { identifyingNames } from '../utils/engine/npcMemory';
+import { REGISTER_PASS_MAX_NPCS } from '../services/registerService';
 import { embeddingService } from '../services/embeddingService';
 
 // v1.57: stable encoder reference so the activity anchors are embedded once.
@@ -116,6 +119,17 @@ import {
 // ---------------------------------------------------------------------------
 const WORLD_PULSE_DOWNTIME_MINUTES = 240;
 let worldPulseInFlight = false;
+
+// v1.59: the post-turn NPC register pass. The next turn (and a regenerate)
+// waits for it, bounded, so it reads a current record and a revert can never
+// race it.
+let registerPassInFlight: Promise<void> | null = null;
+const REGISTER_PASS_WAIT_MS = 20000;
+const awaitRegisterPass = async (): Promise<void> => {
+    const p = registerPassInFlight;
+    if (!p) return;
+    await Promise.race([p, new Promise<void>(resolve => setTimeout(resolve, REGISTER_PASS_WAIT_MS))]);
+};
 
 // v1.24: One-shot personality repair per session — restores canonical seed
 // personalities that the pre-v1.24 entity-replace bug wiped from saves.
@@ -566,6 +580,8 @@ export const useGeminiClient = () => {
   // Main Turn Orchestrator
   const handleSend = useCallback(async (text: string) => {
     if (!text.trim()) return;
+    // v1.59: let the last turn's register pass land first.
+    await awaitRegisterPass();
 
     // v1.31: OOC inputs branch out before ANY turn machinery runs.
     const ooc = parseOocInput(text);
@@ -2515,6 +2531,66 @@ turn is anything their Actual Core describes, you are writing the mask.`;
             ]
         }));
 
+        // v1.59: post-turn NPC register pass (background). Named NPCs with a
+        // register who are present and named in this exchange — player's
+        // addressees first. Results apply only if this turn is still the
+        // latest (a regenerate discards them).
+        {
+            const exchange = `${text}\n${response.narrative ?? ''}`;
+            const namedIn = (e: { name: string }, t: string) => identifyingNames(e.name)
+                .some(n => new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(t));
+            const passNpcs = (worldUpdate.knownEntities ?? [])
+                .filter(e => e.register && e.status === 'present' && namedIn(e, exchange))
+                .sort((a, b) => Number(namedIn(b, text)) - Number(namedIn(a, text)))
+                .slice(0, REGISTER_PASS_MAX_NPCS);
+            if (passNpcs.length > 0) {
+                const pcName = finalCharacterUpdate.name ?? preCallState.character.name ?? 'the player character';
+                const turnForPass = nextTurn;
+                const msgId = modelMsg.id;
+                const logLine = (message: string, type: 'info' | 'warning' | 'error' = 'info') =>
+                    setGameHistory(prev => ({ ...prev, debugLog: [...prev.debugLog, { timestamp: new Date().toISOString(), message, type }] }));
+                // eslint-disable-next-line prefer-const
+                let passPromise: Promise<void> | null = null;
+                passPromise = (async () => {
+                    try {
+                        const diffs = await service.extractRegisterUpdates({
+                            pcName, turn: turnForPass, playerInput: text, narrative: response.narrative ?? '', npcs: passNpcs,
+                        });
+                        if (diffs === null) {
+                            logLine(`[NPC REGISTER FAILED T${turnForPass}] the register pass returned nothing (see console). The record was not updated this turn.`, 'warning');
+                            return;
+                        }
+                        const latest = useGameStore.getState().gameHistory.history;
+                        if (!latest.some(m => m.id === msgId)) {
+                            logLine(`[NPC REGISTER T${turnForPass}] turn was regenerated — ${diffs.length} update(s) discarded.`);
+                            return;
+                        }
+                        const summary: string[] = [];
+                        setGameWorld(prev => {
+                            const ents = [...(prev.knownEntities ?? [])];
+                            for (const d of diffs) {
+                                const idx = matchRegisterNpc(ents, d.npc);
+                                if (idx < 0 || !ents[idx].register) continue;
+                                const { register, changes } = applyRegisterDiff(ents[idx].register!, d, turnForPass);
+                                if (changes.length === 0) continue;
+                                ents[idx] = { ...ents[idx], register };
+                                summary.push(`${ents[idx].name}: ${changes.join('; ')}`);
+                            }
+                            return { ...prev, knownEntities: ents };
+                        });
+                        logLine(summary.length
+                            ? `[NPC REGISTER T${turnForPass}] ${summary.join(' || ')}`
+                            : `[NPC REGISTER T${turnForPass}] nothing new for ${passNpcs.map(e => e.name).join(', ')}.`);
+                    } catch (e) {
+                        logLine(`[NPC REGISTER FAILED T${turnForPass}] ${e instanceof Error ? e.message : String(e)}`, 'error');
+                    } finally {
+                        if (registerPassInFlight === passPromise) registerPassInFlight = null;
+                    }
+                })();
+                registerPassInFlight = passPromise;
+            }
+        }
+
         // v1.24: Background world pulse — the world moves while the player
         // isn't looking. Downtime beats (sleep, travel, long skips) and every
         // Nth turn advance offscreen NPC/faction agendas via a cheap
@@ -2641,6 +2717,9 @@ turn is anything their Actual Core describes, you are writing the mask.`;
    * Either way the retry is an ordinary turn from an unchanged world.
    */
   const handleRegenerate = useCallback(async () => {
+    // v1.59: a register pass for the turn being discarded must land BEFORE
+    // the revert, so the snapshot restore wipes it.
+    await awaitRegisterPass();
     const st = useGameStore.getState();
     if (st.gameHistory.isThinking) return;
     const hist = st.gameHistory.history;

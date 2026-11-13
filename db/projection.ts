@@ -499,6 +499,11 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
           appearance: e.appearance?.trim() ? e.appearance.trim() : null,   // v1.48
           body: e.body ?? null,                                             // v1.48
           body_state: e.bodyState ?? null,                                  // v1.48
+          // v1.59: previously dropped on every save/load.
+          ledger_ordered: e.ledger?.length ? [...e.ledger] : null,
+          witnessed: e.witnessed ? [...e.witnessed] : null,
+          npc_register: e.register ?? null,
+          canonical: e.canonical ?? null,
           relationship_level: e.relationship_level,
           leverage: e.leverage,
           status: (e.status ?? 'present') as typeof ENTITY_STATUSES[number],
@@ -1212,7 +1217,8 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
       impression: e.impression,
       relationship_level: e.relationship_level,
       leverage: e.leverage,
-      ledger: ledgerByEntity.get(e.id) ?? [],
+      // v1.59: ordered copy first; the item rows lose order.
+      ledger: e.ledger_ordered ?? ledgerByEntity.get(e.id) ?? [],
       // Conditionally spread so unset personality stays `undefined` on
       // projection (matches absorb side: undefined input → null in DB →
       // absent on output), preserving round-trip equivalence.
@@ -1221,6 +1227,9 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
       ...(e.appearance ? { appearance: e.appearance } : {}),   // v1.48
       ...(e.body ? { body: e.body } : {}),                     // v1.48
       ...(e.body_state ? { bodyState: e.body_state } : {}),    // v1.48
+      ...(e.witnessed ? { witnessed: e.witnessed } : {}),      // v1.59
+      ...(e.npc_register ? { register: e.npc_register } : {}), // v1.59
+      ...(e.canonical !== undefined && e.canonical !== null ? { canonical: e.canonical } : {}), // v1.59
       ...(e.status ? { status: e.status } : {}),
       ...(e.last_seen_turn !== null ? { lastSeenTurn: e.last_seen_turn } : {}),
       ...(e.first_seen_turn !== null ? { firstSeenTurn: e.first_seen_turn } : {}),

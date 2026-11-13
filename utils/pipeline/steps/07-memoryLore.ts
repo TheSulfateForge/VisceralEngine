@@ -11,6 +11,7 @@ import { generateLoreId, generateMemoryId } from '../../../idUtils';
 import { checkBannedMechanisms, checkAdversarialLore } from '../../engine';
 import { MEMORY_CAP, DEFAULT_MEMORY_SALIENCE } from '../../../config/engineConfig';
 import { fileWitnessedFacts } from '../../engine/npcMemory';
+import { openRegisters, syncRecordFacts } from '../../engine/npcRegister';
 
 /**
  * Step 7: Lore & Memory Pipeline
@@ -219,11 +220,29 @@ export const memoryLoreStep: PipelineStep = {
             });
         }
 
-        ctx.updatedKnownEntities = withWitnessed;
+        // v1.59: open a register for each named NPC in a direct scene this
+        // turn (older saves: once, for NPCs whose ledger shows past scenes),
+        // and keep registers in step with newly filed facts.
+        const migrate = !withWitnessed.some(e => e.register);
+        const { entities: withRegisters, opened } = openRegisters(
+            withWitnessed, ctx.playerInput ?? '', r.narrative ?? '', ctx.currentTurn, migrate,
+        );
+        const synced = withRegisters.map(e => e.register && e.witnessed?.length
+            ? { ...e, register: syncRecordFacts(e.register, e.witnessed, ctx.currentTurn) }
+            : e);
+        if (opened.length > 0) {
+            ctx.debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[NPC REGISTER — v1.59] Opened for: ${opened.join(', ')}${migrate ? ' (older save: NPCs with past scenes)' : ''}.`,
+                type: 'info',
+            });
+        }
+
+        ctx.updatedKnownEntities = synced;
         ctx.worldUpdate = {
             ...ctx.worldUpdate,
             memory: finalMemory,
-            knownEntities: withWitnessed,
+            knownEntities: synced,
         };
 
         return ctx;

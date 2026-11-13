@@ -307,6 +307,36 @@ export interface SceneFocus {
     source?: 'manual' | 'bracket';
 }
 
+// ── v1.59: NPC register ────────────────────────────────────────────────────
+/** How an NPC came to know something. 'told' = believed, not verified. */
+export type RegisterSource = 'witnessed' | 'told' | 'rumor' | 'record';
+export interface RegisterKnowledge { id: string; text: string; source: RegisterSource; from?: string; turn: number }
+/** Keyed: a new value for the same key replaces the old one. */
+export interface RegisterState { key: string; value: string; turn: number }
+export interface RegisterPromise { id: string; text: string; by: 'player' | 'npc'; status: 'open' | 'kept' | 'broken'; turn: number }
+/** Keyed by `toward`: how this NPC currently feels about someone. */
+export interface RegisterFeeling { toward: string; text: string; turn: number }
+export interface RegisterIntimacy {
+    firsts: Array<{ act: string; turn: number }>;
+    acts: Array<{ act: string; count: number; lastTurn: number }>;
+    /** What the NPC has said they want, won't do, or not yet. Rules, not flavour. */
+    wants: Array<{ id: string; text: string; kind: 'want' | 'limit' | 'not_yet'; turn: number }>;
+    /** Items from the sheet's Kinks that have actually appeared on the page. */
+    kinksShown: Array<{ text: string; turn: number }>;
+}
+/** Rare: a sustained change in how this NPC behaves, with the turns that show it. */
+export interface RegisterDevelopment { id: string; text: string; turns: number[]; turn: number }
+export interface NpcRegister {
+    createdTurn: number;
+    updatedTurn: number;
+    knowledge: RegisterKnowledge[];
+    state: RegisterState[];
+    promises: RegisterPromise[];
+    feelings: RegisterFeeling[];
+    intimacy: RegisterIntimacy;
+    developments: RegisterDevelopment[];
+}
+
 export interface KnownEntity {
     id: string;
     name: string;
@@ -321,6 +351,12 @@ export interface KnownEntity {
      * engine. Survives global memory eviction; shown for in-scene NPCs.
      */
     witnessed?: string[];
+    /**
+     * v1.59: the living record for a named NPC the player has had a scene
+     * with. Engine-owned; written by the post-turn register pass. Where it
+     * differs from the authored sheet, the register wins.
+     */
+    register?: NpcRegister;
 
     // --- Characterization (v1.16) ---
     /**

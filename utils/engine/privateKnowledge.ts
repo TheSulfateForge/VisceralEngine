@@ -139,7 +139,9 @@ ${parts.join('\n\n')}`;
 export const NPC_KNOWLEDGE_RULE = `[WHAT NPCS KNOW]
 An NPC's knowledge is bounded and specific. It is exactly:
 - what they have observed in a scene they were present for;
-- what someone told them, on the page, in play — their Ledger is that record;
+- what someone told them, on the page, in play — their Ledger and REGISTER
+  ("Knows") are that record. A REGISTER entry is something they already know:
+  bring it up as familiar, never as news. "believes it" = told, not verified;
 - what their role, faction, trade and location would plainly give them.
 
 That is the whole list. Being perceptive, well-connected, or written as
