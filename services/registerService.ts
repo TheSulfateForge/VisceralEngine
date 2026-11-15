@@ -119,14 +119,20 @@ const buildPrompt = (input: RegisterPassInput): string => {
 
 THE PLAYER CHARACTER IS ${input.pcName}. "PLAYER" lines are ${input.pcName}'s words and actions. In the NARRATION, "I", "me" and "my" also mean ${input.pcName}.
 
-RULES — record ONLY what happened on the page in THIS exchange, and only what the NPC's CURRENT REGISTER does not already say:
-1. knowledge: facts this NPC learned THIS exchange, one self-contained sentence each, naming people. source "witnessed" = they saw it happen while present; "told" = someone said it to them (set "from"; record it as what they were told, even if it may be false); "rumor" = hearsay. Never record what they could not have seen or heard. Max 4.
-2. state: things that are now TRUE of the NPC and replace an older value — key is a short label (title, residence, injury, clothing_status, mood_toward_marriage …). Max 3. Do NOT record virginity or pregnancy (the engine tracks those).
-3. promises: a promise made THIS exchange (by "player" to the NPC, or by "npc" to the player); or an existing promise now kept or broken (repeat its text, set status). Max 2.
-4. feelings: how the NPC now feels toward a named person, only if it clearly changed this exchange. Max 2.
-5. intimacy: acts = sexual or intimate acts that actually happened between them this exchange (short labels: "kiss", "milking", "oral (her giving)", "vaginal sex" …). wants = what the NPC SAID they want, refuse ("limit"), or not yet ("not_yet") — these become rules. kinks_shown = items from the NPC's SHEET — THE KINKS that actually appeared on the page this exchange (use the sheet's own words); never anything not on that list.
-6. development: RARE. Only when this exchange completes a pattern already visible in the register/ledger across several scenes, or is one decisive event that changes how they will behave from now on. One sentence; list the turns that show it. Leave it out on ordinary turns — almost every turn has none.
-7. Leave a field out when nothing qualifies. An NPC with nothing new gets no entry. Most turns produce 0-3 entries in total.
+RULES — record ONLY what happened on the page in THIS exchange, and only what the NPC's CURRENT REGISTER does not already say. Put each thing in the ONE section it belongs to:
+
+1. knowledge — a FACT this NPC learned this exchange, about the player, another person, or the world. One self-contained sentence naming people ("Ryan told her he called the King a bastard to his face."). source "witnessed" = they saw it while present; "told" = someone said it to them (set "from"; record what they were told, even if it may be false); "rumor" = hearsay. Never what they could not have seen or heard. Max 4.
+2. state — ONLY a fact about the NPC that will STILL be true next week and replaces an older value: title, marital status, residence, household role, duties, a standing arrangement or schedule (e.g. milking twice a day), a lasting injury. Max 3.
+   NEVER state: where they are or how they sit/stand/lie, what they wear, what they are doing right now, how they are reacting this moment, the meal, the scene's mood, body language, technique. Those belong to the narration and are NOT recorded anywhere.
+   Never record virginity or pregnancy (the engine tracks those).
+3. feelings — how the NPC now feels toward a named PERSON, only if it clearly changed this exchange ("toward": the person's name). Moods toward people go HERE, never in state. Max 2.
+4. promises — ONLY an explicit commitment about the future: "I will…", "I won't…", "you have my word…", made this exchange by "player" to the NPC or by "npc" to the player; or an existing promise from the register now kept or broken (repeat its text, set status). Agreements about what just happened, plans for the next hour, and summaries are NOT promises. Max 2.
+5. intimacy — REQUIRED whenever anything sexual or intimate happened between them this exchange:
+   acts: every such act, short labels ("kiss", "milking", "orgasm (hers)", "fingering", "oral (her giving)", "oral (him giving)", "vaginal sex"). List each act that happened, even if it happened before. The engine counts them and records the first time.
+   wants: ONLY about sex and intimacy — what the NPC SAID they want ("want"), refuse ("limit") or not yet ("not_yet"). These become rules. Nothing non-sexual goes here.
+   kinks_shown: items from the NPC's SHEET — THE KINKS that actually appeared on the page this exchange (use the sheet's own words); never anything not on that list.
+6. development — RARE. Only when this exchange completes a pattern already visible in the register/ledger across several scenes, or is one decisive event that changes how they will behave from now on. One sentence; list the turns that show it. Almost every turn has none.
+7. Leave a field out when nothing qualifies. An NPC with nothing new gets no entry. A quiet conversational turn usually produces nothing at all.
 8. Use the NPC's exact name as given in the ### heading.
 
 THIS IS TURN ${input.turn}.

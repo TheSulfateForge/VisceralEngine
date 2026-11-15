@@ -22,7 +22,8 @@ import { SimulationEngine } from '../utils/simulationEngine';
 import { phaseAfterElapsed, parsePlayerTimeNote, resolvePlayerTimeNote, deriveWorldTime } from '../utils/engine/timeUtils';
 import { applySleepInference } from '../utils/engine/sleepInference';
 import { estimateActivityBySimilarity, type ActivityEstimate } from '../utils/engine/activityEstimate';
-import { applyRegisterDiff, matchRegisterNpc } from '../utils/engine/npcRegister';
+import { applyRegisterDiff, matchRegisterNpc, syncRecordFacts } from '../utils/engine/npcRegister';
+import { fileWitnessedFacts } from '../utils/engine/npcMemory';
 import { identifyingNames } from '../utils/engine/npcMemory';
 import { REGISTER_PASS_MAX_NPCS } from '../services/registerService';
 import { embeddingService } from '../services/embeddingService';
@@ -311,11 +312,20 @@ export const useGeminiClient = () => {
                   added++;
               }
               if (added === 0) return prevWorld;
+              const recovered = pool.slice(pool.length - added);
               if (pool.length > MEMORY_CAP) {
                   pool = evictBySalience(pool, MEMORY_CAP, currentTurn, []);
               }
               console.log(`[SALVAGE] Recovered ${added} memory fragment(s) from summarization window.`);
-              return { ...prevWorld, memory: pool };
+              // v1.60: file recovered facts on the NPCs they name, and into
+              // their registers — this path bypassed the pipeline, so in the
+              // 2026-11-15 save (where every fact came from here) no NPC was
+              // ever given one.
+              const { entities: filedEntities } = fileWitnessedFacts(prevWorld.knownEntities ?? [], recovered, pool);
+              const knownEntities = filedEntities.map(e => e.register && e.witnessed?.length
+                  ? { ...e, register: syncRecordFacts(e.register, e.witnessed, currentTurn) }
+                  : e);
+              return { ...prevWorld, memory: pool, knownEntities };
           });
       }
 

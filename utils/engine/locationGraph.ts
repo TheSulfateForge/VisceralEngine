@@ -447,6 +447,18 @@ const NOT_A_PLACE_RE = /\b(?:population|demographics|history|overview|timeline|c
 
 // Strong travel cues only. "go to the window" is not a trip; "head back to",
 // "ride to", "the carriage" are.
+/**
+ * v1.60: the sentence around `at` recalls an earlier trip rather than making
+ * one now ("since the ride to the palace", "this morning we rode to …").
+ */
+const RECOLLECTION_RE = /\b(?:since|earlier|this\s+morning|yesterday|last\s+(?:night|week|time)|ago|remember(?:ed)?|recall(?:ed)?|used\s+to|had\s+(?:ridden|driven|gone|travell?ed|been)|when\s+we\s+(?:rode|drove|went|came|travell?ed)|on\s+the\s+way\s+(?:here|back))\b/i;
+export const isRecollection = (text: string, at: number): boolean => {
+    const start = Math.max(text.lastIndexOf('.', at), text.lastIndexOf('!', at), text.lastIndexOf('?', at), text.lastIndexOf('\n', at)) + 1;
+    const endRel = text.slice(at).search(/[.!?\n]/);
+    const sentence = text.slice(start, endRel < 0 ? undefined : at + endRel);
+    return RECOLLECTION_RE.test(sentence);
+};
+
 const STRONG_TRAVEL_RE = /\b(?:head(?:s|ed|ing)?\s+(?:back|home|out|over|off|down|up|to|toward|towards|for)|ride|rides|riding|rode|drive|drives|driving|drove|travel(?:s|led|ling|ed|ing)?|carriage|coach|leave(?:s)?\s+for|set(?:s|ting)?\s+off|return(?:s|ed|ing)?\s+to|go(?:es|ing)?\s+(?:back|home)|went\s+(?:back|home)|make\s+my\s+way|making\s+my\s+way)\b/i;
 
 const ARRIVAL_RE = String.raw`(?:arriv\w*\s+(?:at|in)|reach\w*|pull\w*\s+up\s+(?:at|before|outside)|back\s+(?:at|in|inside)|return\w*\s+to|through\s+the\s+gates?\s+of|in\s+through\s+the\s+door\s+of|step\w*\s+into|walk\w*\s+into)`;
@@ -576,8 +588,15 @@ export const inferLocationMove = (
         for (const n of nodes) {
             if (current && sameLocation(n.displayName, current)) continue;
             const core = coreName(n.displayName);
-            const full = new RegExp(`\\b${corePattern(core)}\\b`, 'i').exec(input);
-            let score = full ? 1000 + full[0].length : 0;
+            // v1.60: the place must be the DESTINATION — after to / into /
+            // toward / for — and not in a sentence recalling an earlier trip.
+            // 2026-11-15 Westcross save, turn 32: "Since the horse ride from
+            // the palace I decided…" (a memory) moved the player to Drevast
+            // Palace for +15m and left Liora's record placed there.
+            const full = new RegExp(
+                String.raw`\b(?:to|into|toward|towards|for|back\s+to|home\s+to|on\s+to|onto|up\s+to|over\s+to|down\s+to)\s+(?:the\s+)?(?:[\w'’-]+\s+){0,2}?(${corePattern(core)})\b`, 'i',
+            ).exec(input);
+            let score = full && !isRecollection(input, full.index) ? 1000 + full[1].length : 0;
             if (!score) {
                 const last = core.split(/\s+/).pop()!;
                 const uniqueLast = (lastWordCounts.get(last.toLowerCase()) ?? 0) === 1 && last.length >= 5;
@@ -585,7 +604,7 @@ export const inferLocationMove = (
                     const head = new RegExp(
                         String.raw`\b(?:to|toward|towards|for|back\s+to|home\s+to)\s+(?:the\s+)?(?:[\w'’-]+\s+){0,2}?(${corePattern(last)})\b`, 'i',
                     ).exec(input);
-                    if (head) score = head[1].length;
+                    if (head && !isRecollection(input, head.index)) score = head[1].length;
                 }
             }
             if (score && (!best || score > best.score)) best = { n, score };

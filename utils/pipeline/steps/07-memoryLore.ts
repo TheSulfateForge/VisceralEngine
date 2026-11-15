@@ -11,7 +11,7 @@ import { generateLoreId, generateMemoryId } from '../../../idUtils';
 import { checkBannedMechanisms, checkAdversarialLore } from '../../engine';
 import { MEMORY_CAP, DEFAULT_MEMORY_SALIENCE } from '../../../config/engineConfig';
 import { fileWitnessedFacts } from '../../engine/npcMemory';
-import { openRegisters, syncRecordFacts } from '../../engine/npcRegister';
+import { openRegisters, syncRecordFacts, scrubRegisterState } from '../../engine/npcRegister';
 
 /**
  * Step 7: Lore & Memory Pipeline
@@ -223,13 +223,28 @@ export const memoryLoreStep: PipelineStep = {
         // v1.59: open a register for each named NPC in a direct scene this
         // turn (older saves: once, for NPCs whose ledger shows past scenes),
         // and keep registers in step with newly filed facts.
-        const migrate = !withWitnessed.some(e => e.register);
+        // v1.60: not on turn 1 — a new game's seed NPCs carry authored ledger
+        // lines, which made the one-time older-save catch-up fire on a new game.
+        const migrate = ctx.currentTurn > 1 && !withWitnessed.some(e => e.register);
         const { entities: withRegisters, opened } = openRegisters(
             withWitnessed, ctx.playerInput ?? '', r.narrative ?? '', ctx.currentTurn, migrate,
         );
-        const synced = withRegisters.map(e => e.register && e.witnessed?.length
-            ? { ...e, register: syncRecordFacts(e.register, e.witnessed, ctx.currentTurn) }
-            : e);
+        const scrubbedLog: string[] = [];
+        const synced = withRegisters.map(e => {
+            if (!e.register) return e;
+            // v1.60: registers written before the state filter get cleaned once.
+            const { register: clean, moved, removed } = scrubRegisterState(e.register);
+            if (moved || removed) scrubbedLog.push(`${e.name} (moved ${moved}, removed ${removed})`);
+            const register = e.witnessed?.length ? syncRecordFacts(clean, e.witnessed, ctx.currentTurn) : clean;
+            return register === e.register ? e : { ...e, register };
+        });
+        if (scrubbedLog.length > 0) {
+            ctx.debugLogs.push({
+                timestamp: new Date().toISOString(),
+                message: `[NPC REGISTER — v1.60] Cleaned moment-to-moment state: ${scrubbedLog.join(', ')}.`,
+                type: 'info',
+            });
+        }
         if (opened.length > 0) {
             ctx.debugLogs.push({
                 timestamp: new Date().toISOString(),

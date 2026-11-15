@@ -1,4 +1,5 @@
 import { KnownEntity, WorldTickAction, NPCInteraction, WorldTickEvent, DebugLogEntry, LocationGraph } from '../../types';
+import { identifyingNames } from './npcMemory';
 import { ENTITY_NEARBY_DECAY_TURNS, ENTITY_DISTANT_DECAY_TURNS } from '../../config/engineConfig';
 import { ENTITY_EXTRACTION_BLACKLIST } from './threatPipeline';
 
@@ -93,6 +94,23 @@ export const isRemoteAction = (actionText: string, playerLocation: string): bool
 
 export const isDepartureAction = (actionText: string): boolean => DEPARTURE_RE.test(actionText);
 
+// v1.60: an NPC SHOWN in the scene — speaking or physically acting in the
+// narration, not merely thought of or reported. Recollection and hypotheticals
+// ("had said", "would have") do not count.
+const PROSE_ACTION_VERBS = String.raw`(?:said|says|asked|asks|answered|answers|replied|replies|whispered|whispers|murmured|murmurs|laughed|laughs|smiled|smiles|nodded|nods|shrugged|shrugs|sighed|sighs|leaned|leans|turned|turns|looked|looks|glanced|glances|watched|watches|kissed|kisses|sat|sits|stood|stands|rose|rises|took|takes|reached|reaches|pressed|presses|lifted|lifts|moved|moves|stepped|steps|shifted|shifts|pulled|pulls|set|sets|held|holds|met|meets|tipped|tips|tilted|tilts|poured|pours|ate|eats|drank|drinks|walked|walks|came|comes|followed|follows|touched|touches|caught|catches|let|lets|kept|keeps|put|puts|gave|gives|went|goes)`;
+const POSSESSED_BODY = String.raw`(?:hand|hands|fingers|mouth|lips|eyes|gaze|face|voice|breath|breathing|tail|horns?|hair|shoulders?|arms?|head|chin|cheek|jaw|knees?|hips?|chest|back|weight|cup|plate|fork)`;
+export const actsInNarrative = (narrative: string, name: string): boolean => {
+    const given = identifyingNames(name)[0];
+    if (!given) return false;
+    const n = given.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(
+        String.raw`(?<!\b(?:from|of|about|by|for|to|with|like|than)\s)\b${n}\b(?:\s+[A-Z][\w'’-]+)?(?:\s+(?!had\b|would\b|could\b|might\b|once\b|used\b)\w+ly)?\s+${PROSE_ACTION_VERBS}\b` +
+        String.raw`|\b${n}(?:'s|’s)\s+(?:\w+\s+)?${POSSESSED_BODY}\b` +
+        String.raw`|["”]\s*,?\s*${n}\s+${PROSE_ACTION_VERBS}\b`,
+    );
+    return re.test(narrative ?? '');
+};
+
 /** Called every turn after entity updates are merged. Updates lastSeenTurn
  *  for entities referenced in this turn's narrative, npc_actions, or
  *  npc_interaction. Returns the updated entity array.
@@ -151,7 +169,19 @@ export const updateEntityPresence = (
         }
 
         // 2. On screen (acted visibly here, or spoke) → present with the player.
-        if (onScreen) {
+        //    v1.60: or shown acting/speaking in the prose itself. DeepSeek
+        //    rarely sends npc_actions/npc_interaction for the people in the
+        //    room, so a Liora who was wrongly marked distant (2026-11-15
+        //    save) talked to the Queen for five turns and never came back.
+        const actsInProse = !onScreen && !departing && actsInNarrative(narrative, entity.name);
+        if (onScreen || actsInProse) {
+            if (actsInProse && entity.status !== 'present' && entity.status) {
+                debugLogs.push({
+                    timestamp: new Date().toISOString(),
+                    type: 'info',
+                    message: `[PRESENCE — v1.60] ${entity.name} speaks/acts in the scene's prose → present (was ${entity.status}).`
+                });
+            }
             return {
                 ...entity,
                 lastSeenTurn: currentTurn,
@@ -516,6 +546,46 @@ export const validateConditionEntityCoherence = (
 const placeWords = (s: string): Set<string> => new Set(placeTokens((s ?? '').replace(/^left\s+/i, '')));
 const stripThe = (s: string) => s.trim().replace(/^the\s+/i, '').toLowerCase();
 
+/**
+ * v1.60: one place contains the other, by what the graph records — a node's
+ * tags or description naming the other place, or a "within …" link between
+ * them. The graph has no explicit parent field; these are the signals seeds
+ * and the model actually leave (Drevast Palace: tag "caerveld", "the seat of
+ * House Drevast in Caerveld", linked to Caerveld "within city").
+ */
+export const placesOverlap = (graph: LocationGraph | undefined, a: string, b: string): boolean => {
+    const nodes = Object.values(graph?.nodes ?? {});
+    const find = (loc: string) => {
+        const l = stripThe(loc);
+        const root = l.split(/\s*(?:—|–|,)\s*/);
+        return nodes.filter(n => {
+            const d = stripThe(n.displayName ?? '');
+            return d === l || root.includes(d) || d.split(/\s*(?:—|–|,)\s*/)[0] === root[0];
+        });
+    };
+    const na = find(a), nb = find(b);
+    if (na.length === 0 || nb.length === 0) return false;
+    const mentions = (n: { tags?: string[]; description?: string }, other: { displayName: string }) => {
+        const core = stripThe(other.displayName).split(/\s*(?:—|–|,)\s*/)[0];
+        if (!core) return false;
+        const slug = core.replace(/\s+/g, '-');
+        return (n.tags ?? []).some(t => t.toLowerCase() === core || t.toLowerCase() === slug)
+            || new RegExp(`\\bin\\s+(?:the\\s+)?${core.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(n.description ?? '');
+    };
+    for (const x of na) for (const y of nb) {
+        if (x.id === y.id || mentions(x, y) || mentions(y, x)) return true;
+        // A "within …" link only means containment when one side is a
+        // settlement or district — two buildings in the same city are both
+        // "within city" of it, not of each other.
+        const broad = (n: { tags?: string[] }) => (n.tags ?? []).some(t => /^(?:city|capital|town|village|settlement|district|quarter|region|province)$/i.test(t));
+        const within = (broad(x) || broad(y)) && (graph?.edges ?? []).some(ed =>
+            ((ed.from === x.id && ed.to === y.id) || (ed.from === y.id && ed.to === x.id))
+            && Object.keys(ed.modeOverrides ?? {}).some(k => /\bwithin\b/i.test(k)));
+        if (within) return true;
+    }
+    return false;
+};
+
 export const demoteRemoteNearby = (
     entities: KnownEntity[],
     graph: LocationGraph | undefined,
@@ -542,6 +612,8 @@ export const demoteRemoteNearby = (
         if (!known.has(stripThe(loc))) return e;
         const theirs = placeWords(loc);
         if (theirs.size === 0 || [...theirs].some(t => player.has(t))) return e;
+        // v1.60: one place inside the other (Drevast Palace in Caerveld).
+        if (placesOverlap(graph, loc, playerLocation)) return e;
         debugLogs.push({
             timestamp: new Date().toISOString(),
             type: 'info',

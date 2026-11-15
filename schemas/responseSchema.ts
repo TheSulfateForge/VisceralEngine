@@ -508,7 +508,8 @@ export const RESPONSE_SCHEMA: Schema = {
   },
   // v1.57: time_beats is required (v1.56 required time_passed_minutes) — with
   // strict:false DeepSeek left a single optional number out of most replies.
-  required: ["thought_process", "scene_mode", "scene_time_phase", "tension_level", "time_beats", "narrative", "world_tick"]
+  // v1.60: new_memories too — 0 of 56 turns sent it (2026-11-15 save).
+  required: ["thought_process", "scene_mode", "scene_time_phase", "tension_level", "time_beats", "narrative", "new_memories", "world_tick"]
 };
 
 // ============================================================================

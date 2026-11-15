@@ -1,4 +1,3 @@
-
 // ────────────────────────────────────────────────────────────────────────────
 // v1.59: THE NPC REGISTER — a living record per named NPC.
 //
@@ -89,6 +88,45 @@ export interface RegisterDiff {
 }
 
 const SOURCES: RegisterSource[] = ['witnessed', 'told', 'rumor', 'record'];
+
+// ── v1.60: what a state key may hold ───────────────────────────────────────
+// 2026-11-15 save: Liora's 24 state slots were posture_with_ryan,
+// clothing_status, gag_response, dress_fit, fellatio_technique … and the cap
+// pushed out her title and milking schedule. State is what will still be true
+// next week. The moment belongs to the narration; moods toward people are
+// feelings; facts learned are knowledge; sex acts are intimacy.
+const TRANSIENT_KEY_RE = /(?:^|_)(?:position|posture|pose|location|proximity|seated|lying|transport|mounting|riding|clothing|clothes|dress|outfit|attire|naked|stance|activity|doing|plate|meal|conduct|technique|response|reaction|gag|breathing|tail|body_language|appearance|expression|focus|question|reassessed|acknowledged|conversation|interaction|thoughts|current|moment|afterglow|post_orgasm|receptivity|engagement|breasts?_status|milking_breasts|status_now)(?:$|_)/;
+const FEELING_KEY_RE = /^(?:mood|feelings?|attitude|stance|opinion|view|trust|regard|appraisal|disposition)_(?:toward|towards|to|of|on|about)_(.+)$/;
+const KNOWLEDGE_KEY_RE = /^(?:knowledge|knows|current_knowledge|knowledge_of|heard|learned|aware)(?:_|$)/;
+const FIRST_ACT_KEY_RE = /^first_(.+)$/;
+const LIMIT_KEY_RE = /^(?:limits?|hard_limits?|boundar(?:y|ies))(?:_stated)?$/;
+const WANT_KEY_RE = /^(?:sexual_wants?|declared_wants?|wants?_stated|desires?)(?:_stated)?$/;
+const SEX_DETAIL_KEY_RE = /^(?:sexual|fellatio|cunnilingus|orgasm|penetration|sex|approach_to_sex)(?:_|$)/;
+/** Not state at all: other sections' names, one-off events, scene prep. */
+const NOT_STATE_KEY_RE = /^(?:mood|promise|promises(?:_.*)?|developed|development|feelings?|knowledge|intimacy|acts?)$|_prepared$|_done$/;
+const EVENT_KEY_RE = /^(?:court_action|action|event|did|news)(?:_|$)/;
+
+type Route =
+    | { kind: 'keep' } | { kind: 'drop' }
+    | { kind: 'feeling'; toward: string }
+    | { kind: 'knowledge' }
+    | { kind: 'act'; act: string }
+    | { kind: 'want'; want: 'want' | 'limit' | 'not_yet' };
+
+export const routeStateKey = (key: string, _value: string): Route => {
+    const f = FEELING_KEY_RE.exec(key);
+    if (f) return { kind: 'feeling', toward: f[1].replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) };
+    if (KNOWLEDGE_KEY_RE.test(key)) return { kind: 'knowledge' };
+    const first = FIRST_ACT_KEY_RE.exec(key);
+    if (first) return { kind: 'act', act: first[1].replace(/_/g, ' ') };
+    if (key === 'not_yet') return { kind: 'want', want: 'not_yet' };
+    if (EVENT_KEY_RE.test(key)) return { kind: 'knowledge' };
+    if (NOT_STATE_KEY_RE.test(key)) return { kind: 'drop' };
+    if (LIMIT_KEY_RE.test(key)) return { kind: 'want', want: 'limit' };
+    if (WANT_KEY_RE.test(key)) return { kind: 'want', want: 'want' };
+    if (SEX_DETAIL_KEY_RE.test(key) || TRANSIENT_KEY_RE.test(key)) return { kind: 'drop' };
+    return { kind: 'keep' };
+};
 const WANT_KINDS = ['want', 'limit', 'not_yet'] as const;
 const PROMISE_STATUS = ['open', 'kept', 'broken'] as const;
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -105,8 +143,24 @@ export const parseRegisterDiffs = (raw: unknown): RegisterDiff[] => {
             .map(x => ({ text: clip(x.text), source: (SOURCES as string[]).includes(String(x.source)) ? x.source as RegisterSource : 'witnessed' as RegisterSource, from: clip(x.from, 80) || undefined }))
             .filter(x => x.text).slice(0, REGISTER_TURN_LIMITS.knowledge);
         if (k.length) d.knowledge = k;
-        const st = arr(u.state).filter(isObj).map(x => ({ key: keyOf(x.key), value: clip(x.value, 160) }))
-            .filter(x => x.key && x.value).slice(0, REGISTER_TURN_LIMITS.state);
+        // v1.60: state is for what stays true; the pass filled it with the
+        // moment (posture, clothing, gag response). Route or refuse each key.
+        const routedFeelings: Array<{ toward: string; text: string }> = [];
+        const routedKnowledge: Array<{ text: string; source: RegisterSource }> = [];
+        const routedActs: string[] = [];
+        const routedWants: Array<{ text: string; kind: 'want' | 'limit' | 'not_yet' }> = [];
+        const st = arr(u.state).filter(isObj)
+            .map(x => ({ key: keyOf(x.key).replace(/_updated$/, ''), value: clip(x.value, 160) }))
+            .filter(x => x.key && x.value)
+            .filter(x => {
+                const r = routeStateKey(x.key, x.value);
+                if (r.kind === 'feeling') { routedFeelings.push({ toward: r.toward, text: x.value }); return false; }
+                if (r.kind === 'knowledge') { routedKnowledge.push({ text: x.value, source: 'witnessed' }); return false; }
+                if (r.kind === 'act') { routedActs.push(r.act); return false; }
+                if (r.kind === 'want') { routedWants.push({ text: x.value, kind: r.want }); return false; }
+                return r.kind === 'keep';
+            })
+            .slice(0, REGISTER_TURN_LIMITS.state);
         if (st.length) d.state = st;
         const pr = arr(u.promises).filter(isObj)
             .map(x => ({ text: clip(x.text), by: x.by === 'npc' ? 'npc' as const : 'player' as const, status: (PROMISE_STATUS as readonly string[]).includes(String(x.status)) ? x.status as 'open' | 'kept' | 'broken' : undefined }))
@@ -134,6 +188,15 @@ export const parseRegisterDiffs = (raw: unknown): RegisterDiff[] => {
             d.development = {
                 text: clip(u.development.text),
                 turns: arr(u.development.turns).filter((t): t is number => typeof t === 'number' && Number.isFinite(t)).slice(0, 8),
+            };
+        }
+        if (routedFeelings.length) d.feelings = [...(d.feelings ?? []), ...routedFeelings].slice(0, REGISTER_TURN_LIMITS.feelings + 1);
+        if (routedKnowledge.length) d.knowledge = [...(d.knowledge ?? []), ...routedKnowledge].slice(0, REGISTER_TURN_LIMITS.knowledge);
+        if (routedActs.length || routedWants.length) {
+            d.intimacy = {
+                ...(d.intimacy ?? {}),
+                ...(routedActs.length ? { acts: [...(d.intimacy?.acts ?? []), ...routedActs].slice(0, REGISTER_TURN_LIMITS.acts) } : {}),
+                ...(routedWants.length ? { wants: [...(d.intimacy?.wants ?? []), ...routedWants].slice(0, REGISTER_TURN_LIMITS.wants) } : {}),
             };
         }
         if (Object.keys(d).length > 1) out.push(d);
@@ -243,6 +306,32 @@ export const applyRegisterDiff = (reg: NpcRegister, d: RegisterDiff, turn: numbe
     r.developments = capTail(r.developments, REGISTER_CAPS.developments);
     if (changes.length) r.updatedTurn = turn;
     return { register: r, changes };
+};
+
+/**
+ * v1.60: clean a register's state with the same routing the pass now gets —
+ * moods move to feelings, facts to knowledge, "first_*" to acts, sex terms to
+ * stated terms, and moment-to-moment entries are removed. Idempotent; a
+ * clean register comes back unchanged (same object).
+ */
+export const scrubRegisterState = (reg: NpcRegister): { register: NpcRegister; moved: number; removed: number } => {
+    let moved = 0, removed = 0;
+    const keep: NpcRegister['state'] = [];
+    let r = reg;
+    for (const st of reg.state) {
+        const route = routeStateKey(st.key, st.value);
+        if (route.kind === 'keep') { keep.push(st); continue; }
+        if (route.kind === 'drop') { removed++; continue; }
+        moved++;
+        const d: RegisterDiff = { npc: '' };
+        if (route.kind === 'feeling') d.feelings = [{ toward: route.toward, text: st.value }];
+        if (route.kind === 'knowledge') d.knowledge = [{ text: st.value, source: 'witnessed' }];
+        if (route.kind === 'act') d.intimacy = { acts: [route.act] };
+        if (route.kind === 'want') d.intimacy = { wants: [{ text: st.value, kind: route.want }] };
+        r = applyRegisterDiff(r, d, st.turn).register;
+    }
+    if (moved === 0 && removed === 0) return { register: reg, moved, removed };
+    return { register: { ...r, state: keep, updatedTurn: reg.updatedTurn }, moved, removed };
 };
 
 /** Copy filed story facts (v1.58 `witnessed`) into the register as 'record' knowledge. */
