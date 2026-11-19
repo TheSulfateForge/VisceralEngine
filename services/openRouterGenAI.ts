@@ -137,7 +137,7 @@ const perToken = (v: unknown): number => {
 /**
  * Rank the allowed providers by the cost of one "average VRE call":
  * `ratio` input tokens + 1 output token. A provider with several endpoints
- * (Wafer and Sail Research each list two) is ranked by its cheapest one.
+ * (e.g. Wafer lists two) is ranked by its cheapest one.
  * Allowed providers with no listed endpoint keep their static position at
  * the end, so OpenRouter can still fall back to them.
  */

@@ -32,9 +32,9 @@ export const OPENROUTER_MODELS = [
  */
 export const OPENROUTER_ALLOWED_PROVIDERS = [
     'relace',
-    'morph',
     'wafer',
-    'sail-research',
+    'river',
+    'coreweave',
 ] as const;
 
 const LS_PROVIDER = 'visceral_ai_provider';

@@ -29,9 +29,8 @@ const store = new Map<string, string>();
 const per = (m: number) => String(m / 1_000_000);
 const ENDPOINTS: RawEndpoint[] = [
     { provider_name: 'Baidu Qianfan', tag: 'baidu', pricing: { prompt: per(0.0447), completion: per(0.1788) }, supported_parameters: ['structured_outputs'] },
-    { provider_name: 'Morph', tag: 'morph', pricing: { prompt: per(0.05), completion: per(0.192) }, supported_parameters: ['structured_outputs', 'response_format'] },
-    { provider_name: 'Sail Research', tag: 'sail-research', pricing: { prompt: per(0.09), completion: per(0.25) }, supported_parameters: ['response_format'] },
-    { provider_name: 'Sail Research', tag: 'sail-research/fp8', pricing: { prompt: per(0.09), completion: per(0.25) }, supported_parameters: ['response_format'] },
+    { provider_name: 'River', tag: 'river', pricing: { prompt: per(0.12), completion: per(0.48) }, supported_parameters: ['structured_outputs', 'response_format'] },
+    { provider_name: 'CoreWeave', tag: 'coreweave/fp8', pricing: { prompt: per(0.13), completion: per(0.65) }, supported_parameters: ['structured_outputs', 'response_format'] },
     { provider_name: 'Wafer', tag: 'wafer', pricing: { prompt: per(0.045), completion: per(0.50) }, supported_parameters: ['structured_outputs'] },
     { provider_name: 'Wafer', tag: 'wafer/fp8', pricing: { prompt: per(0.19), completion: per(0.65) }, supported_parameters: ['structured_outputs'] },
     { provider_name: 'Relace', tag: 'relace', pricing: { prompt: per(0.0028), completion: per(0.6426) }, supported_parameters: ['structured_outputs'] },
@@ -74,21 +73,21 @@ describe('v1.49 rankProviders', () => {
     });
 
     it('ranks by total cost for the input:output ratio', () => {
-        // 10:1 → relace 0.670, morph 0.692, wafer 0.950 (cheapest endpoint), sail 1.150
+        // 10:1 → relace 0.671, wafer 0.950 (cheapest endpoint), river 1.680, coreweave 1.950
         expect(rankProviders(ENDPOINTS, OPENROUTER_ALLOWED_PROVIDERS, 10).order)
-            .toEqual(['relace', 'morph', 'wafer', 'sail-research']);
-        // Output-heavy (2:1) → morph wins: 0.292 vs relace 0.648
-        expect(rankProviders(ENDPOINTS, OPENROUTER_ALLOWED_PROVIDERS, 2).order[0]).toBe('morph');
+            .toEqual(['relace', 'wafer', 'river', 'coreweave']);
+        // Output-heavy (2:1) → wafer wins: 0.590 vs relace 0.648
+        expect(rankProviders(ENDPOINTS, OPENROUTER_ALLOWED_PROVIDERS, 2).order[0]).toBe('wafer');
     });
 
     it('reports which providers accept json_schema', () => {
         const r = rankProviders(ENDPOINTS, OPENROUTER_ALLOWED_PROVIDERS, 10);
-        expect(r.structuredProviders.sort()).toEqual(['morph', 'relace', 'wafer']);
+        expect(r.structuredProviders.sort()).toEqual(['coreweave', 'relace', 'river', 'wafer']);
     });
 
     it('keeps unlisted allowed providers at the end so fallback can still reach them', () => {
-        const r = rankProviders(ENDPOINTS.filter(e => e.tag !== 'morph'), OPENROUTER_ALLOWED_PROVIDERS, 10);
-        expect(r.order[r.order.length - 1]).toBe('morph');
+        const r = rankProviders(ENDPOINTS.filter(e => e.tag !== 'relace'), OPENROUTER_ALLOWED_PROVIDERS, 10);
+        expect(r.order[r.order.length - 1]).toBe('relace');
     });
 });
 
@@ -158,8 +157,8 @@ describe('v1.49 OpenRouterGenAI transport', () => {
         expect(body.response_format.type).toBe('json_schema');
         expect(body.provider.allow_fallbacks).toBe(true);
         // json_schema routes only to providers that advertise structured_outputs, cheapest first.
-        expect(body.provider.only).toEqual(['relace', 'morph', 'wafer']);
-        expect(body.provider.order).toEqual(['relace', 'morph', 'wafer']);
+        expect(body.provider.only).toEqual(['relace', 'wafer', 'river', 'coreweave']);
+        expect(body.provider.order).toEqual(['relace', 'wafer', 'river', 'coreweave']);
         expect(body.messages[0]).toEqual({ role: 'system', content: 'sys' });
         expect(body.safetySettings).toBeUndefined();
     });
@@ -180,7 +179,7 @@ describe('v1.49 OpenRouterGenAI transport', () => {
         expect(res.text).toBe('{"reply":"fallback"}');
         expect(calls).toHaveLength(2);
         expect(calls[1].body.response_format).toEqual({ type: 'json_object' });
-        expect(calls[1].body.provider.only).toEqual(['relace', 'morph', 'wafer', 'sail-research']);
+        expect(calls[1].body.provider.only).toEqual(['relace', 'wafer', 'river', 'coreweave']);
         expect(calls[1].body.messages[0].content).toContain('JSON Schema');
     });
 
