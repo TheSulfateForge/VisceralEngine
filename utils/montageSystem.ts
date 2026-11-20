@@ -29,7 +29,7 @@ import type {
 import { generateUUID, generateMemoryId } from '../idUtils';
 import { applySkillUpdates, PROFICIENCY_LADDER, isProficiencyLevel } from './skillSystem';
 import { updateTime } from './engine/timeUtils';
-import { ReproductionSystem, syncPregnancyRegisters } from './reproductionSystem';
+import { ReproductionSystem, syncPregnancyRegisters, processBirths } from './reproductionSystem';
 import {
     DEFAULT_CALENDAR,
     MONTAGE_DEFAULT_MEMORY_SALIENCE,
@@ -180,9 +180,23 @@ export function commitMontageProposal(
     // v1.61: a montage bypasses the turn pipeline, so advance pregnancies here.
     if (w.pregnancies?.length) {
         const preg = ReproductionSystem.advancePregnancies(w.pregnancies, w.time.totalMinutes);
-        w = { ...w, pregnancies: preg.updated };
         events.push(...preg.logs);
-        w = { ...w, knownEntities: syncPregnancyRegisters(w.knownEntities ?? [], preg.updated, char.name, w.time.totalMinutes, currentTurn) };
+        // v1.61: a birth due inside the montage happens here.
+        const born = processBirths({
+            character: char,
+            entities: w.knownEntities ?? [],
+            pregnancies: preg.updated,
+            now: w.time.totalMinutes,
+            turn: currentTurn,
+            location: w.location ?? '',
+        });
+        char = born.character;
+        events.push(...born.logs);
+        w = {
+            ...w,
+            pregnancies: born.pregnancies,
+            knownEntities: syncPregnancyRegisters(born.entities, born.pregnancies, char.name, w.time.totalMinutes, currentTurn),
+        };
     }
 
     // 7. Turn advance --------------------------------------------------------

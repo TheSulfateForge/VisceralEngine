@@ -52,13 +52,12 @@ describe('v1.61 advancePregnancies (in-game clock)', () => {
         expect(updated[0].currentWeek).toBe(3);
         expect(updated[0].isVisible).toBe(false);
     });
-    it('becomes visible at week 12 and reaches term at week 40', () => {
+    it('becomes visible at week 12 and never delivers on its own (processBirths does)', () => {
         const v = ReproductionSystem.advancePregnancies([base], 5000 + 12 * MINUTES_PER_WEEK).updated[0];
         expect(v.isVisible).toBe(true);
         expect(v.status).toBe('gestating');
-        const t = ReproductionSystem.advancePregnancies([base], 5000 + 40 * MINUTES_PER_WEEK);
-        expect(t.updated[0].status).toBe('birth');
-        expect(t.logs.some(l => l.includes('full term'))).toBe(true);
+        const t = ReproductionSystem.advancePregnancies([base], 5000 + 45 * MINUTES_PER_WEEK);
+        expect(t.updated[0].status).toBe('gestating');
     });
 });
 
@@ -73,7 +72,7 @@ describe('v1.61 pregnancy description and records', () => {
         expect(describePregnancy(preg('Ilse', 'Mara Voss'), 14 * MINUTES_PER_WEEK))
             .toBe('pregnant by Mara Voss — week 14 of 40 (second trimester), showing, due in about 26 weeks');
         expect(describePregnancy(preg('Ilse', 'Unknown'), 2 * MINUTES_PER_WEEK)).toContain('father unknown');
-        expect(describePregnancy({ ...preg('Ilse', 'Tomas'), status: 'birth' }, 41 * MINUTES_PER_WEEK)).toContain('labor is imminent');
+        expect(describePregnancy({ ...preg('Ilse', 'Tomas'), dueWeek: 39 }, 38 * MINUTES_PER_WEEK)).toContain('labor could start any day');
     });
 
     it('pcPregnancy only returns a female PC\'s own pregnancy', () => {

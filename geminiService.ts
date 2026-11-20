@@ -6,6 +6,7 @@ import { CharacterService } from "./services/characterService";
 import { SummaryService } from "./services/summaryService";
 import { WorldPulseService } from "./services/worldPulseService";
 import { RegisterService, type RegisterPassInput } from "./services/registerService";
+import { ChildService, type ChildTraitInput } from "./services/childService";
 import { ChatMessage, Scenario, Character, GeneratedCharacterFields, GameWorld } from "./types";
 import { isImageGenerationAvailable, type AiProvider } from "./config/aiProvider";
 
@@ -16,6 +17,7 @@ export class GeminiService extends GeminiClient {
     private summaryService: SummaryService;
     private worldPulseService: WorldPulseService;
     private registerService: RegisterService;
+    private childService: ChildService;
 
     constructor(apiKey: string, modelName: string, provider: AiProvider = 'gemini') {
         super(apiKey, modelName, provider);
@@ -28,11 +30,18 @@ export class GeminiService extends GeminiClient {
         this.worldPulseService = new WorldPulseService(this.ai, modelName, this.buildThinkingConfig('low'));
         // v1.59: post-turn NPC register pass (background, same model).
         this.registerService = new RegisterService(this.ai, modelName, this.buildThinkingConfig('low'));
+        // v1.61: post-birth child trait pass (background, same model).
+        this.childService = new ChildService(this.ai, modelName, this.buildThinkingConfig('low'));
     }
 
     // v1.59: what changed for the named NPCs in this exchange
     async extractRegisterUpdates(input: RegisterPassInput) {
         return this.registerService.extract(input);
+    }
+
+    // v1.61: race, hair, eyes and name for a newborn
+    async generateChildTraits(input: ChildTraitInput) {
+        return this.childService.generate(input);
     }
 
     // v1.24: offscreen world simulation (background, cheap model)

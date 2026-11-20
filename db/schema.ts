@@ -49,6 +49,7 @@ import type {
   BodyProfile,
   BodyState,
   NpcRegister,
+  ChildRecord,
   ContentPolicy,
   SceneFocus,
   PlayerCanonEntry,
@@ -267,6 +268,8 @@ export interface EntityRow {
   ledger_ordered?: string[] | null;
   witnessed?: string[] | null;
   npc_register?: NpcRegister | null;
+  /** v1.61: child born in play. Unindexed. */
+  child_record?: ChildRecord | null;
   canonical?: boolean | null;
   relationship_level: RelationshipLevel;
   leverage: string;
@@ -318,6 +321,11 @@ export interface PregnancyRow {
   current_week: number;
   is_visible: number;
   status: PregnancyStatus;
+  /** v1.61. Unindexed; absent on older saves. */
+  due_week?: number | null;
+  birth_time?: number | null;
+  birth_turn?: number | null;
+  child_entity_id?: string | null;
 }
 
 // 4.6 — locations
@@ -585,6 +593,8 @@ export interface WorldStateRow {
   npc_positions: NpcPosition[] | null;
   /** v1.48 */
   content_policy?: ContentPolicy | null;
+  /** v1.61 */
+  inheritance_rules?: string | null;
   scene_focus?: SceneFocus | null;
   /** v1.37: one-turn voice-lock flag. Unindexed; absent on older saves. */
   voice_lock_flagged_turn: number | null;

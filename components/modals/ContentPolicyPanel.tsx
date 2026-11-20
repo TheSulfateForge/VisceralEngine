@@ -25,6 +25,7 @@ export const ContentPolicyPanel: React.FC = () => {
 
     const [policy, setPolicy] = useState<ContentPolicy>(() => effectiveContentPolicy(gameWorld));
     const [bannedText, setBannedText] = useState(() => policy.bannedDescriptors.join(', '));
+    const [inheritanceText, setInheritanceText] = useState(() => gameWorld.inheritanceRules ?? '');
 
     const commit = (next: ContentPolicy) => {
         const n = normalizeContentPolicy(next);
@@ -109,6 +110,22 @@ export const ContentPolicyPanel: React.FC = () => {
                         </div>
                     )}
                 </div>
+            </div>
+
+            <div className="space-y-2 pt-4 border-t border-gray-900">
+                <label className={sectionLabel}>Inheritance Rules (this campaign)</label>
+                <p className={small}>
+                    Sent to every birth when the child's race, hair, eyes and name are decided. One rule per line, e.g.
+                    "A monster's offspring is always fully a monster." or "An elf parent always yields a full elf."
+                    Gender is always a random roll. To fix a child afterwards, say so in OOC.
+                </p>
+                <textarea
+                    className="w-full bg-black border border-gray-800 focus:border-red-900/60 text-gray-200 text-xs px-3 py-2 focus:outline-none min-h-[72px]"
+                    value={inheritanceText}
+                    placeholder="None — race follows both parents; hair and eyes come from the parents."
+                    onChange={e => setInheritanceText(e.target.value)}
+                    onBlur={() => setGameWorld(prev => ({ ...prev, inheritanceRules: inheritanceText.trim() || undefined }))}
+                />
             </div>
 
             <div className="space-y-3 pt-4 border-t border-gray-900">

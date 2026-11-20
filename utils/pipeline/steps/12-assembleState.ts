@@ -1,7 +1,6 @@
 import type { PipelineStep, TurnContext } from '../types';
 import { resolveAllBannedNames } from '../../nameResolver';
 import { trimHiddenRegistry } from '../../engine';
-import { syncPregnancyRegisters } from '../../reproductionSystem';
 import { decayBioModifiers, applyCeilings } from '../../contentValidation';
 
 /**
@@ -85,14 +84,7 @@ export const assembleStateStep: PipelineStep = {
             pregnancies: ctx.worldUpdate.pregnancies ?? ctx.previousWorld.pregnancies ?? [],
             activeThreats: ctx.nextThreats,
             environment: ctx.nextEnv,
-            // v1.61: an NPC mother's pregnancy is written into her register.
-            knownEntities: syncPregnancyRegisters(
-                ctx.updatedKnownEntities,
-                ctx.worldUpdate.pregnancies ?? ctx.previousWorld.pregnancies ?? [],
-                ctx.previousCharacter.name,
-                ctx.newTime.totalMinutes,
-                newTurnCount,
-            ),
+            knownEntities: ctx.updatedKnownEntities,
             sceneMode: finalSceneMode,
             timeMode: ctx.effectiveTimeMode,   // v1.21: runtime-only (not persisted to projection row)
             tensionLevel: finalTensionLevel,

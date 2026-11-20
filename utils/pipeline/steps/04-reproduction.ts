@@ -1,5 +1,6 @@
 import type { PipelineStep, TurnContext } from '../types';
 import { ReproductionSystem, resolveConceptionParticipants } from '../../reproductionSystem';
+import { matchRegisterNpc } from '../../engine/npcRegister';
 
 /**
  * Step 3: Reproduction Pipeline
@@ -24,7 +25,11 @@ export const reproductionStep: PipelineStep = {
 
         if (r.biological_event) {
             const pc = ctx.previousCharacter;
-            const { involvesPc, partnerName } = resolveConceptionParticipants(r.body_events, pc.name);
+            const { involvesPc, partnerName: rawPartner } = resolveConceptionParticipants(r.body_events, pc.name);
+            // v1.61: store the partner's full record name ("Ilse" → "Ilse Brandt").
+            const known = ctx.previousWorld.knownEntities ?? [];
+            const pIdx = rawPartner !== 'Unknown' ? matchRegisterNpc(known.filter(e => !e.child), rawPartner) : -1;
+            const partnerName = pIdx >= 0 ? known.filter(e => !e.child)[pIdx].name : rawPartner;
             if (!involvesPc) {
                 log('[CONCEPTION] Biological event did not involve the player character — not tracked.');
             } else {

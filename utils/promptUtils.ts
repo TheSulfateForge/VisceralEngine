@@ -2,7 +2,7 @@ import { resolveCharacterBody, describeBodyState, vaginalVirginity, analVirginit
 import { contentPolicyLines, effectiveContentPolicy } from './engine/contentPolicy';
 import { selectLedgerForPrompt, selectWitnessedForPrompt } from './engine/npcMemory';
 import { renderRegisterForPrompt, registerBrief } from './engine/npcRegister';
-import { describePregnancy, pcPregnancy } from './reproductionSystem';
+import { describePregnancy, pcPregnancy, pcPostpartum, describePostpartum, childrenOf, describeChild } from './reproductionSystem';
 import { GameHistory, GameWorld, Character, SceneMode, MemoryItem, LoreItem, KnownEntity, BioMonitor, ActiveThreat, DormantHook, FactionExposure, ThreatDenialTracker, ChatMessage, SummarySegment, Role, PlayerCanonEntry, Pregnancy } from '../types';
 import { retrieveRelevantContext, retrieveRelevantMemories, retrieveRelevantSegments, findAliasMatchedEntities, RAGResult } from './ragEngine';
 import {
@@ -411,6 +411,8 @@ export const buildEntityContext = (
     mentionedOnlyIds: Set<string> = new Set(),
     /** v1.58: the player's input — ranks which older ledger/witnessed entries to show. */
     query: string = '',
+    /** v1.61: in-game minute, for a child's age. */
+    nowMinute: number = 0,
 ): string => {
     if (entities.length === 0) return "";
 
@@ -473,6 +475,8 @@ export const buildEntityContext = (
             const looks = appearanceForPrompt(e.appearance, ACTIVE_APPEARANCE_CAP);
             return (
                 `ID: ${e.id}\n Name: ${e.name} (${e.role})\n Location: ${e.location}\n` +
+                // v1.61: a child born in play — age from the clock, traits from its record.
+                (e.child ? ` Child (engine-tracked; age is exact): ${describeChild(e, nowMinute)}\n` : '') +
                 (looks ? ` Appearance (CANONICAL — describe them only this way): ${looks}\n` : '') +
                 personalityLine +
                 voiceLine +
@@ -837,6 +841,8 @@ const buildCharacterStateBlock = (
     nowMinute: number = 0,
     canon: PlayerCanonEntry[] = [],
     pregnancies: Pregnancy[] = [],
+    entities: KnownEntity[] = [],
+    turnCount?: number,
 ): string => {
     // Partition conditions: long personality/trait paragraphs that leaked in from
     // character creation are separated from short mechanical game-states.
@@ -867,6 +873,18 @@ const buildCharacterStateBlock = (
         (() => {
             const p = pcPregnancy(pregnancies, character);
             return p ? `- **Pregnancy (engine-tracked; describe her consistently with this stage):** ${describePregnancy(p, nowMinute)}` : '';
+        })(),
+        // v1.61: after delivery — six weeks of postpartum recovery.
+        (() => {
+            const p = pcPostpartum(pregnancies, character, nowMinute);
+            if (!p) return '';
+            const child = entities.find(e => e.id === p.childId);
+            return `- **After birth (engine-tracked):** ${describePostpartum(p, child, nowMinute, turnCount)}`;
+        })(),
+        // v1.61: every child born in play, with ages from the clock.
+        (() => {
+            const kids = childrenOf(entities);
+            return kids.length ? `- **Children (engine-tracked; ages are exact):** ${kids.map(k => describeChild(k, nowMinute)).join('; ')}` : '';
         })(),
     ].filter(Boolean).join('\n');
 
@@ -1244,6 +1262,7 @@ export const constructGeminiPrompt = async (
     forceActiveEntityIds,
     mentionedOnlyIds,
     userInput,
+    gameWorld.time?.totalMinutes ?? 0,
   );
   // v1.52: the entities whose record (looks + personality) is in THIS prompt —
   // the active and mentioned tiers. The client checks the reply against it.
@@ -1283,6 +1302,8 @@ export const constructGeminiPrompt = async (
       gameWorld.time?.totalMinutes ?? 0,
       gameWorld.playerCanon ?? [],
       gameWorld.pregnancies ?? [],
+      gameWorld.knownEntities ?? [],
+      gameWorld.turnCount,
   );
 
   // v1.39: the GM-only half of the backstory, plus the rule that bounds what

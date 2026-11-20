@@ -27,13 +27,30 @@ export const OOC_RESPONSE_SCHEMA: Schema = {
             type: Type.STRING,
             nullable: true,
             description: "OPTIONAL. When the player gave a standing instruction about HOW to narrate (pacing, tone, how NPCs speak or read them, how often NPCs touch them, how explicit to be), restate it here as ONE imperative clause. v1.35: this is now PERSISTED and injected into every subsequent turn as a binding [STANDING DIRECTIVES] block, so write it as a durable rule the engine can follow forever, not as a reaction to this one turn. A complaint ('why do you keep doing X') becomes the instruction it implies ('Do not do X'). Be specific and behavioural. Omit when the input was a question or a fact rather than an instruction."
+        },
+        // v1.61: required (an empty array when there is nothing to fix) —
+        // DeepSeek leaves optional fields out.
+        child_corrections: {
+            type: Type.ARRAY,
+            description: "v1.61: corrections to a CHILD born in play, applied directly to the child's record by the engine. Use ONLY when the player says a child listed in [CHILDREN] has something wrong (wrong hair or eye colour, wrong race, wrong name, wrong gender) or names a child. One entry per field. child = the child's name exactly as listed in [CHILDREN]. field = name | gender | race | hair | eyes | appearance. value = the corrected value only (e.g. 'black', 'full orc', 'female', 'Eren'). Empty array when the player corrected no child.",
+            items: {
+                type: Type.OBJECT,
+                properties: {
+                    child: { type: Type.STRING },
+                    field: { type: Type.STRING, enum: ["name", "gender", "race", "hair", "eyes", "appearance"] },
+                    value: { type: Type.STRING },
+                },
+                required: ["child", "field", "value"],
+            },
         }
     },
-    required: ["reply"]
+    required: ["reply", "child_corrections"]
 };
 
 export interface OocResponse {
     reply: string;
     assertions?: string[];
     directive?: string;
+    /** v1.61 */
+    childCorrections?: import('../utils/reproductionSystem').ChildCorrection[];
 }

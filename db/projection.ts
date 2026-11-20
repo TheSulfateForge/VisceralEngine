@@ -503,6 +503,7 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
           ledger_ordered: e.ledger?.length ? [...e.ledger] : null,
           witnessed: e.witnessed ? [...e.witnessed] : null,
           npc_register: e.register ?? null,
+          child_record: e.child ?? null,                                    // v1.61
           canonical: e.canonical ?? null,
           relationship_level: e.relationship_level,
           leverage: e.leverage,
@@ -571,6 +572,10 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
         current_week: p.currentWeek,
         is_visible: b(p.isVisible),
         status: p.status,
+        due_week: p.dueWeek ?? null,             // v1.61
+        birth_time: p.birthTime ?? null,
+        birth_turn: p.birthTurn ?? null,
+        child_entity_id: p.childId ?? null,
       }));
       await vdb.pregnancies.bulkPut(rows);
     }
@@ -956,6 +961,7 @@ export async function absorbGameSave(save: GameSave): Promise<{ campaign_id: Sav
       correction_flagged_turn: world.correctionFlaggedTurn ?? null, // v1.35
       npc_positions: world.npcPositions ?? null,                   // v1.37
       content_policy: world.contentPolicy ?? null,                 // v1.48
+      inheritance_rules: world.inheritanceRules?.trim() ? world.inheritanceRules : null, // v1.61
       scene_focus: world.sceneFocus ?? null,                       // v1.48
       voice_lock_flagged_turn: world.voiceLockFlaggedTurn ?? null,       // v1.37
       voice_lock_flagged_names: world.voiceLockFlaggedNames ?? null,     // v1.37
@@ -1229,6 +1235,7 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
       ...(e.body_state ? { bodyState: e.body_state } : {}),    // v1.48
       ...(e.witnessed ? { witnessed: e.witnessed } : {}),      // v1.59
       ...(e.npc_register ? { register: e.npc_register } : {}), // v1.59
+      ...(e.child_record ? { child: e.child_record } : {}),    // v1.61
       ...(e.canonical !== undefined && e.canonical !== null ? { canonical: e.canonical } : {}), // v1.59
       ...(e.status ? { status: e.status } : {}),
       ...(e.last_seen_turn !== null ? { lastSeenTurn: e.last_seen_turn } : {}),
@@ -1275,6 +1282,10 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
       currentWeek: p.current_week,
       isVisible: fromB(p.is_visible),
       status: p.status,
+      ...(p.due_week != null ? { dueWeek: p.due_week } : {}),          // v1.61
+      ...(p.birth_time != null ? { birthTime: p.birth_time } : {}),
+      ...(p.birth_turn != null ? { birthTurn: p.birth_turn } : {}),
+      ...(p.child_entity_id ? { childId: p.child_entity_id } : {}),
     }));
 
     const locationRows = await vdb.locations.where('campaign_id').equals(campaignId).toArray();
@@ -1581,6 +1592,7 @@ export async function projectGameSave(campaignId: SaveId): Promise<GameSave | un
       ...(ws.correction_flagged_turn != null ? { correctionFlaggedTurn: ws.correction_flagged_turn } : {}), // v1.35
       ...(ws.npc_positions?.length ? { npcPositions: ws.npc_positions } : {}),                                   // v1.37
       ...(ws.content_policy ? { contentPolicy: ws.content_policy } : {}),                                        // v1.48
+      ...(ws.inheritance_rules ? { inheritanceRules: ws.inheritance_rules } : {}),                               // v1.61
       ...(ws.scene_focus ? { sceneFocus: ws.scene_focus } : {}),                                                 // v1.48
       ...(ws.voice_lock_flagged_turn != null ? { voiceLockFlaggedTurn: ws.voice_lock_flagged_turn } : {}),      // v1.37
       ...(ws.voice_lock_flagged_names?.length ? { voiceLockFlaggedNames: ws.voice_lock_flagged_names } : {}),   // v1.37

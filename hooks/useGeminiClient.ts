@@ -1,4 +1,6 @@
 import { useRef, useCallback } from 'react';
+import { runPendingChildTraits } from './childTraitPass';
+import { buildChildRecordsBlock, applyChildCorrections, syncPregnancyRegisters } from '../utils/reproductionSystem';
 import { ChatMessage, Role, ModelResponseSchema, SummarySegment } from '../types';
 import { generateMessageId, generateUUID } from '../idUtils';
 import { parseOocInput, isNarrativeMessage } from '../utils/engine/oocDetection';
@@ -424,7 +426,10 @@ export const useGeminiClient = () => {
               [],
               state.gameWorld.knownEntities ?? [],
           );
-          const oocRecords = buildOocEntityRecords(oocEntities);
+          // v1.61: children born in play ride every OOC call so a correction
+          // ("her hair should be black") can name them.
+          const childBlock = buildChildRecordsBlock(state.gameWorld.knownEntities ?? [], state.gameWorld.time?.totalMinutes ?? 0);
+          const oocRecords = [buildOocEntityRecords(oocEntities), childBlock].filter(Boolean).join('\n\n');
 
           // v1.41: DETERMINISTIC LOOKUP.
           //
@@ -504,6 +509,25 @@ export const useGeminiClient = () => {
               turn,
               () => generateUUID(),
           );
+
+          // v1.61: child corrections are applied by the engine, not narrated.
+          if ((ooc.childCorrections ?? []).length) {
+              let fixLogs: string[] = [];
+              setGameWorld(prev => {
+                  const fix = applyChildCorrections(prev.knownEntities ?? [], ooc.childCorrections!);
+                  fixLogs = fix.logs;
+                  return {
+                      ...prev,
+                      knownEntities: syncPregnancyRegisters(
+                          fix.entities, prev.pregnancies, state.character.name, prev.time?.totalMinutes ?? 0, turn,
+                      ),
+                  };
+              });
+              setGameHistory(prev => ({
+                  ...prev,
+                  debugLog: [...prev.debugLog, ...fixLogs.map(message => ({ timestamp: new Date().toISOString(), message, type: 'success' as const }))],
+              }));
+          }
 
           if ((directivesEvicted ?? []).length > 0) {
               showToast(`Directive limit reached — oldest unpinned directive dropped. Pin directives in Settings to keep them.`, 'info');
@@ -2599,6 +2623,13 @@ turn is anything their Actual Core describes, you are writing the mask.`;
                 })();
                 registerPassInFlight = passPromise;
             }
+        }
+
+        // v1.61: post-birth trait pass (background) for any child whose
+        // race, hair, eyes and name are still pending.
+        if ((worldUpdate.knownEntities ?? []).some(e => e.child?.traitsPending)) {
+            void runPendingChildTraits(service, (message, type = 'info') =>
+                setGameHistory(prev => ({ ...prev, debugLog: [...prev.debugLog, { timestamp: new Date().toISOString(), message, type }] })));
         }
 
         // v1.24: Background world pulse — the world moves while the player

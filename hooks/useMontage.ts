@@ -17,6 +17,7 @@
 // artifacts of the elapsed span. See TIME_AND_MONTAGE_DESIGN.md System 5.
 // ============================================================================
 
+import { runPendingChildTraits } from './childTraitPass';
 import { useCallback, useEffect } from 'react';
 import {
     ChatMessage,
@@ -242,7 +243,16 @@ export const useMontage = () => {
             console.warn('[montage] clear failed:', e);
         }
         showToast('Montage committed.', 'success');
-    }, [setGameWorld, setCharacter, setGameHistory, setMontageProposal, showToast]);
+
+        // v1.61: a child born during the montage gets its traits now.
+        if ((result.world.knownEntities ?? []).some(e => e.child?.traitsPending)) {
+            const service = await getService();
+            if (service) {
+                void runPendingChildTraits(service, (message, type = 'info') =>
+                    setGameHistory(prev => ({ ...prev, debugLog: [...prev.debugLog, { timestamp: new Date().toISOString(), message, type }] })));
+            }
+        }
+    }, [setGameWorld, setCharacter, setGameHistory, setMontageProposal, showToast, getService]);
 
     /** Back out before commit. No time passes; nothing is written. */
     const cancelMontage = useCallback(async () => {

@@ -102,7 +102,35 @@ export interface Pregnancy {
     conceptionTime: number;
     currentWeek: number;
     isVisible: boolean;
+    /** 'birth' = delivered (v1.61). */
     status: PregnancyStatus;
+    /** v1.61: week the engine delivers at, rolled 37-42 at conception. Missing ⇒ 40. */
+    dueWeek?: number;
+    /** v1.61: in-game minute of delivery. */
+    birthTime?: number;
+    /** v1.61: turn the engine delivered on. */
+    birthTurn?: number;
+    /** v1.61: the child's KnownEntity id. */
+    childId?: string;
+}
+
+/**
+ * v1.61: what makes a KnownEntity a child born in play. Gender is the
+ * engine's roll; race, hair and eyes come from the post-birth trait pass and
+ * can be corrected through OOC.
+ */
+export interface ChildRecord {
+    gender: 'female' | 'male';
+    race?: string;
+    hair?: string;
+    eyes?: string;
+    motherName: string;
+    fatherName: string;
+    birthMinute: number;
+    birthTurn: number;
+    pregnancyId: string;
+    /** True until the trait pass (or an OOC correction) has set the traits. */
+    traitsPending?: boolean;
 }
 
 // --- Enemy AI Systems ---
@@ -244,6 +272,8 @@ export interface BodyState {
     fluids?: BodyFluid[];
     orgasmCount?: number;
     lastOrgasmTurn?: number;
+    /** v1.61: births delivered by this body. */
+    birthsGiven?: number;
 }
 
 export const BODY_EVENT_KINDS = [
@@ -357,6 +387,8 @@ export interface KnownEntity {
      * differs from the authored sheet, the register wins.
      */
     register?: NpcRegister;
+    /** v1.61: set on a child born in play. */
+    child?: ChildRecord;
 
     // --- Characterization (v1.16) ---
     /**
@@ -1692,6 +1724,11 @@ export interface GameWorld {
      * Settings (localStorage) applies — see utils/engine/contentPolicy.ts.
      */
     contentPolicy?: ContentPolicy;
+    /**
+     * v1.61: this campaign's inheritance rules, sent to every birth's trait
+     * pass ("a monster's offspring is always a monster", "elves breed true").
+     */
+    inheritanceRules?: string;
 
     /** v1.48: player-set focus for the current scene. */
     sceneFocus?: SceneFocus;
