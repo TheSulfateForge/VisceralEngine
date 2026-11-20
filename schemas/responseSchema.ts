@@ -645,5 +645,16 @@ export const getResponseSchema = (
     (clone as AnySchema).required = req.filter((k) => k in props);
   }
 
+  // v1.61: montage_block is REQUIRED in the MONTAGE variant. It was optional,
+  // and with strict:false DeepSeek left it out of every montage reply — every
+  // declared skip ended in "The AI did not return a montage." (2026-11-20).
+  // Same failure as time_beats (v1.57) and new_memories (v1.60). time_mode is
+  // required here too: the parser only accepts MONTAGE alongside a block.
+  if (mode === 'MONTAGE') {
+    const r = ((clone as AnySchema).required as string[] | undefined) ?? [];
+    for (const k of ['montage_block', 'time_mode']) if (!r.includes(k)) r.push(k);
+    (clone as AnySchema).required = r;
+  }
+
   return stripSchemaDescriptions(clone);
 };

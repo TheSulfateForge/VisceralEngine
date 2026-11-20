@@ -53,6 +53,15 @@ describe('getResponseSchema — scene-mode gating (review item 3)', () => {
     expect(s.properties.montage_block).toBeUndefined();
   });
 
+  it('MONTAGE requires montage_block and time_mode (v1.61)', () => {
+    const s: any = getResponseSchema('MONTAGE');
+    expect(s.required).toContain('montage_block');
+    expect(s.required).toContain('time_mode');
+    for (const mode of ['NARRATIVE', 'SOCIAL', 'TENSION', 'COMBAT'] as const) {
+      expect((getResponseSchema(mode) as any).required).not.toContain('montage_block');
+    }
+  });
+
   it('MONTAGE is the only variant that keeps montage_block', () => {
     const s: any = getResponseSchema('MONTAGE');
     expect(s.properties.montage_block).toBeDefined();
