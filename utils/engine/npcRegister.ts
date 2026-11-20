@@ -114,6 +114,7 @@ type Route =
     | { kind: 'want'; want: 'want' | 'limit' | 'not_yet' };
 
 export const routeStateKey = (key: string, _value: string): Route => {
+    if (key === 'pregnancy') return { kind: 'keep' }; // v1.61: engine-owned
     const f = FEELING_KEY_RE.exec(key);
     if (f) return { kind: 'feeling', toward: f[1].replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) };
     if (KNOWLEDGE_KEY_RE.test(key)) return { kind: 'knowledge' };
@@ -152,6 +153,8 @@ export const parseRegisterDiffs = (raw: unknown): RegisterDiff[] => {
         const st = arr(u.state).filter(isObj)
             .map(x => ({ key: keyOf(x.key).replace(/_updated$/, ''), value: clip(x.value, 160) }))
             .filter(x => x.key && x.value)
+            // v1.61: pregnancy is engine-owned (written from world.pregnancies).
+            .filter(x => !/pregnan/i.test(x.key))
             .filter(x => {
                 const r = routeStateKey(x.key, x.value);
                 if (r.kind === 'feeling') { routedFeelings.push({ toward: r.toward, text: x.value }); return false; }

@@ -55,7 +55,10 @@ export const RESPONSE_SCHEMA: Schema = {
             ingested_water: { type: Type.INTEGER, description: "Est. hydration gained (10=Sip, 50=Cup, 100=Meal/Large Drink)." },
             sleep_hours: { type: Type.INTEGER },
             relieved_pressure: { type: Type.ARRAY, items: { type: Type.STRING }, description: "['lactation', 'bladder', 'seminal']" }
-        }
+        },
+        // v1.61: required, 0 when nothing was eaten or drunk. Optional, DeepSeek
+        // never sent them and meals restored nothing (2026-11-20).
+        required: ["ingested_calories", "ingested_water"]
     },
     character_updates: {
       type: Type.OBJECT,
@@ -375,7 +378,7 @@ export const RESPONSE_SCHEMA: Schema = {
     },
     biological_event: {
         type: Type.BOOLEAN,
-        description: "CONCEPTION TRIGGER: Set true ONLY when unprotected vaginal insemination physically occurs in the narrative. This triggers an automatic pregnancy roll. Do NOT set true for lactation, arousal, pheromone events, combat stress, or other biological activity that is not direct insemination."
+        description: "CONCEPTION TRIGGER: Set true ONLY when unprotected vaginal insemination involving the player character physically occurs in the narrative. This triggers an automatic pregnancy roll. Do NOT set true for lactation, arousal, pheromone events, combat stress, or other biological activity that is not direct insemination."
     },
     faction_updates: {
       type: Type.ARRAY,
@@ -509,7 +512,9 @@ export const RESPONSE_SCHEMA: Schema = {
   // v1.57: time_beats is required (v1.56 required time_passed_minutes) — with
   // strict:false DeepSeek left a single optional number out of most replies.
   // v1.60: new_memories too — 0 of 56 turns sent it (2026-11-15 save).
-  required: ["thought_process", "scene_mode", "scene_time_phase", "tension_level", "time_beats", "narrative", "new_memories", "world_tick"]
+  // v1.61: biological_inputs and biological_event — eating restored nothing and
+  // insemination never reached the conception roll (2026-11-20).
+  required: ["thought_process", "scene_mode", "scene_time_phase", "tension_level", "time_beats", "narrative", "new_memories", "world_tick", "biological_inputs", "biological_event"]
 };
 
 // ============================================================================

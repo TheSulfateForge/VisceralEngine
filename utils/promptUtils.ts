@@ -2,7 +2,8 @@ import { resolveCharacterBody, describeBodyState, vaginalVirginity, analVirginit
 import { contentPolicyLines, effectiveContentPolicy } from './engine/contentPolicy';
 import { selectLedgerForPrompt, selectWitnessedForPrompt } from './engine/npcMemory';
 import { renderRegisterForPrompt, registerBrief } from './engine/npcRegister';
-import { GameHistory, GameWorld, Character, SceneMode, MemoryItem, LoreItem, KnownEntity, BioMonitor, ActiveThreat, DormantHook, FactionExposure, ThreatDenialTracker, ChatMessage, SummarySegment, Role, PlayerCanonEntry } from '../types';
+import { describePregnancy, pcPregnancy } from './reproductionSystem';
+import { GameHistory, GameWorld, Character, SceneMode, MemoryItem, LoreItem, KnownEntity, BioMonitor, ActiveThreat, DormantHook, FactionExposure, ThreatDenialTracker, ChatMessage, SummarySegment, Role, PlayerCanonEntry, Pregnancy } from '../types';
 import { retrieveRelevantContext, retrieveRelevantMemories, retrieveRelevantSegments, findAliasMatchedEntities, RAGResult } from './ragEngine';
 import {
   buildHybridContext,
@@ -835,6 +836,7 @@ const buildCharacterStateBlock = (
     character: Character,
     nowMinute: number = 0,
     canon: PlayerCanonEntry[] = [],
+    pregnancies: Pregnancy[] = [],
 ): string => {
     // Partition conditions: long personality/trait paragraphs that leaked in from
     // character creation are separated from short mechanical game-states.
@@ -860,6 +862,12 @@ const buildCharacterStateBlock = (
             ? `- **Virginity:** vaginal — ${vaginalVirginity(resolvedBody, character.bodyState)}; anal — ${analVirginity(resolvedBody, character.bodyState)}`
             : '',
         bodyNow ? `- **Body (tracked):** ${bodyNow}` : '',
+        // v1.61: her pregnancy, from the engine's record — describe her body,
+        // energy and appetite consistently with this stage.
+        (() => {
+            const p = pcPregnancy(pregnancies, character);
+            return p ? `- **Pregnancy (engine-tracked; describe her consistently with this stage):** ${describePregnancy(p, nowMinute)}` : '';
+        })(),
     ].filter(Boolean).join('\n');
 
     return `
@@ -1274,6 +1282,7 @@ export const constructGeminiPrompt = async (
       character,
       gameWorld.time?.totalMinutes ?? 0,
       gameWorld.playerCanon ?? [],
+      gameWorld.pregnancies ?? [],
   );
 
   // v1.39: the GM-only half of the backstory, plus the rule that bounds what

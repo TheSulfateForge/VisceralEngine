@@ -29,6 +29,7 @@ import type {
 import { generateUUID, generateMemoryId } from '../idUtils';
 import { applySkillUpdates, PROFICIENCY_LADDER, isProficiencyLevel } from './skillSystem';
 import { updateTime } from './engine/timeUtils';
+import { ReproductionSystem, syncPregnancyRegisters } from './reproductionSystem';
 import {
     DEFAULT_CALENDAR,
     MONTAGE_DEFAULT_MEMORY_SALIENCE,
@@ -176,6 +177,13 @@ export function commitMontageProposal(
     // 6. Clock advance (always — even on veto-all) ---------------------------
     w = { ...w, time: updateTime(w.time.totalMinutes, proposal.durationMinutes, calendar) };
     events.push(`[MONTAGE] clock → ${w.time.display}`);
+    // v1.61: a montage bypasses the turn pipeline, so advance pregnancies here.
+    if (w.pregnancies?.length) {
+        const preg = ReproductionSystem.advancePregnancies(w.pregnancies, w.time.totalMinutes);
+        w = { ...w, pregnancies: preg.updated };
+        events.push(...preg.logs);
+        w = { ...w, knownEntities: syncPregnancyRegisters(w.knownEntities ?? [], preg.updated, char.name, w.time.totalMinutes, currentTurn) };
+    }
 
     // 7. Turn advance --------------------------------------------------------
     // v1.30: A montage IS a turn — acceptMontage appends a model message and
@@ -205,7 +213,10 @@ export function advanceClockForMontage(
     durationMinutes: number,
     calendar: CalendarConfig = DEFAULT_CALENDAR,
 ): GameWorld {
-    return { ...world, time: updateTime(world.time.totalMinutes, durationMinutes, calendar) };
+    const time = updateTime(world.time.totalMinutes, durationMinutes, calendar);
+    if (!world.pregnancies?.length) return { ...world, time };
+    const pregnancies = ReproductionSystem.advancePregnancies(world.pregnancies, time.totalMinutes).updated;
+    return { ...world, time, pregnancies };
 }
 
 // --- internals -------------------------------------------------------------

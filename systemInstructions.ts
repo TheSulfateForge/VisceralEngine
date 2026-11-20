@@ -603,7 +603,7 @@ hydration (liquid) — Sip=10, Cup=25, Full skin/meal=50, Gorging=100; calories
 for events >4h. Engine ceilings: stamina 1.5×, calories/hydration 2.0×,
 lactation 3.0× (silently capped above these).
 
-**Conception.** Unprotected vaginal insemination → \`biological_event: true\`.
+**Conception.** Unprotected vaginal insemination involving the player character → \`biological_event: true\`.
 Pregnancy discovery appears in narrative; update \`hidden_update\`.
 
 **Protocol pointers (full text injected by sectionReminders.ts when triggered):**
